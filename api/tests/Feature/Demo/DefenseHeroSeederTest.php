@@ -15,6 +15,7 @@ use Database\Seeders\RolePermissionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use RuntimeException;
 use Tests\TestCase;
 
 /**
@@ -57,6 +58,22 @@ class DefenseHeroSeederTest extends TestCase
             'Running the seeder twice must not rewrite any existing hero or support row.');
 
         $this->assertSame(1, $invoicesAfterFirst, 'Exactly one hero invoice is produced.');
+    }
+
+    public function test_seeder_refuses_production_before_writing(): void
+    {
+        $this->app->detectEnvironment(static fn (): string => 'production');
+
+        try {
+            try {
+                app(DefenseHeroSeeder::class)->run();
+                $this->fail('Demo fixture writes must be blocked in production.');
+            } catch (RuntimeException $exception) {
+                $this->assertSame('Demo data must never be seeded in production.', $exception->getMessage());
+            }
+        } finally {
+            $this->app->detectEnvironment(static fn (): string => 'testing');
+        }
     }
 
     public function test_hero_invoice_is_a_draft_with_delivery_provenance(): void

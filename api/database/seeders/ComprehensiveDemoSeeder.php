@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Database\Seeders;
 
+use App\Common\Support\ProductionAssertions;
 use App\Modules\Accounting\Models\Account;
 use App\Modules\Accounting\Models\FiscalYear;
 use App\Modules\Auth\Models\User;
@@ -28,6 +29,8 @@ class ComprehensiveDemoSeeder extends Seeder
 
     public function run(): void
     {
+        ProductionAssertions::assertDemoSeedingAllowed();
+
         $this->admin = User::query()
             ->whereHas('role', fn($q) => $q->where('slug', 'system_admin'))
             ->orderBy('id')

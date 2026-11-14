@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Database\Seeders;
 
+use App\Common\Support\ProductionAssertions;
 use App\Common\Services\DocumentSequenceService;
 use App\Modules\Accounting\Models\Customer;
 use App\Modules\Accounting\Models\Vendor;
@@ -47,6 +48,8 @@ class DemoDataSeeder extends Seeder
 
     public function run(): void
     {
+        ProductionAssertions::assertDemoSeedingAllowed();
+
         $this->seedEmployees();
         $this->seedVendors();
         $this->seedStockLevels();

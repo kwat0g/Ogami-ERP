@@ -36,6 +36,8 @@ if ($database !== $expectedDatabase || ! str_starts_with($database, 'ogami_test_
     throw new RuntimeException('Inventory browser fixtures require the dedicated '.$expectedDatabase.' database; got '.$database);
 }
 
+require_once __DIR__.'/demo_seed_helpers.php';
+
 foreach ([
     Database\Seeders\RolePermissionSeeder::class,
     Database\Seeders\SettingsSeeder::class,
@@ -47,6 +49,11 @@ foreach ([
     Database\Seeders\UomSeeder::class,
     Database\Seeders\InventoryItemSeeder::class,
 ] as $seeder) {
+    if ($seeder === Database\Seeders\DemoAccountSeeder::class) {
+        seedBrowserDemoAccounts();
+        continue;
+    }
+
     (new $seeder)->run();
 }
 app(SettingsService::class)->set('modules.accounting', true, 'modules');

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Database\Seeders;
 
+use App\Common\Support\ProductionAssertions;
 use App\Common\Services\DocumentSequenceService;
 use App\Modules\Assets\Enums\AssetCategory;
 use App\Modules\Assets\Enums\AssetStatus;
@@ -38,6 +39,8 @@ class Sprint8DemoSeeder extends Seeder
 {
     public function run(DocumentSequenceService $sequences): void
     {
+        ProductionAssertions::assertDemoSeedingAllowed();
+
         $admin = User::query()->orderBy('id')->first();
         if (! $admin) {
             $this->command?->warn('Sprint8DemoSeeder skipped: no users exist.');

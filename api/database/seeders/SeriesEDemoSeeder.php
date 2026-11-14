@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Database\Seeders;
 
+use App\Common\Support\ProductionAssertions;
 use App\Common\Enums\DocumentType;
 use App\Common\Enums\ExportFormat;
 use App\Common\Enums\ExportFrequency;
@@ -50,6 +51,8 @@ class SeriesEDemoSeeder extends Seeder
         PayslipPdfService $payslips,
         PdfRenderService $pdfRenderer,
     ): void {
+        ProductionAssertions::assertDemoSeedingAllowed();
+
         $admin = User::query()
             ->whereHas('role', fn ($q) => $q->where('slug', 'system_admin'))
             ->orderBy('id')

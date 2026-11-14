@@ -199,7 +199,7 @@ class ProductionAssertionsTest extends TestCase
 
         try {
             $this->expectException(RuntimeException::class);
-            $this->expectExceptionMessage('Demo data may only be seeded in local or testing environments.');
+            $this->expectExceptionMessage('Demo data may only be seeded in local, testing, or demo environments.');
 
             ProductionAssertions::assertDemoSeedingAllowed();
         } finally {
@@ -216,7 +216,7 @@ class ProductionAssertionsTest extends TestCase
         config()->set('database.connections.pgsql.database', 'ogami');
 
         $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('Demo data may only be seeded into a dedicated local test database when APP_ENV=testing.');
+        $this->expectExceptionMessage('Demo seeding in testing must use an ogami_test database.');
 
         ProductionAssertions::assertDemoSeedingAllowed();
     }
@@ -230,7 +230,27 @@ class ProductionAssertionsTest extends TestCase
         config()->set('database.connections.pgsql.url', 'postgres://test:fake@production-db.example/ogami_test');
 
         $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('Demo data may only be seeded into a dedicated local test database when APP_ENV=testing.');
+        $this->expectExceptionMessage('Database host production-db.example is not an approved local database host.');
+
+        ProductionAssertions::assertDemoSeedingAllowed();
+    }
+
+    public function test_local_demo_seeders_require_the_side_effect_scope(): void
+    {
+        app()->detectEnvironment(static fn (): string => 'local');
+        config([
+            'demo.seeding.enabled' => true,
+            'demo.seeding.database_allowlist' => ['ogami_demo_guard_test'],
+            'demo.seeding.allowed_hosts' => ['localhost'],
+            'database.default' => 'pgsql',
+            'database.connections.pgsql.driver' => 'pgsql',
+            'database.connections.pgsql.database' => 'ogami_demo_guard_test',
+            'database.connections.pgsql.host' => 'localhost',
+            'database.connections.pgsql.url' => null,
+        ]);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Demo data seeders must run through a guarded demo command.');
 
         ProductionAssertions::assertDemoSeedingAllowed();
     }
