@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Database\Seeders\Demo\FinishedProductCatalogLayer;
 use Database\Seeders\Demo\InventoryCatalogLayer;
 use Database\Seeders\Demo\OrganizationReferenceDataLayer;
 
@@ -33,5 +34,6 @@ return [
     'layers' => [
         OrganizationReferenceDataLayer::class,
         InventoryCatalogLayer::class,
+        FinishedProductCatalogLayer::class,
     ],
 ];
