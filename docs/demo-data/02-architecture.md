@@ -1,12 +1,12 @@
 # Demo seeder architecture and command reference
 
-Status: Phase 2 tooling implementation. The approved phase plan is in [01-data-plan.md](01-data-plan.md). No demo data layer is registered yet, so `demo:seed` fails before data writes. The code-level `demo.reset_ready` gate defaults to false and keeps `demo:reset` disabled until the complete dataset is built and verified.
+Status: Phase 3 is in progress. The approved phase plan is in [01-data-plan.md](01-data-plan.md). The `organization` layer seeds current HR department and position reference records through their services. The code-level `demo.reset_ready` gate remains false, so `demo:reset` stays disabled until the complete dataset is built and verified.
 
 ## Layer model
 
 Demo data is assembled in dependency-ordered layers registered in `config/demo.php` under `layers`. Each layer implements `DemoSeedLayer`; the `DemoSeeder` base class is available for Laravel-style seeder classes. A layer declares a stable key, the module names it covers, dependencies, and a `run(DemoSeedContext $context)` method.
 
-`DemoSeedLayerRegistry` validates configured layers and dependency keys, rejects duplicates and cycles, and topologically orders the selected layers. `--only=<layer-or-module>` selects matching layers and includes their dependencies. Empty registration is an intentional safety stop while the approved data layers have not been built.
+`DemoSeedLayerRegistry` validates configured layers and dependency keys, rejects duplicates and cycles, and topologically orders the selected layers. `--only=<layer-or-module>` selects matching layers and includes their dependencies. The first registered layer is `organization`; more module layers are added as they are implemented and verified.
 
 `DemoSeedRunner` checks the production guard itself, resolves the selected layers, disables the active connection's query log, and executes each layer with a stable seed derived from the global seed and layer key. It reports layer start/finish events with elapsed time and peak PHP memory, collects cycles between layers, and wraps failures with the layer key. `DemoRecordRegistry` stores lightweight model-class/primary-key references between layers rather than retaining complete model collections.
 
@@ -38,7 +38,7 @@ Browser fixtures that still depend on the legacy `DemoAccountSeeder` use `api/te
 
 | Command | Current behavior |
 |---|---|
-| `php artisan demo:seed [--as-of=YYYY-MM-DD] [--scale=small\|demo\|full] [--seed=N] [--only=layer-or-module] [--no-history]` | Parses options, checks the guard and layer plan, then runs registered layers. It currently stops with “No demo seed layers are registered yet.” |
+| `php artisan demo:seed [--as-of=YYYY-MM-DD] [--scale=small\|demo\|full] [--seed=N] [--only=layer-or-module] [--no-history]` | Parses options, checks the guard and layer plan, then runs registered layers. Currently the `organization` layer is available; run with `--only=organization` for that non-transactional layer. |
 | `php artisan demo:reset [--as-of=...] [--scale=...] [--seed=...] [--no-history]` | Checks the guard, the code-level readiness gate, and layer plan before `migrate:fresh`. The gate must stay false during staged implementation and may be enabled only after every required layer exists and `demo:verify` passes. |
 | `php artisan demo:snapshot [--file=name.dump]` | Guarded PostgreSQL custom-format `pg_dump`; writes a SHA-256 manifest alongside the dump. Password is passed through the child process environment, not command arguments or manifest. |
 | `php artisan demo:restore --file=name.dump` | Guarded restore to the same allowlisted DB name only; validates filename, directory, matching manifest, and checksum before `pg_restore --single-transaction`. |
@@ -55,4 +55,4 @@ Current code moves `DemoBomCostBasisSeeder` from the reference-only list to the 
 
 ## Current verification boundary
 
-Targeted tests cover environment/database/host guards, controlled time and acting-user restoration, stable Faker output, layer dependency ordering, runner failure/config restoration, command preflight, and snapshot manifest/checksum handling. This unit did not run `migrate:fresh`, reset a database, create a real snapshot, run the full suite, or seed demo data. Those remain explicit verification tasks after the data layers and isolated demo database are ready.
+Targeted tests cover environment/database/host guards, controlled time and acting-user restoration, stable Faker output, layer dependency ordering, runner failure/config restoration, command preflight, snapshot manifest/checksum handling, and organization-layer idempotency. The organization layer creates 15 departments and 37 positions, with no salary grades invented. It was exercised only in the isolated test database. No demo database reset, full dataset seed, real snapshot, or full PHP suite has been run.

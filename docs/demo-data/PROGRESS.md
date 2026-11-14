@@ -2,8 +2,9 @@
 
 - Phase 0 complete: [00-discovery.md](00-discovery.md), with supporting event and relationship inventories.
 - Phase 1 approved by the user. Proposed volumes and scenarios are approved as the planning baseline; unresolved statutory, payroll, date, shift, and counterparty questions remain open in [01-data-plan.md](01-data-plan.md).
-- Phase 2 architecture/tooling is ready for review in draft [PR #520](https://github.com/kwat0g/kwatog/pull/520) on branch `feat/demo-seeder-tooling`; implementation details are in [02-architecture.md](02-architecture.md).
-- No new demo data has been seeded. The registered layer list is deliberately empty until Phase 3/4 data layers are implemented.
+- Phase 2 architecture/tooling is in draft [PR #520](https://github.com/kwat0g/kwatog/pull/520) on branch `feat/demo-seeder-tooling`. Reset safety follow-up [PR #521](https://github.com/kwat0g/kwatog/pull/521) keeps `demo:reset` disabled until the complete dataset is ready and verified.
+- Phase 3 is in progress on `feat/demo-reference-data`. The first layer, `organization`, creates 15 departments and 37 positions through `DepartmentService` and `PositionService`, uses controlled as-of timestamps, and is idempotent. Its focused test passed (1 test, 8 assertions).
+- The organization layer uses the current department and position catalog as source data. It adds an Executive-rooted hierarchy with Mold under Maintenance and Import/Export under Purchasing. These relationships are demo structure choices. Position salary grades remain unset; no employees, payroll values, customers, suppliers, or inventory have been added in this module group.
 - Legacy demo seeders remain in place for test/backward compatibility and are not used as the new pipeline. Their Phase 0 audit disposition remains the basis for later replacement work.
 - Findings: [FINDINGS.md](FINDINGS.md).
 - FK inventory: [SCHEMA-RELATIONSHIPS.md](SCHEMA-RELATIONSHIPS.md).
@@ -12,4 +13,4 @@ Discovery evidence: 23 modules, 284 public tables (202 non-empty), 794 foreign k
 
 Phase 2 focused tests pass for the guard, context, layer registry, runner, commands, snapshot manager, legacy demo seeder entry points, demo setup, and BOM cost basis: 64 tests / 250 assertions. The latest guard/runner/production-assertion rerun after the final scope changes passed 32 tests / 81 assertions. Browser fixture PHP files lint clean; browser E2E was not run. One adjacent DSS demo-seeder regression test remains failing because it invokes an unregistered detector; see [FINDINGS.md](FINDINGS.md#discovery-findings). No full PHP suite, `migrate:fresh`, real snapshot, or demo dataset seed was run in this tooling unit. Existing unrelated untracked `.github/hooks/` and `docs/e2e/` remain untouched.
 
-Next: finish Phase 2 review and PR; then implement Phase 3 reference/master-data layers. Payroll/statutory-dependent records remain gated on the open policy inputs. Do not run `demo:reset` until concrete layers exist and the target database is confirmed allowlisted.
+Next: continue Phase 3 by module group with customer/supplier and inventory master data, then production assets and HR employee reference records as their current service contracts allow. Payroll/statutory-dependent records remain gated on the open policy inputs. Keep `demo.reset_ready=false`; do not run `demo:reset` until every planned layer exists, `demo:verify` passes, and the target database is confirmed allowlisted.
