@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Database\Seeders\Demo\InventoryCatalogLayer;
 use Database\Seeders\Demo\OrganizationReferenceDataLayer;
 
 $csv = static function (string $key, string $default = ''): array {
@@ -31,5 +32,6 @@ return [
     // module group is implemented and verified.
     'layers' => [
         OrganizationReferenceDataLayer::class,
+        InventoryCatalogLayer::class,
     ],
 ];
