@@ -20,7 +20,7 @@ The guarded small-mode smoke used the current baseline seeders, the exact `ogami
 | Process Consumables | 3 |
 | **Total** | **18** |
 
-`QualityPlanLayerTest` exercises the registered layer through `DemoSeedRunner`, checks each plan against the configured template and automation actor, verifies the matching `created` audit row uses the same actor and controlled date, and proves that a second run creates no plan or audit drift. Together with the existing `ItemQualityPlanTest`, the focused suite passes 8 tests / 342 assertions. The console reported the quality layer at 1.0 second and 60.5 MiB peak process memory for the completed dependency run; dependency layers already existed from the earlier guarded attempts in that test database.
+`QualityPlanLayerTest` exercises the registered layer through `DemoSeedRunner`, checks each plan against the configured template and automation actor, verifies the matching `created` audit row uses the same actor and controlled date, and proves that a second run creates no plan or audit drift. Together with the existing `ItemQualityPlanTest`, the focused suite passes 8 tests / 342 assertions. The clean console smoke reported the quality layer at 1.11 seconds and 60.5 MiB peak process memory.
 
 ## Coverage boundary
 
