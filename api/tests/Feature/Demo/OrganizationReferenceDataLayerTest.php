@@ -33,6 +33,10 @@ class OrganizationReferenceDataLayerTest extends TestCase
         $this->assertCount(15, $departmentIds);
         $this->assertSame(37, Position::query()->count());
         $this->assertSame(
+            '2026-11-14',
+            Department::query()->where('code', 'EXEC')->firstOrFail()->created_at->toDateString(),
+        );
+        $this->assertSame(
             $departmentIds['MAINT'],
             Department::query()->where('code', 'MOLD')->value('parent_id'),
         );
