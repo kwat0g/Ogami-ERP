@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Database\Seeders\Demo\FinishedProductCatalogLayer;
 use Database\Seeders\Demo\InventoryCatalogLayer;
 use Database\Seeders\Demo\OrganizationReferenceDataLayer;
+use Database\Seeders\Demo\ProductionAssetsLayer;
 
 $csv = static function (string $key, string $default = ''): array {
     return array_values(array_filter(array_map(
@@ -35,5 +36,6 @@ return [
         OrganizationReferenceDataLayer::class,
         InventoryCatalogLayer::class,
         FinishedProductCatalogLayer::class,
+        ProductionAssetsLayer::class,
     ],
 ];
