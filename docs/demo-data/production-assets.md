@@ -6,7 +6,7 @@
 
 | Scale | Injection machines | Molds | Auxiliary asset-register entries |
 |---|---:|---:|---:|
-| `small` | 4 | 8 | 3 |
+| `small` | 4 | 16 | 3 |
 | `demo` | 30 | 60 | 12 |
 | `full` | 36 | 96 | 12 |
 

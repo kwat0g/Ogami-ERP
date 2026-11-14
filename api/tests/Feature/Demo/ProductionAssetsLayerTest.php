@@ -53,13 +53,13 @@ class ProductionAssetsLayerTest extends TestCase
         $runner->run($options);
 
         $this->assertSame(4, Machine::query()->count());
-        $this->assertSame(8, Mold::query()->count());
-        $this->assertSame(15, Asset::query()->count());
+        $this->assertSame(16, Mold::query()->count());
+        $this->assertSame(23, Asset::query()->count());
         $this->assertSame(4, Asset::query()->where('category', 'machine')->count());
-        $this->assertSame(8, Asset::query()->where('category', 'mold')->count());
+        $this->assertSame(16, Asset::query()->where('category', 'mold')->count());
         $this->assertSame(3, Asset::query()->where('category', 'equipment')->count());
-        $this->assertSame(8, MaintenanceSchedule::query()->where('maintainable_type', 'mold')->count());
-        $this->assertSame(8, MoldHistory::query()->where('event_type', 'created')->count());
+        $this->assertSame(16, MaintenanceSchedule::query()->where('maintainable_type', 'mold')->count());
+        $this->assertSame(16, MoldHistory::query()->where('event_type', 'created')->count());
         $this->assertGreaterThan(0, \DB::table('mold_machine_compatibility')->count());
         $this->assertSame(0, Mold::query()->doesntHave('compatibleMachines')->count());
         $this->assertSame(0, Machine::query()->whereNull('asset_id')->count());
@@ -78,10 +78,10 @@ class ProductionAssetsLayerTest extends TestCase
         $runner->run($options);
 
         $this->assertSame(4, Machine::query()->count());
-        $this->assertSame(8, Mold::query()->count());
-        $this->assertSame(15, Asset::query()->count());
-        $this->assertSame(8, MaintenanceSchedule::query()->where('maintainable_type', 'mold')->count());
-        $this->assertSame(8, MoldHistory::query()->where('event_type', 'created')->count());
+        $this->assertSame(16, Mold::query()->count());
+        $this->assertSame(23, Asset::query()->count());
+        $this->assertSame(16, MaintenanceSchedule::query()->where('maintainable_type', 'mold')->count());
+        $this->assertSame(16, MoldHistory::query()->where('event_type', 'created')->count());
         $this->assertSame($assetCodes, Asset::query()->orderBy('asset_code')->pluck('asset_code')->all());
         $this->assertSame($compatibilityCount, \DB::table('mold_machine_compatibility')->count());
         $this->assertNull(Carbon::getTestNow());

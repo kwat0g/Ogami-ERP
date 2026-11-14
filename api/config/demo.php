@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Database\Seeders\Demo\BomRoutingCatalogLayer;
 use Database\Seeders\Demo\FinishedProductCatalogLayer;
 use Database\Seeders\Demo\InventoryCatalogLayer;
 use Database\Seeders\Demo\OrganizationReferenceDataLayer;
@@ -37,5 +38,6 @@ return [
         InventoryCatalogLayer::class,
         FinishedProductCatalogLayer::class,
         ProductionAssetsLayer::class,
+        BomRoutingCatalogLayer::class,
     ],
 ];

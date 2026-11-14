@@ -35,7 +35,7 @@ class InventoryCatalogLayerTest extends TestCase
 
         $this->assertSame(8, Uom::query()->count());
         $this->assertSame(8, ItemCategory::query()->count());
-        $this->assertSame(27, Item::query()->count());
+        $this->assertSame(28, Item::query()->count());
         $this->assertSame(1, Warehouse::query()->count());
         $this->assertSame(6, WarehouseZone::query()->count());
         $this->assertSame(76, WarehouseLocation::query()->count());
@@ -46,6 +46,10 @@ class InventoryCatalogLayerTest extends TestCase
         $this->assertSame('KG', $resin->unit_of_measure);
         $this->assertSame('raw_material', $resin->item_type->value);
         $this->assertSame('2026-11-14', $resin->created_at->toDateString());
+
+        $glassFilledNylon = Item::query()->where('code', 'RM-009')->firstOrFail();
+        $this->assertSame('PA6 GF30 injection resin, natural', $glassFilledNylon->name);
+        $this->assertSame('KG', $glassFilledNylon->unit_of_measure);
 
         $firstCounts = [
             Uom::query()->count(),
