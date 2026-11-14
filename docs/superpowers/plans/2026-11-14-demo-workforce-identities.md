@@ -46,6 +46,6 @@
 - [x] Implement roster distributions and role actor mapping; create each employee through `EmployeeService` at its hire instant and link its role account with the configured demo password.
 - [x] Register the layer and verify the small-scale service path, timestamps, account safety and no duplicate service-derived rows on rerun. Full-scale write throughput remains unverified.
 - [x] Run Pint on changed PHP files and focused tests sequentially; update architecture/progress docs with the account-master exception and compensation limitation.
-- [ ] Commit and open a stacked draft PR on the current demo-data branch.
+- [x] Commit and open stacked draft [PR #529](https://github.com/kwat0g/kwatog/pull/529) on `feat/demo-workforce-identities`, based on PR #528's head branch.
 
 **Implementation choices:** User account hashes are not byte-for-byte deterministic because Laravel salts password hashes; business identity, row counts, dates, roles and non-secret attributes are deterministic. The verifier should normalize password hashes when computing dataset checksums. Employee salaries, government IDs and bank data remain null until their sources are confirmed. One account is created for every current internal role, with additional same-role users for maker/checker workflows.
