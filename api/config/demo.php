@@ -23,6 +23,8 @@ return [
         'pg_dump_binary' => env('DEMO_PG_DUMP_BINARY', 'pg_dump'),
         'pg_restore_binary' => env('DEMO_PG_RESTORE_BINARY', 'pg_restore'),
     ],
+    // Enabled only after every required layer exists and demo:verify passes.
+    'reset_ready' => false,
     // Concrete layers are registered module-by-module after the approved
     // tooling foundation. Empty means demo:seed/reset must fail without writes.
     'layers' => [],

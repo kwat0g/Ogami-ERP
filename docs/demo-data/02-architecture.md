@@ -1,6 +1,6 @@
 # Demo seeder architecture and command reference
 
-Status: Phase 2 tooling implementation. The approved phase plan is in [01-data-plan.md](01-data-plan.md). No transactional demo data layer is registered yet, so `demo:seed` and `demo:reset` fail before data writes or destructive database commands.
+Status: Phase 2 tooling implementation. The approved phase plan is in [01-data-plan.md](01-data-plan.md). No demo data layer is registered yet, so `demo:seed` fails before data writes. The code-level `demo.reset_ready` gate defaults to false and keeps `demo:reset` disabled until the complete dataset is built and verified.
 
 ## Layer model
 
@@ -39,7 +39,7 @@ Browser fixtures that still depend on the legacy `DemoAccountSeeder` use `api/te
 | Command | Current behavior |
 |---|---|
 | `php artisan demo:seed [--as-of=YYYY-MM-DD] [--scale=small\|demo\|full] [--seed=N] [--only=layer-or-module] [--no-history]` | Parses options, checks the guard and layer plan, then runs registered layers. It currently stops with “No demo seed layers are registered yet.” |
-| `php artisan demo:reset [--as-of=...] [--scale=...] [--seed=...] [--no-history]` | Checks the guard and layer plan before `migrate:fresh`. With no registered layers it stops before destructive work. Once layers exist, it applies migrations, runs system baseline seeding without legacy demo/reference payloads, then runs the demo layers. |
+| `php artisan demo:reset [--as-of=...] [--scale=...] [--seed=...] [--no-history]` | Checks the guard, the code-level readiness gate, and layer plan before `migrate:fresh`. The gate must stay false during staged implementation and may be enabled only after every required layer exists and `demo:verify` passes. |
 | `php artisan demo:snapshot [--file=name.dump]` | Guarded PostgreSQL custom-format `pg_dump`; writes a SHA-256 manifest alongside the dump. Password is passed through the child process environment, not command arguments or manifest. |
 | `php artisan demo:restore --file=name.dump` | Guarded restore to the same allowlisted DB name only; validates filename, directory, matching manifest, and checksum before `pg_restore --single-transaction`. |
 | `php artisan demo:credentials` | Lists internal and portal accounts whose email ends in `.test`; displays only the configured shared demo password, if present. |
