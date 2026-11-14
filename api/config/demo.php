@@ -8,6 +8,7 @@ use Database\Seeders\Demo\FinishedProductCatalogLayer;
 use Database\Seeders\Demo\InventoryCatalogLayer;
 use Database\Seeders\Demo\OrganizationReferenceDataLayer;
 use Database\Seeders\Demo\ProductionAssetsLayer;
+use Database\Seeders\Demo\WorkforceIdentityLayer;
 
 $csv = static function (string $key, string $default = ''): array {
     return array_values(array_filter(array_map(
@@ -41,5 +42,6 @@ return [
         ProductionAssetsLayer::class,
         BomRoutingCatalogLayer::class,
         BusinessPartnerCatalogLayer::class,
+        WorkforceIdentityLayer::class,
     ],
 ];
