@@ -2,7 +2,7 @@
 
 - Phase 0 complete: [00-discovery.md](00-discovery.md), with supporting event and relationship inventories.
 - Phase 1 approved by the user. Proposed volumes and scenarios are approved as the planning baseline; unresolved statutory, payroll, date, shift, and counterparty questions remain open in [01-data-plan.md](01-data-plan.md).
-- Phase 2 architecture/tooling is in progress on branch `feat/demo-seeder-tooling`; implementation details are in [02-architecture.md](02-architecture.md).
+- Phase 2 architecture/tooling is ready for review in draft [PR #520](https://github.com/kwat0g/kwatog/pull/520) on branch `feat/demo-seeder-tooling`; implementation details are in [02-architecture.md](02-architecture.md).
 - No new demo data has been seeded. The registered layer list is deliberately empty until Phase 3/4 data layers are implemented.
 - Legacy demo seeders remain in place for test/backward compatibility and are not used as the new pipeline. Their Phase 0 audit disposition remains the basis for later replacement work.
 - Findings: [FINDINGS.md](FINDINGS.md).
