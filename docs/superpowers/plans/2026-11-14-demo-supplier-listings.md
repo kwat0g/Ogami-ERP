@@ -19,4 +19,4 @@
 - [x] Keep historical notifications suppressed and retain normal notifications for the live pending row.
 - [x] Verify all listing states, `approved_suppliers`, price-per-base-unit, timestamps, notification audience and deterministic idempotency.
 - [x] Run targeted tests, PHP lint and Pint; record the synthetic price basis and unit results in the docs.
-- [ ] Commit and open a stacked draft PR on the workforce identity branch.
+- [x] Commit and open a stacked draft PR on the workforce identity branch (#530).
