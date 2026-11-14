@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use Database\Seeders\Demo\OrganizationReferenceDataLayer;
+
 $csv = static function (string $key, string $default = ''): array {
     return array_values(array_filter(array_map(
         static fn (string $value): string => trim($value),
@@ -25,7 +27,9 @@ return [
     ],
     // Enabled only after every required layer exists and demo:verify passes.
     'reset_ready' => false,
-    // Concrete layers are registered module-by-module after the approved
-    // tooling foundation. Empty means demo:seed/reset must fail without writes.
-    'layers' => [],
+    // Reference and transaction layers are added in dependency order as each
+    // module group is implemented and verified.
+    'layers' => [
+        OrganizationReferenceDataLayer::class,
+    ],
 ];
