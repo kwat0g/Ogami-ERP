@@ -96,10 +96,7 @@ final class BomRoutingCatalogLayer extends DemoSeeder
                 if ($mold === null) {
                     throw new RuntimeException("No mold is registered for product {$product->part_number}.");
                 }
-                $machine = $mold->compatibleMachines()
-                    ->whereIn('machines.status', [MachineStatus::Idle->value, MachineStatus::Running->value])
-                    ->orderBy('machines.machine_code')
-                    ->first();
+                $machine = $this->routingMachine($product, $mold);
                 if (! $machine instanceof Machine) {
                     throw new RuntimeException("No usable compatible machine is registered for mold {$mold->mold_code}.");
                 }
@@ -113,6 +110,32 @@ final class BomRoutingCatalogLayer extends DemoSeeder
                 $context->records()->remember('mrp.bom.'.$product->part_number, $bom);
             }
         });
+    }
+
+    private function routingMachine(Product $product, Mold $mold): ?Machine
+    {
+        $existing = ProductRouting::query()
+            ->where('product_id', $product->id)
+            ->where('is_active', true)
+            ->with('operations.machine')
+            ->first();
+        $injection = $existing?->operations->firstWhere('sequence', 1);
+        $existingMachine = $injection?->machine;
+
+        if ($injection !== null
+            && (int) $injection->mold_id === (int) $mold->id
+            && $existingMachine instanceof Machine
+            && $mold->compatibleMachines()->whereKey($existingMachine->getKey())->exists()) {
+            // A released process route remains valid while its machine is down
+            // for maintenance. Reuse that route on replay instead of treating
+            // temporary equipment availability as a catalog change.
+            return $existingMachine;
+        }
+
+        return $mold->compatibleMachines()
+            ->whereIn('machines.status', [MachineStatus::Idle->value, MachineStatus::Running->value])
+            ->orderBy('machines.machine_code')
+            ->first();
     }
 
     /** @param array<string, mixed> $recipe
