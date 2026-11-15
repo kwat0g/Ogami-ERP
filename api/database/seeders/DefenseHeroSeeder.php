@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Database\Seeders;
 
 use App\Common\Services\SettingsService;
+use App\Common\Support\ProductionAssertions;
 use App\Modules\Accounting\Models\Customer;
 use App\Modules\Auth\Models\User;
 use App\Modules\CRM\Models\Product;
@@ -51,6 +52,8 @@ class DefenseHeroSeeder extends Seeder
 
     public function run(): void
     {
+        ProductionAssertions::assertDemoSeedingAllowed();
+
         $this->command?->info('DefenseHeroSeeder: additive demo-hardening data (idempotent, never destructive).');
 
         $this->ensureOpenAccountingPeriod();

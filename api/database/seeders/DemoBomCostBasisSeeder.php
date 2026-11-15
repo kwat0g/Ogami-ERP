@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Database\Seeders;
 
+use App\Common\Support\ProductionAssertions;
 use App\Modules\CRM\Models\Product;
 use App\Modules\MRP\Models\Bom;
 use App\Modules\MRP\Services\BomService;
@@ -19,6 +20,8 @@ class DemoBomCostBasisSeeder extends Seeder
         if (! config('app.seed_demo_data')) {
             return;
         }
+
+        ProductionAssertions::assertDemoSeedingAllowed();
 
         $productIds = Product::query()->whereIn('part_number', [
             'WB-001', 'WB-002', 'PC-001', 'PC-002', 'RC-001', 'BB-001', 'BU-001', 'RC-002',

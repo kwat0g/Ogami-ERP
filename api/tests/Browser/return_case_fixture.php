@@ -26,12 +26,19 @@ if (! str_starts_with(config('database.connections.pgsql.database'), 'ogami_test
     throw new RuntimeException('This fixture requires its dedicated browser-test database.');
 }
 
+require_once __DIR__.'/demo_seed_helpers.php';
+
 foreach ([
     Database\Seeders\RolePermissionSeeder::class, Database\Seeders\SettingsSeeder::class,
     Database\Seeders\ChartOfAccountsSeeder::class, Database\Seeders\DepartmentSeeder::class,
     Database\Seeders\PositionSeeder::class, Database\Seeders\DemoAccountSeeder::class,
     Database\Seeders\WorkflowSeeder::class,
 ] as $seeder) {
+    if ($seeder === Database\Seeders\DemoAccountSeeder::class) {
+        seedBrowserDemoAccounts();
+        continue;
+    }
+
     (new $seeder)->run();
 }
 $buyer = User::where('email', 'purchasing@ogami.test')->firstOrFail();

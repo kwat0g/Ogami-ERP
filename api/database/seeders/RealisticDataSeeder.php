@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Database\Seeders;
 
+use App\Common\Support\ProductionAssertions;
 use App\Modules\Attendance\Enums\AttendanceStatus;
 use App\Modules\Auth\Models\User;
 use App\Modules\CRM\Models\Product;
@@ -77,6 +78,8 @@ class RealisticDataSeeder extends Seeder
 
     public function run(): void
     {
+        ProductionAssertions::assertDemoSeedingAllowed();
+
         mt_srand(self::RNG_SEED);
 
         $admin = User::query()

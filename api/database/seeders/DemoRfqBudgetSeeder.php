@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Database\Seeders;
 
+use App\Common\Support\ProductionAssertions;
 use App\Modules\Accounting\Models\Account;
 use App\Modules\Accounting\Models\BudgetLineItem;
 use App\Modules\Accounting\Services\BudgetService;
@@ -33,6 +34,8 @@ class DemoRfqBudgetSeeder extends Seeder
 {
     public function run(): void
     {
+        ProductionAssertions::assertDemoSeedingAllowed();
+
         $this->seedDemoRfq();
         $this->seedDemoBudgetFlow();
 

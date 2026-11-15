@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Database\Seeders;
 
+use App\Common\Support\ProductionAssertions;
 use App\Modules\CRM\Models\Product;
 use App\Modules\Inventory\Models\Item;
 use App\Modules\Inventory\Models\ItemCategory;
@@ -16,6 +17,8 @@ class ManufacturedProductInventorySeeder extends Seeder
 {
     public function run(): void
     {
+        ProductionAssertions::assertDemoSeedingAllowed();
+
         DB::transaction(function (): void {
             $category = ItemCategory::firstOrCreate(['name' => 'Finished Goods'], ['item_type' => 'finished_good']);
             foreach (Product::active()->whereHas('activeBom')->orderBy('id')->lockForUpdate()->get() as $product) {

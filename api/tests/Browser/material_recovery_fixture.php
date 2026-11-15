@@ -45,6 +45,8 @@ if (Product::query()->where('part_number', $productCode)->exists()) {
     throw new RuntimeException('Run key already exists in this browser DB; choose a new run key instead of reusing completed work.');
 }
 
+require_once __DIR__.'/demo_seed_helpers.php';
+
 foreach ([
     Database\Seeders\RolePermissionSeeder::class,
     Database\Seeders\SettingsSeeder::class,
@@ -53,6 +55,11 @@ foreach ([
     Database\Seeders\DemoAccountSeeder::class,
     Database\Seeders\WorkflowSeeder::class,
 ] as $seeder) {
+    if ($seeder === Database\Seeders\DemoAccountSeeder::class) {
+        seedBrowserDemoAccounts();
+        continue;
+    }
+
     (new $seeder)->run();
 }
 

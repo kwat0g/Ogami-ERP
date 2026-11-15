@@ -33,13 +33,22 @@ $run = strtoupper(preg_replace('/[^a-z0-9]/i', '', getenv('O2C_RUN_ID') ?: ''));
 if (strlen($run) < 6 || strlen($run) > 16) throw new RuntimeException('Use a unique 6–16 character O2C_RUN_ID.');
 if (Product::where('part_number', 'O2C-'.$run)->exists()) throw new RuntimeException('Use a fresh database and run identifier.');
 
+require_once __DIR__.'/demo_seed_helpers.php';
+
 foreach ([
     Database\Seeders\RolePermissionSeeder::class, Database\Seeders\SettingsSeeder::class,
     Database\Seeders\ChartOfAccountsSeeder::class, Database\Seeders\DepartmentSeeder::class,
     Database\Seeders\PositionSeeder::class, Database\Seeders\DemoAccountSeeder::class,
     Database\Seeders\WorkflowSeeder::class, Database\Seeders\WarehouseSeeder::class,
     Database\Seeders\DefectTypeSeeder::class,
-] as $seeder) (new $seeder)->run();
+] as $seeder) {
+    if ($seeder === Database\Seeders\DemoAccountSeeder::class) {
+        seedBrowserDemoAccounts();
+        continue;
+    }
+
+    (new $seeder)->run();
+}
 foreach (['crm', 'mrp', 'production', 'quality', 'inventory', 'supply_chain', 'accounting', 'b2b_portals'] as $module) {
     app(SettingsService::class)->set('modules.'.$module, true, 'modules');
 }

@@ -1,0 +1,664 @@
+# Events, observers, listeners and jobs inventory
+
+Captured from source on 2026-11-14. Registrations below are read from AppServiceProvider and module/provider source; the file list is a static class inventory. Listener/event wiring is a reason transactional records must be built through domain services. Real mail, queue and broadcast effects must be suppressed by the future demo process. This inventory is discovery evidence, not a test of every listener’s runtime behavior.
+
+## Cross-module actions requiring domain flows
+
+| Source event/action | Current listener result |
+|---|---|
+| SalesOrderConfirmed / advance released | Queue MRP planning; notify and email customer |
+| StockMovementCompleted | Check reorder point, queue MRP recalculation, publish inventory change |
+| LowStockPrCreated | Notify purchasing users |
+| PurchaseRequestApproved | Consolidate POs and notify |
+| PurchaseOrderApproved | Prepare supplier dispatch and notify |
+| PurchaseOrderSent | Create draft GRN |
+| PurchaseOrderCancelled | Close supplier dispatch and email supplier |
+| GoodsReceiptNoteCreated | Trigger incoming QC and notify |
+| InspectionPassed | Accept incoming GRN, verify COA, create delivery draft, close rework NCR when applicable |
+| InspectionFailed | Notify, reject GRN QC and queue MRP response |
+| GoodsReceiptNoteAccepted | Auto-create supplier bill and request pricing review |
+| DeliveryConfirmed | Complete replacement flow, notify finance and email customer |
+| DeliveryInvoiceRequested | Create draft invoice |
+| WorkOrderCompleted | Trigger outgoing QC and notify |
+| WorkOrderStatusChanged | Trigger in-process QC and pause notification |
+| ProductionReceiptRequested | Create inventory receipt movement |
+| ComplaintNcrRequested | Create NCR |
+| Repeated NCR recurrence | Auto-spawn 8D report |
+| PayrollComputationRequested | Run payroll computation |
+| PayrollPeriodFinalized | Generate bank file, notify employees and send payslip email |
+| PayrollGlPostingRequested | Post payroll GL |
+| EmployeeCreated | Provision user and initialize leave balances |
+| ClearanceFullySigned | Deactivate employee account |
+| Leave/loan/overtime submit/decision events | Create in-app notifications |
+| MachineStatusChanged / breakdown detected | Handle breakdown and notify maintenance |
+| PreventiveMaintenanceGenerationRequested | Generate PM work orders |
+| StockMovementGlPostingRequested | Post inventory movement to GL |
+| Invoice/CreditNote/Receipt finalization | Send configured customer or party messages |
+| Scheduled job failures/completions | Record scheduler ledger and operational telemetry |
+
+## Current direct registrations
+
+The following are registrations/wiring declarations found in current source. They are listed verbatim enough to match code during Phase 2 review.
+
+- $badgeModel::observe(BadgeInvalidationObserver::class);
+- $dashboardSourceModel::observe(DashboardCacheInvalidationObserver::class);
+- $itemCatalogModel::observe(InventoryItemCatalogRealtimeObserver::class);
+- $procurementAggregateModel::observe(ProcurementChainCacheObserver::class);
+- $staffingModel::observe(ProductionStaffingObserver::class);
+- Account::observe(AccountRealtimeObserver::class);
+- Account::observe(AccountStatementCacheObserver::class);
+- AccountingPeriod::observe(AccountingPeriodRealtimeObserver::class);
+- ActivityEvent::observe(ActivityEventRealtimeObserver::class);
+- ApplicationInterview::observe(ApplicationInterviewRealtimeObserver::class);
+- ApplicationNote::observe(ApplicationNoteRealtimeObserver::class);
+- ApprovalDelegation::observe(ApprovalDelegationAccessRealtimeObserver::class);
+- ApprovalRecord::observe(LoanApprovalRecordRealtimeObserver::class);
+- ApprovalRecord::observe(SalaryAdjustmentApprovalRecordRealtimeObserver::class);
+- Attendance::observe(AttendanceRealtimeObserver::class);
+- AuditLog::observe(AdminAuditLogRealtimeObserver::class);
+- AuditLog::observe(RecordAuthActivity::class);
+- BackupOperation::observe(BackupOperationRealtimeObserver::class);
+- Bom::observe(BomRealtimeObserver::class);
+- Budget::observe(BudgetRealtimeObserver::class);
+- BudgetTransfer::observe(BudgetTransferRealtimeObserver::class);
+- CalibrationRecord::observe(QualityRecordRealtimeObserver::class);
+- ChainListenerRun::observe(ChainListenerRunRealtimeObserver::class);
+- Clearance::observe(ClearanceRealtimeObserver::class);
+- Complaint8DReport::observe(Complaint8DReportRealtimeObserver::class);
+- Container::observe(ShipmentComponentRealtimeObserver::class);
+- CreditNote::observe(CreditNoteRealtimeObserver::class);
+- Customer::observe(CustomerRealtimeObserver::class);
+- CustomerAgreementDocument::observe(CustomerSubresourceRealtimeObserver::class);
+- CustomerComplaint::observe(CustomerComplaintRealtimeObserver::class);
+- CustomerProductWarrantyOption::observe(CustomerSubresourceRealtimeObserver::class);
+- CustomerProductWarrantyOverride::observe(CustomerSubresourceRealtimeObserver::class);
+- DeMinimisBenefit::observe(DeMinimisBenefitRealtimeObserver::class);
+- Delivery::observe(DeliveryVehicleRealtimeObserver::class);
+- DeliverySchedule::observe(DeliveryScheduleRealtimeObserver::class);
+- DemandForecast::observe(DemandForecastRealtimeObserver::class);
+- Department::observe(DepartmentRealtimeObserver::class);
+- DisbursementProof::observe(DisbursementProofRealtimeObserver::class);
+- Document::observe(EmployeeDocumentsRealtimeObserver::class);
+- DssParameter::observe(DssRealtimeObserver::class);
+- DssRecommendation::observe(DssRealtimeObserver::class);
+- DssRecommendationEvent::observe(DssRealtimeObserver::class);
+- DssRunLog::observe(DssRealtimeObserver::class);
+- Employee::observe(EmployeeAccessScopeRealtimeObserver::class);
+- Employee::observe(EmployeeRealtimeObserver::class);
+- EmployeeDocument::observe(EmployeeDocumentsRealtimeObserver::class);
+- EmployeeLoan::observe(EmployeeLoanRealtimeObserver::class);
+- EmployeeOnboarding::observe(EmployeeOnboardingRealtimeObserver::class);
+- EmployeeShiftAssignment::observe(ShiftAssignmentRealtimeObserver::class);
+- EmployeeSkill::observe(EmployeeSkillRealtimeObserver::class);
+- EmployeeTraining::observe(EmployeeTrainingRealtimeObserver::class);
+- Event::listen('*', [RecordActivityFromEvent::class, 'handleWildcard']);
+- Event::listen(BomPricingReviewRequested::class, [PricingReviewService::class, 'handle']);
+- Event::listen(BudgetActualsSyncRequested::class, [RunBudgetActualsSyncOnRequested::class, 'handle']);
+- Event::listen(ClearanceFullySigned::class, [DeactivateAccountOnClearanceComplete::class, 'handle']);
+- Event::listen(CommandFinished::class, [QueueRestartSignalPolicy::class, 'handle']);
+- Event::listen(ComplaintNcrRequested::class, [CreateNcrOnComplaintRequested::class, 'handle']);
+- Event::listen(CreditNoteFinalized::class, [EmailPartyOnCreditNoteFinalized::class, 'handle']);
+- Event::listen(CustomerComplaintUpdated::class, [EmailCustomerOnComplaintUpdated::class, 'handle']);
+- Event::listen(DeliveryConfirmed::class, [CompleteCustomerReplacement::class, 'handle']);
+- Event::listen(DeliveryConfirmed::class, [EmailCustomerOnDeliveryConfirmed::class, 'handle']);
+- Event::listen(DeliveryConfirmed::class, [NotifyFinanceOnDeliveryConfirmed::class, 'handle']);
+- Event::listen(DeliveryInvoiceRequested::class, [CreateDraftInvoiceOnDeliveryInvoiceRequested::class, 'handle']);
+- Event::listen(EmployeeCreated::class, [AutoProvisionUserOnEmployeeHire::class,     'handle']);
+- Event::listen(EmployeeCreated::class, [InitializeLeaveBalances::class,             'handle']);
+- Event::listen(GoodsReceiptNoteAccepted::class, [AutoCreateBillOnGrnAccepted::class,      'handle']);
+- Event::listen(GoodsReceiptNoteAccepted::class, [PricingReviewService::class, 'receiptCostChanged']);
+- Event::listen(GoodsReceiptNoteCreated::class, [NotifyOnGrnReceived::class,              'handle']);
+- Event::listen(GoodsReceiptNoteCreated::class, [TriggerIncomingQC::class,                'handle']);
+- Event::listen(InspectionFailed::class, [NotifyOnInspectionFailed::class,         'handle']);
+- Event::listen(InspectionFailed::class, [QueueMrpOnOutgoingInspectionFailed::class, 'handle']);
+- Event::listen(InspectionFailed::class, [RejectGRNOnQcFail::class,                'handle']);
+- Event::listen(InspectionPassed::class, [AcceptGrnOnIncomingQcPass::class,      'handle']);
+- Event::listen(InspectionPassed::class, [CloseReworkNcrAfterQcApproval::class, 'handle']);
+- Event::listen(InspectionPassed::class, [CreateDeliveryDraftOnQcPass::class, 'handle']);
+- Event::listen(InspectionPassed::class, [VerifyCoaOnIncomingQcPass::class,      'handle']);
+- Event::listen(InvoiceFinalized::class, [EmailCustomerOnInvoiceFinalized::class, 'handle']);
+- Event::listen(JobExceptionOccurred::class, [ChainListenerRunService::class, 'markRetrying']);
+- Event::listen(JobExceptionOccurred::class, [EmailDeliveryLogService::class, 'endJob']);
+- Event::listen(JobExceptionOccurred::class, [EmailDeliveryLogService::class, 'markFailed']);
+- Event::listen(JobExceptionOccurred::class, [RealtimeQueueTelemetry::class, 'processed']);
+- Event::listen(JobFailed::class, [ChainListenerRunService::class, 'markFailed']);
+- Event::listen(JobProcessed::class, [ChainListenerRunService::class, 'markProcessed']);
+- Event::listen(JobProcessed::class, [EmailDeliveryLogService::class, 'endJob']);
+- Event::listen(JobProcessed::class, [RealtimeQueueTelemetry::class, 'processed']);
+- Event::listen(JobProcessing::class, [ChainListenerRunService::class, 'markProcessing']);
+- Event::listen(JobProcessing::class, [EmailDeliveryLogService::class, 'beginJob']);
+- Event::listen(JobProcessing::class, [RealtimeQueueTelemetry::class, 'started']);
+- Event::listen(JobQueued::class, [RealtimeQueueTelemetry::class, 'queued']);
+- Event::listen(LeaveRequestApproved::class, [NotifyOnLeaveApproved::class, 'handle']);
+- Event::listen(LeaveRequestPendingHR::class, [NotifyOnLeavePendingHR::class, 'handle']);
+- Event::listen(LeaveRequestRejected::class, [NotifyOnLeaveRejected::class, 'handle']);
+- Event::listen(LeaveRequestSubmitted::class, [NotifyOnLeaveSubmitted::class, 'handle']);
+- Event::listen(LoanDecided::class, [NotifyOnLoanDecided::class,   'handle']);
+- Event::listen(LoanSubmitted::class, [NotifyOnLoanSubmitted::class, 'handle']);
+- Event::listen(LongWaitDetected::class, [NotifySystemAdminsOnQueueLongWait::class, 'handle']);
+- Event::listen(LowStockPrCreated::class, [NotifyOnLowStockPrCreated::class, 'handle']);
+- Event::listen(MachineBreakdownDetected::class, [NotifyOnMachineBreakdown::class, 'handle']);
+- Event::listen(MachineStatusChanged::class, [HandleMachineBreakdown::class, 'handle']);
+- Event::listen(MaintenanceWorkOrderCreated::class, [NotifyMaintenanceWorkOrder::class, 'handle']);
+- Event::listen(MessageSending::class, [EmailDeliveryLogService::class, 'beginMessage']);
+- Event::listen(MessageSending::class, static function (MessageSending $event): void {
+- Event::listen(MessageSent::class, [EmailDeliveryLogService::class, 'markSent']);
+- Event::listen(MigrationsEnded::class, static function (MigrationsEnded $event): void {
+- Event::listen(MonthlyDepreciationRequested::class, [RunMonthlyDepreciationOnRequested::class, 'handle']);
+- Event::listen(MrpReplanRequested::class, [QueueMrpOnReplanRequested::class, 'handle']);
+- Event::listen(NcrRecurrenceLinked::class, [AutoSpawn8DOnNcrRecurrence::class,       'handle']);
+- Event::listen(OfficialReceiptIssued::class, [EmailCustomerOnOfficialReceiptIssued::class, 'handle']);
+- Event::listen(OutgoingQuantityReleased::class, [CreateDeliveryDraftOnQcPass::class, 'handle']);
+- Event::listen(OvertimeRequestDecided::class, [NotifyOnOvertimeDecided::class,   'handle']);
+- Event::listen(OvertimeRequestSubmitted::class, [NotifyOnOvertimeSubmitted::class, 'handle']);
+- Event::listen(PayrollComputationRequested::class, [RunPayrollComputationOnRequested::class, 'handle']);
+- Event::listen(PayrollGlPostingRequested::class, [PostPayrollToGlOnRequested::class,         'handle']);
+- Event::listen(PayrollPeriodFinalized::class, [EmailPayslipPdfOnPayrollFinalized::class,   'handle']);
+- Event::listen(PayrollPeriodFinalized::class, [GenerateBankFileOnPayrollFinalized::class,  'handle']);
+- Event::listen(PayrollPeriodFinalized::class, [NotifyEmployeesOnPayrollFinalized::class,   'handle']);
+- Event::listen(PreventiveMaintenanceGenerationRequested::class, [GeneratePreventiveMaintenanceOnRequested::class, 'handle']);
+- Event::listen(ProductionReceiptRequested::class, [CreateProductionReceiptOnOutputRequested::class, 'handle']);
+- Event::listen(PurchaseOrderApproved::class, [NotifyOnPurchaseOrderApproved::class,    'handle']);
+- Event::listen(PurchaseOrderApproved::class, [PrepareSupplierDispatch::class,           'handle']);
+- Event::listen(PurchaseOrderCancelled::class, [CloseSupplierDispatchOnPurchaseOrderCancelled::class, 'handle']);
+- Event::listen(PurchaseOrderCancelled::class, [EmailSupplierOnPurchaseOrderCancelled::class, 'handle']);
+- Event::listen(PurchaseOrderSent::class, [CreateDraftGrnOnPoSent::class,           'handle']);
+- Event::listen(PurchaseOrderSubmitted::class, [NotifyOnPurchaseOrderSubmitted::class, 'handle']);
+- Event::listen(PurchaseRequestApproved::class, [ConsolidatePurchaseOrders::class,        'handle']);
+- Event::listen(PurchaseRequestApproved::class, [NotifyOnPurchaseRequestApproved::class,  'handle']);
+- Event::listen(ReturnInspectionRequested::class, [CreateReturnInspectionOnRequested::class, 'handle']);
+- Event::listen(ReturnRequestUpdated::class, [CompleteCustomerReplacement::class, 'handle']);
+- Event::listen(ReturnRequestUpdated::class, [EmailPartyOnReturnRequestUpdated::class, 'handle']);
+- Event::listen(RfqLifecycleEvent::class, [DeliverRfqLifecycleNotification::class, 'handle']);
+- Event::listen(SalesOrderAdvanceReleased::class, [QueueMrpOnSalesOrderAdvanceReleased::class, 'handle']);
+- Event::listen(SalesOrderConfirmed::class, [EmailCustomerOnSalesOrderConfirmed::class, 'handle']);
+- Event::listen(SalesOrderConfirmed::class, [NotifyOnSalesOrderConfirmed::class, 'handle']);
+- Event::listen(SalesOrderConfirmed::class, [QueueMrpOnSalesOrderConfirmed::class, 'handle']);
+- Event::listen(ScheduledTaskFailed::class, [ScheduleTickFailureTracker::class, 'record']);
+- Event::listen(ScheduledTaskFailed::class, [SchedulerExecutionLedger::class, 'recordTaskFailed']);
+- Event::listen(ScheduledTaskFinished::class, [SchedulerExecutionLedger::class, 'recordTaskFinished']);
+- Event::listen(ScheduledTaskStarting::class, [SchedulerExecutionLedger::class, 'recordTaskStarting']);
+- Event::listen(SeparationInitiated::class, [NotifyOnSeparationInitiated::class,         'handle']);
+- Event::listen(StockMovementCompleted::class, [CheckReorderPoint::class, 'handle']);
+- Event::listen(StockMovementCompleted::class, [PublishInventoryStockChange::class, 'handle']);
+- Event::listen(StockMovementCompleted::class, [QueueMrpOnStockMovementCompleted::class, 'handle']);
+- Event::listen(StockMovementGlPostingRequested::class, [PostStockMovementToGlOnRequested::class, 'handle']);
+- Event::listen(StockReservationChanged::class, [PublishInventoryStockChange::class, 'handleReservation']);
+- Event::listen(SupplierInvoiceSubmitted::class, [EmailSupplierOnInvoiceSubmitted::class, 'handle']);
+- Event::listen(SupplierPerformanceComputed::class, [AlertOnSupplierDeterioration::class, 'handle']);
+- Event::listen(WorkOrderCompleted::class, [NotifyOnWorkOrderCompleted::class,  'handle']);
+- Event::listen(WorkOrderCompleted::class, [TriggerOutgoingQC::class,           'handle']);
+- Event::listen(WorkOrderQualityResolved::class, [AutoCloseResolvedWorkOrder::class, 'handle']);
+- Event::listen(WorkOrderStatusChanged::class, [NotifyOnWorkOrderPaused::class, 'handle']);
+- Event::listen(WorkOrderStatusChanged::class, [TriggerInProcessQC::class,          'handle']);
+- Event::listen(YearEndLeaveProcessingRequested::class, [RunYearEndLeaveOnRequested::class, 'handle']);
+- FiscalYear::observe(FiscalYearRealtimeObserver::class);
+- GoodsReceiptNote::observe(GoodsReceiptNoteRealtimeObserver::class);
+- GrnItem::observe(GrnItemRealtimeObserver::class);
+- Holiday::observe(HolidayRealtimeObserver::class);
+- ImportBatch::observe(ImportBatchRealtimeObserver::class);
+- Inspection::observe(InspectionRealtimeObserver::class);
+- InspectionResultAuthor::observe(InspectionResultAuthorRealtimeObserver::class);
+- InspectionSpec::observe(QualityRecordRealtimeObserver::class);
+- InspectionSpecItem::observe(InspectionSpecItemRealtimeObserver::class);
+- Item::observe(ItemRealtimeObserver::class);
+- ItemCostReview::observe(ItemCostReviewRealtimeObserver::class);
+- ItemQualityPlan::observe(ItemQualityPlanRealtimeObserver::class);
+- JobApplication::observe(JobApplicationRealtimeObserver::class);
+- JobPosting::observe(JobPostingRealtimeObserver::class);
+- JournalEntry::observe(JournalEntryObserver::class);
+- LateProductionReport::observe(LateProductionReportRealtimeObserver::class);
+- LeaveRequest::observe(LeaveRequestRealtimeObserver::class);
+- LeaveType::observe(LeaveTypeRealtimeObserver::class);
+- LoanPayment::observe(LoanPaymentRealtimeObserver::class);
+- Machine::observe(MachineRealtimeObserver::class);
+- MachineDowntime::observe(MaintenanceWorkOrderChildRealtimeObserver::class);
+- MaintenanceLog::observe(MaintenanceWorkOrderChildRealtimeObserver::class);
+- MaintenancePartRequest::observe(MaintenanceWorkOrderChildRealtimeObserver::class);
+- MaintenanceSchedule::observe(MaintenanceScheduleRealtimeObserver::class);
+- MaintenanceWindow::observe(MaintenanceWorkOrderChildRealtimeObserver::class);
+- MaintenanceWorkOrder::observe(MaintenanceWorkOrderRealtimeObserver::class);
+- MaterialHandover::observe(MaterialHandoverRealtimeObserver::class);
+- MaterialIssueSlip::observe(MaterialIssueSlipRealtimeObserver::class);
+- MaterialReviewRecord::observe(MaterialReviewRecordRealtimeObserver::class);
+- Mold::observe(MoldRealtimeObserver::class);
+- MrpPlan::observe(MrpPlanRealtimeObserver::class);
+- MrpRun::observe(MrpRunRealtimeObserver::class);
+- NcrAction::observe(NcrActionRealtimeObserver::class);
+- NcrTemplate::observe(QualityRecordRealtimeObserver::class);
+- NonConformanceReport::observe(NcrRealtimeObserver::class);
+- OvertimeRequest::observe(OvertimeRequestRealtimeObserver::class);
+- PayrollAdjustment::observe(PayrollAdjustmentRealtimeObserver::class);
+- PayrollPeriod::observe(PayrollPeriodRealtimeObserver::class);
+- Position::observe(PositionRealtimeObserver::class);
+- PpapElement::observe(PpapElementRealtimeObserver::class);
+- PpapSubmission::observe(QualityRecordRealtimeObserver::class);
+- PriceAgreement::observe(PriceAgreementRealtimeObserver::class);
+- PriceRequest::observe(PriceRequestRealtimeObserver::class);
+- Product::observe(ProductRealtimeObserver::class);
+- ProductionSchedule::observe(ProductionScheduleRealtimeObserver::class);
+- ProfileUpdateRequest::observe(ProfileUpdateRequestRealtimeObserver::class);
+- ReturnCase::observe(ReturnCaseRealtimeObserver::class);
+- ReturnCaseAttachment::observe(ReturnCaseAttachmentRealtimeObserver::class);
+- ReturnCaseLine::observe(ReturnCaseLineRealtimeObserver::class);
+- ReturnCaseReceiptAllocation::observe(ReturnCaseReceiptAllocationRealtimeObserver::class);
+- ReturnCaseTimelineEvent::observe(ReturnCaseEventRealtimeObserver::class);
+- ReturnRequest::observe(ReturnRequestRealtimeObserver::class);
+- Role::observe(AdminRoleRealtimeObserver::class);
+- SalaryAdjustment::observe(SalaryAdjustmentRealtimeObserver::class);
+- SalesOrderAgreement::observe(SalesOrderAgreementRealtimeObserver::class);
+- ScheduledExport::observe(ScheduledExportRealtimeObserver::class);
+- Shift::observe(ShiftRealtimeObserver::class);
+- Shipment::observe(ShipmentRealtimeObserver::class);
+- ShipmentDocument::observe(ShipmentComponentRealtimeObserver::class);
+- ShipmentLandedCost::observe(ShipmentComponentRealtimeObserver::class);
+- ShipmentLot::observe(ShipmentLotRealtimeObserver::class);
+- Skill::observe(SkillRealtimeObserver::class);
+- SparePartUsage::observe(MaintenanceWorkOrderChildRealtimeObserver::class);
+- StockAdjustment::observe(StockAdjustmentRealtimeObserver::class);
+- StockCountItem::observe(StockCountItemRealtimeObserver::class);
+- StockCountSession::observe(StockCountSessionRealtimeObserver::class);
+- Training::observe(TrainingCatalogRealtimeObserver::class);
+- TransferOrder::observe(TransferOrderRealtimeObserver::class);
+- User::observe(AdminUserRealtimeObserver::class);
+- User::observe(EmployeeAccountOnboardingRealtimeObserver::class);
+- Vehicle::observe(VehicleRealtimeObserver::class);
+- Vendor::observe(VendorRealtimeObserver::class);
+- Warehouse::observe(WarehouseLayoutRealtimeObserver::class);
+- WarehouseLocation::observe(WarehouseLayoutRealtimeObserver::class);
+- WarehouseZone::observe(WarehouseLayoutRealtimeObserver::class);
+- WoOperation::observe(WoOperationRealtimeObserver::class);
+- WorkOrder::observe(WorkOrderSchedulingDiagnosticRealtimeObserver::class);
+- WorkOrderCrew::observe(WorkOrderAssignmentRealtimeObserver::class);
+- WorkOrderCrewMember::observe(WorkOrderAssignmentRealtimeObserver::class);
+
+## Event, listener, observer and job class files
+
+- api/app/Common/Events/AdminBackupsChanged.php
+- api/app/Common/Events/BroadcastEventEnvelope.php
+- api/app/Common/Events/CacheGroupInvalidated.php
+- api/app/Common/Events/ChainListenerRunsChanged.php
+- api/app/Common/Events/ChainStepAdvanced.php
+- api/app/Common/Events/Concerns/BroadcastsOnDedicatedQueue.php
+- api/app/Common/Events/Concerns/HasBroadcastEventId.php
+- api/app/Common/Events/DashboardLayoutChanged.php
+- api/app/Common/Events/DatabaseRestoreCompleted.php
+- api/app/Common/Events/ImportBatchChanged.php
+- api/app/Common/Events/NotificationsPruned.php
+- api/app/Common/Events/PermissionOverrideChanged.php
+- api/app/Common/Events/PortalNotificationChanged.php
+- api/app/Common/Events/ScheduledExportChanged.php
+- api/app/Common/Events/ToleratesNewerModelState.php
+- api/app/Common/Events/UserDisplayPreferencesChanged.php
+- api/app/Common/Events/UserNotificationChanged.php
+- api/app/Common/Events/UserNotificationCreated.php
+- api/app/Common/Events/UserNotificationPreferencesChanged.php
+- api/app/Common/Jobs/CreateBackupJob.php
+- api/app/Common/Jobs/DispatchOutboxMessage.php
+- api/app/Common/Jobs/ReplayChainListenerJob.php
+- api/app/Common/Jobs/RestoreBackupJob.php
+- api/app/Common/Listeners/NotifySystemAdminsOnQueueLongWait.php
+- api/app/Common/Observers/BackupOperationRealtimeObserver.php
+- api/app/Common/Observers/ChainListenerRunRealtimeObserver.php
+- api/app/Common/Observers/ImportBatchRealtimeObserver.php
+- api/app/Common/Observers/ScheduledExportRealtimeObserver.php
+- api/app/Jobs/RunDssDetectorJob.php
+- api/app/Modules/Accounting/Events/AccountChanged.php
+- api/app/Modules/Accounting/Events/AccountingPeriodChanged.php
+- api/app/Modules/Accounting/Events/BudgetActualsSyncRequested.php
+- api/app/Modules/Accounting/Events/BudgetChanged.php
+- api/app/Modules/Accounting/Events/BudgetTransferChanged.php
+- api/app/Modules/Accounting/Events/CreditNoteChanged.php
+- api/app/Modules/Accounting/Events/CreditNoteFinalized.php
+- api/app/Modules/Accounting/Events/CustomerChanged.php
+- api/app/Modules/Accounting/Events/InvoiceFinalized.php
+- api/app/Modules/Accounting/Events/JournalEntryChanged.php
+- api/app/Modules/Accounting/Events/OfficialReceiptIssued.php
+- api/app/Modules/Accounting/Events/VendorChanged.php
+- api/app/Modules/Accounting/Jobs/SyncBudgetActuals.php
+- api/app/Modules/Accounting/Listeners/AutoCreateBillOnGrnAccepted.php
+- api/app/Modules/Accounting/Listeners/EmailCustomerOnInvoiceFinalized.php
+- api/app/Modules/Accounting/Listeners/EmailCustomerOnOfficialReceiptIssued.php
+- api/app/Modules/Accounting/Listeners/EmailPartyOnCreditNoteFinalized.php
+- api/app/Modules/Accounting/Listeners/NotifyFinanceOnDeliveryConfirmed.php
+- api/app/Modules/Accounting/Listeners/RunBudgetActualsSyncOnRequested.php
+- api/app/Modules/Accounting/Observers/AccountRealtimeObserver.php
+- api/app/Modules/Accounting/Observers/AccountStatementCacheObserver.php
+- api/app/Modules/Accounting/Observers/AccountingPeriodRealtimeObserver.php
+- api/app/Modules/Accounting/Observers/BudgetRealtimeObserver.php
+- api/app/Modules/Accounting/Observers/BudgetTransferRealtimeObserver.php
+- api/app/Modules/Accounting/Observers/CreditNoteRealtimeObserver.php
+- api/app/Modules/Accounting/Observers/CustomerRealtimeObserver.php
+- api/app/Modules/Accounting/Observers/FiscalYearRealtimeObserver.php
+- api/app/Modules/Accounting/Observers/JournalEntryObserver.php
+- api/app/Modules/Accounting/Observers/VendorRealtimeObserver.php
+- api/app/Modules/Admin/Events/ActivityFeedChanged.php
+- api/app/Modules/Admin/Events/AdminAuditLogsChanged.php
+- api/app/Modules/Admin/Events/AdminRoleChanged.php
+- api/app/Modules/Admin/Events/AdminSessionsChanged.php
+- api/app/Modules/Admin/Events/AdminUserChanged.php
+- api/app/Modules/Admin/Events/ApprovalDelegationChanged.php
+- api/app/Modules/Admin/Events/RolePermissionsChanged.php
+- api/app/Modules/Admin/Events/SettingsChanged.php
+- api/app/Modules/Admin/Events/UserAccessChanged.php
+- api/app/Modules/Admin/Listeners/RecordActivityFromEvent.php
+- api/app/Modules/Admin/Listeners/RecordAuthActivity.php
+- api/app/Modules/Admin/Observers/ActivityEventRealtimeObserver.php
+- api/app/Modules/Admin/Observers/AdminAuditLogRealtimeObserver.php
+- api/app/Modules/Admin/Observers/AdminRoleRealtimeObserver.php
+- api/app/Modules/Admin/Observers/AdminUserRealtimeObserver.php
+- api/app/Modules/Admin/Observers/ApprovalDelegationAccessRealtimeObserver.php
+- api/app/Modules/Assets/Events/AssetChanged.php
+- api/app/Modules/Assets/Events/MonthlyDepreciationRequested.php
+- api/app/Modules/Assets/Jobs/RunMonthlyDepreciationJob.php
+- api/app/Modules/Assets/Listeners/RunMonthlyDepreciationOnRequested.php
+- api/app/Modules/Attendance/Events/AttendanceChanged.php
+- api/app/Modules/Attendance/Events/HolidayChanged.php
+- api/app/Modules/Attendance/Events/OvertimeRequestChanged.php
+- api/app/Modules/Attendance/Events/OvertimeRequestDecided.php
+- api/app/Modules/Attendance/Events/OvertimeRequestSubmitted.php
+- api/app/Modules/Attendance/Events/ShiftAssignmentChanged.php
+- api/app/Modules/Attendance/Events/ShiftChanged.php
+- api/app/Modules/Attendance/Listeners/NotifyOnOvertimeDecided.php
+- api/app/Modules/Attendance/Listeners/NotifyOnOvertimeSubmitted.php
+- api/app/Modules/Attendance/Observers/AttendanceRealtimeObserver.php
+- api/app/Modules/Attendance/Observers/HolidayRealtimeObserver.php
+- api/app/Modules/Attendance/Observers/OvertimeRequestRealtimeObserver.php
+- api/app/Modules/Attendance/Observers/ShiftAssignmentRealtimeObserver.php
+- api/app/Modules/Attendance/Observers/ShiftRealtimeObserver.php
+- api/app/Modules/Auth/Events/UserInviteChanged.php
+- api/app/Modules/Auth/Observers/EmployeeAccessScopeRealtimeObserver.php
+- api/app/Modules/B2B/Events/B2bDeliveryScheduleChanged.php
+- api/app/Modules/B2B/Events/PortalAccessChanged.php
+- api/app/Modules/B2B/Events/PortalAccountAccessRevoked.php
+- api/app/Modules/B2B/Events/SupplierInvoiceSubmitted.php
+- api/app/Modules/B2B/Listeners/EmailSupplierOnInvoiceSubmitted.php
+- api/app/Modules/B2B/Listeners/EmailSupplierOnPurchaseOrderCancelled.php
+- api/app/Modules/B2B/Observers/DeliveryScheduleRealtimeObserver.php
+- api/app/Modules/CRM/Events/ComplaintNcrRequested.php
+- api/app/Modules/CRM/Events/CustomerCatalogChanged.php
+- api/app/Modules/CRM/Events/CustomerComplaintChanged.php
+- api/app/Modules/CRM/Events/CustomerComplaintUpdated.php
+- api/app/Modules/CRM/Events/PriceAgreementChanged.php
+- api/app/Modules/CRM/Events/PriceRequestChanged.php
+- api/app/Modules/CRM/Events/ProductChanged.php
+- api/app/Modules/CRM/Events/SalesOrderAdvanceReleased.php
+- api/app/Modules/CRM/Events/SalesOrderConfirmed.php
+- api/app/Modules/CRM/Listeners/AutoSpawn8DOnNcrRecurrence.php
+- api/app/Modules/CRM/Listeners/CreateNcrOnComplaintRequested.php
+- api/app/Modules/CRM/Listeners/EmailCustomerOnComplaintUpdated.php
+- api/app/Modules/CRM/Listeners/EmailCustomerOnSalesOrderConfirmed.php
+- api/app/Modules/CRM/Listeners/NotifyOnSalesOrderConfirmed.php
+- api/app/Modules/CRM/Observers/Complaint8DReportRealtimeObserver.php
+- api/app/Modules/CRM/Observers/CustomerComplaintRealtimeObserver.php
+- api/app/Modules/CRM/Observers/CustomerSubresourceRealtimeObserver.php
+- api/app/Modules/CRM/Observers/PriceAgreementRealtimeObserver.php
+- api/app/Modules/CRM/Observers/PriceRequestRealtimeObserver.php
+- api/app/Modules/CRM/Observers/ProductRealtimeObserver.php
+- api/app/Modules/CRM/Observers/SalesOrderAgreementRealtimeObserver.php
+- api/app/Modules/DSS/Events/DssChanged.php
+- api/app/Modules/DSS/Observers/DssRealtimeObserver.php
+- api/app/Modules/Dashboard/Events/AdminDashboardChanged.php
+- api/app/Modules/Dashboard/Events/BadgesChanged.php
+- api/app/Modules/Dashboard/Events/ChainBottlenecksChanged.php
+- api/app/Modules/Dashboard/Events/DashboardWidgetDataChanged.php
+- api/app/Modules/Dashboard/Events/EmployeeDashboardChanged.php
+- api/app/Modules/Dashboard/Events/FinanceDashboardChanged.php
+- api/app/Modules/Dashboard/Events/HrDashboardChanged.php
+- api/app/Modules/Dashboard/Events/KpiSnapshotChanged.php
+- api/app/Modules/Dashboard/Events/PlantManagerDashboardChanged.php
+- api/app/Modules/Dashboard/Events/PpcDashboardChanged.php
+- api/app/Modules/Dashboard/Events/PurchasingDashboardChanged.php
+- api/app/Modules/Dashboard/Events/QualityDashboardChanged.php
+- api/app/Modules/Dashboard/Events/WarehouseDashboardChanged.php
+- api/app/Modules/Dashboard/Observers/BadgeInvalidationObserver.php
+- api/app/Modules/Dashboard/Observers/DashboardCacheInvalidationObserver.php
+- api/app/Modules/Forecasting/Events/DemandForecastChanged.php
+- api/app/Modules/Forecasting/Observers/DemandForecastRealtimeObserver.php
+- api/app/Modules/HR/Events/ClearanceChanged.php
+- api/app/Modules/HR/Events/ClearanceFullySigned.php
+- api/app/Modules/HR/Events/DepartmentChanged.php
+- api/app/Modules/HR/Events/EmployeeChanged.php
+- api/app/Modules/HR/Events/EmployeeCreated.php
+- api/app/Modules/HR/Events/EmployeeDocumentsChanged.php
+- api/app/Modules/HR/Events/EmployeeOnboardingChanged.php
+- api/app/Modules/HR/Events/EmployeeSkillChanged.php
+- api/app/Modules/HR/Events/EmployeeTrainingChanged.php
+- api/app/Modules/HR/Events/PositionChanged.php
+- api/app/Modules/HR/Events/ProfileUpdateRequestChanged.php
+- api/app/Modules/HR/Events/RecruitmentChanged.php
+- api/app/Modules/HR/Events/SalaryAdjustmentChanged.php
+- api/app/Modules/HR/Events/SeparationInitiated.php
+- api/app/Modules/HR/Events/SkillChanged.php
+- api/app/Modules/HR/Events/TrainingCatalogChanged.php
+- api/app/Modules/HR/Listeners/AutoProvisionUserOnEmployeeHire.php
+- api/app/Modules/HR/Listeners/DeactivateAccountOnClearanceComplete.php
+- api/app/Modules/HR/Listeners/InitializeLeaveBalances.php
+- api/app/Modules/HR/Listeners/NotifyOnSeparationInitiated.php
+- api/app/Modules/HR/Observers/ApplicationInterviewRealtimeObserver.php
+- api/app/Modules/HR/Observers/ApplicationNoteRealtimeObserver.php
+- api/app/Modules/HR/Observers/ClearanceRealtimeObserver.php
+- api/app/Modules/HR/Observers/DepartmentRealtimeObserver.php
+- api/app/Modules/HR/Observers/EmployeeAccountOnboardingRealtimeObserver.php
+- api/app/Modules/HR/Observers/EmployeeDocumentsRealtimeObserver.php
+- api/app/Modules/HR/Observers/EmployeeOnboardingRealtimeObserver.php
+- api/app/Modules/HR/Observers/EmployeeRealtimeObserver.php
+- api/app/Modules/HR/Observers/EmployeeSkillRealtimeObserver.php
+- api/app/Modules/HR/Observers/EmployeeTrainingRealtimeObserver.php
+- api/app/Modules/HR/Observers/JobApplicationRealtimeObserver.php
+- api/app/Modules/HR/Observers/JobPostingRealtimeObserver.php
+- api/app/Modules/HR/Observers/PositionRealtimeObserver.php
+- api/app/Modules/HR/Observers/ProfileUpdateRequestRealtimeObserver.php
+- api/app/Modules/HR/Observers/SalaryAdjustmentApprovalRecordRealtimeObserver.php
+- api/app/Modules/HR/Observers/SalaryAdjustmentRealtimeObserver.php
+- api/app/Modules/HR/Observers/SkillRealtimeObserver.php
+- api/app/Modules/HR/Observers/TrainingCatalogRealtimeObserver.php
+- api/app/Modules/Inventory/Events/GoodsReceiptNoteAccepted.php
+- api/app/Modules/Inventory/Events/GoodsReceiptNoteChanged.php
+- api/app/Modules/Inventory/Events/GoodsReceiptNoteCreated.php
+- api/app/Modules/Inventory/Events/InventoryStockChanged.php
+- api/app/Modules/Inventory/Events/ItemChanged.php
+- api/app/Modules/Inventory/Events/ItemCostReviewChanged.php
+- api/app/Modules/Inventory/Events/LowStockPrCreated.php
+- api/app/Modules/Inventory/Events/MaterialIssueSlipChanged.php
+- api/app/Modules/Inventory/Events/MaterialReviewRecordChanged.php
+- api/app/Modules/Inventory/Events/StockAdjustmentChanged.php
+- api/app/Modules/Inventory/Events/StockCountChanged.php
+- api/app/Modules/Inventory/Events/StockMovementCompleted.php
+- api/app/Modules/Inventory/Events/StockMovementGlPostingRequested.php
+- api/app/Modules/Inventory/Events/StockReservationChanged.php
+- api/app/Modules/Inventory/Events/TransferOrderChanged.php
+- api/app/Modules/Inventory/Events/WarehouseLayoutChanged.php
+- api/app/Modules/Inventory/Listeners/CheckReorderPoint.php
+- api/app/Modules/Inventory/Listeners/CreateDraftGrnOnPoSent.php
+- api/app/Modules/Inventory/Listeners/NotifyOnGrnReceived.php
+- api/app/Modules/Inventory/Listeners/NotifyOnLowStockPrCreated.php
+- api/app/Modules/Inventory/Listeners/PostStockMovementToGlOnRequested.php
+- api/app/Modules/Inventory/Listeners/VerifyCoaOnIncomingQcPass.php
+- api/app/Modules/Inventory/Observers/GoodsReceiptNoteRealtimeObserver.php
+- api/app/Modules/Inventory/Observers/GrnItemRealtimeObserver.php
+- api/app/Modules/Inventory/Observers/InventoryItemCatalogRealtimeObserver.php
+- api/app/Modules/Inventory/Observers/ItemCostReviewRealtimeObserver.php
+- api/app/Modules/Inventory/Observers/ItemRealtimeObserver.php
+- api/app/Modules/Inventory/Observers/MaterialHandoverRealtimeObserver.php
+- api/app/Modules/Inventory/Observers/MaterialIssueSlipRealtimeObserver.php
+- api/app/Modules/Inventory/Observers/MaterialReviewRecordRealtimeObserver.php
+- api/app/Modules/Inventory/Observers/StockAdjustmentRealtimeObserver.php
+- api/app/Modules/Inventory/Observers/StockCountItemRealtimeObserver.php
+- api/app/Modules/Inventory/Observers/StockCountSessionRealtimeObserver.php
+- api/app/Modules/Inventory/Observers/TransferOrderRealtimeObserver.php
+- api/app/Modules/Inventory/Observers/WarehouseLayoutRealtimeObserver.php
+- api/app/Modules/Landing/Events/ContactInquiryChanged.php
+- api/app/Modules/Leave/Events/LeaveBalanceChanged.php
+- api/app/Modules/Leave/Events/LeaveRequestApproved.php
+- api/app/Modules/Leave/Events/LeaveRequestChanged.php
+- api/app/Modules/Leave/Events/LeaveRequestPendingHR.php
+- api/app/Modules/Leave/Events/LeaveRequestRejected.php
+- api/app/Modules/Leave/Events/LeaveRequestSubmitted.php
+- api/app/Modules/Leave/Events/LeaveTypeChanged.php
+- api/app/Modules/Leave/Events/YearEndLeaveProcessingRequested.php
+- api/app/Modules/Leave/Jobs/ProcessYearEndLeave.php
+- api/app/Modules/Leave/Listeners/NotifyOnLeaveApproved.php
+- api/app/Modules/Leave/Listeners/NotifyOnLeavePendingHR.php
+- api/app/Modules/Leave/Listeners/NotifyOnLeaveRejected.php
+- api/app/Modules/Leave/Listeners/NotifyOnLeaveSubmitted.php
+- api/app/Modules/Leave/Listeners/RunYearEndLeaveOnRequested.php
+- api/app/Modules/Leave/Observers/LeaveRequestRealtimeObserver.php
+- api/app/Modules/Leave/Observers/LeaveTypeRealtimeObserver.php
+- api/app/Modules/Loans/Events/EmployeeLoanChanged.php
+- api/app/Modules/Loans/Events/LoanDecided.php
+- api/app/Modules/Loans/Events/LoanSubmitted.php
+- api/app/Modules/Loans/Listeners/NotifyOnLoanDecided.php
+- api/app/Modules/Loans/Listeners/NotifyOnLoanSubmitted.php
+- api/app/Modules/Loans/Observers/EmployeeLoanRealtimeObserver.php
+- api/app/Modules/Loans/Observers/LoanApprovalRecordRealtimeObserver.php
+- api/app/Modules/Loans/Observers/LoanPaymentRealtimeObserver.php
+- api/app/Modules/MRP/Events/BomChanged.php
+- api/app/Modules/MRP/Events/BomPricingReviewRequested.php
+- api/app/Modules/MRP/Events/MachineChanged.php
+- api/app/Modules/MRP/Events/MachineStatusChanged.php
+- api/app/Modules/MRP/Events/MoldChanged.php
+- api/app/Modules/MRP/Events/MoldShotLimitNearing.php
+- api/app/Modules/MRP/Events/MoldShotLimitReached.php
+- api/app/Modules/MRP/Events/MrpPlanChanged.php
+- api/app/Modules/MRP/Events/MrpPlanGenerated.php
+- api/app/Modules/MRP/Events/MrpReplanRequested.php
+- api/app/Modules/MRP/Events/MrpRunChanged.php
+- api/app/Modules/MRP/Jobs/RunAutomaticMrpJob.php
+- api/app/Modules/MRP/Listeners/QueueMrpOnOutgoingInspectionFailed.php
+- api/app/Modules/MRP/Listeners/QueueMrpOnReplanRequested.php
+- api/app/Modules/MRP/Listeners/QueueMrpOnSalesOrderAdvanceReleased.php
+- api/app/Modules/MRP/Listeners/QueueMrpOnSalesOrderConfirmed.php
+- api/app/Modules/MRP/Listeners/QueueMrpOnStockMovementCompleted.php
+- api/app/Modules/MRP/Observers/BomRealtimeObserver.php
+- api/app/Modules/MRP/Observers/MachineRealtimeObserver.php
+- api/app/Modules/MRP/Observers/MoldRealtimeObserver.php
+- api/app/Modules/MRP/Observers/MrpPlanRealtimeObserver.php
+- api/app/Modules/MRP/Observers/MrpRunRealtimeObserver.php
+- api/app/Modules/Maintenance/Events/MaintenanceScheduleChanged.php
+- api/app/Modules/Maintenance/Events/MaintenanceWorkOrderChanged.php
+- api/app/Modules/Maintenance/Events/MaintenanceWorkOrderCreated.php
+- api/app/Modules/Maintenance/Events/PreventiveMaintenanceGenerationRequested.php
+- api/app/Modules/Maintenance/Jobs/GeneratePreventiveMaintenanceJob.php
+- api/app/Modules/Maintenance/Listeners/GeneratePreventiveMaintenanceOnRequested.php
+- api/app/Modules/Maintenance/Listeners/NotifyMaintenanceWorkOrder.php
+- api/app/Modules/Maintenance/Observers/MaintenanceScheduleRealtimeObserver.php
+- api/app/Modules/Maintenance/Observers/MaintenanceWorkOrderChildRealtimeObserver.php
+- api/app/Modules/Maintenance/Observers/MaintenanceWorkOrderRealtimeObserver.php
+- api/app/Modules/Payroll/Events/DeMinimisBenefitChanged.php
+- api/app/Modules/Payroll/Events/GovernmentContributionTableChanged.php
+- api/app/Modules/Payroll/Events/PayrollAdjustmentChanged.php
+- api/app/Modules/Payroll/Events/PayrollAnomalyChanged.php
+- api/app/Modules/Payroll/Events/PayrollComputationRequested.php
+- api/app/Modules/Payroll/Events/PayrollGlPostingRequested.php
+- api/app/Modules/Payroll/Events/PayrollPeriodChanged.php
+- api/app/Modules/Payroll/Events/PayrollPeriodDisbursed.php
+- api/app/Modules/Payroll/Events/PayrollPeriodFinalized.php
+- api/app/Modules/Payroll/Events/PayrollPeriodVoided.php
+- api/app/Modules/Payroll/Events/PayrollProgressEvent.php
+- api/app/Modules/Payroll/Jobs/PostPayrollToGlJob.php
+- api/app/Modules/Payroll/Jobs/ProcessPayrollJob.php
+- api/app/Modules/Payroll/Jobs/SendPayslipEmailJob.php
+- api/app/Modules/Payroll/Listeners/EmailPayslipPdfOnPayrollFinalized.php
+- api/app/Modules/Payroll/Listeners/GenerateBankFileOnPayrollFinalized.php
+- api/app/Modules/Payroll/Listeners/NotifyEmployeesOnPayrollFinalized.php
+- api/app/Modules/Payroll/Listeners/PostPayrollToGlOnRequested.php
+- api/app/Modules/Payroll/Listeners/RunPayrollComputationOnRequested.php
+- api/app/Modules/Payroll/Observers/DeMinimisBenefitRealtimeObserver.php
+- api/app/Modules/Payroll/Observers/DisbursementProofRealtimeObserver.php
+- api/app/Modules/Payroll/Observers/PayrollAdjustmentRealtimeObserver.php
+- api/app/Modules/Payroll/Observers/PayrollPeriodRealtimeObserver.php
+- api/app/Modules/Production/Events/AssignedWorkOrderChanged.php
+- api/app/Modules/Production/Events/LateProductionReportChanged.php
+- api/app/Modules/Production/Events/MachineBreakdownDetected.php
+- api/app/Modules/Production/Events/ProductionReceiptRequested.php
+- api/app/Modules/Production/Events/ProductionRoutingChanged.php
+- api/app/Modules/Production/Events/ProductionScheduleChanged.php
+- api/app/Modules/Production/Events/WorkOrderAssignmentChanged.php
+- api/app/Modules/Production/Events/WorkOrderCompleted.php
+- api/app/Modules/Production/Events/WorkOrderOperationChanged.php
+- api/app/Modules/Production/Events/WorkOrderOutputRecorded.php
+- api/app/Modules/Production/Events/WorkOrderQualityResolved.php
+- api/app/Modules/Production/Events/WorkOrderSchedulingDiagnosticChanged.php
+- api/app/Modules/Production/Events/WorkOrderStatusChanged.php
+- api/app/Modules/Production/Listeners/AutoCloseResolvedWorkOrder.php
+- api/app/Modules/Production/Listeners/CreateProductionReceiptOnOutputRequested.php
+- api/app/Modules/Production/Listeners/HandleMachineBreakdown.php
+- api/app/Modules/Production/Listeners/NotifyOnMachineBreakdown.php
+- api/app/Modules/Production/Listeners/NotifyOnWorkOrderCompleted.php
+- api/app/Modules/Production/Listeners/NotifyOnWorkOrderPaused.php
+- api/app/Modules/Production/Observers/LateProductionReportRealtimeObserver.php
+- api/app/Modules/Production/Observers/ProductionScheduleRealtimeObserver.php
+- api/app/Modules/Production/Observers/ProductionStaffingObserver.php
+- api/app/Modules/Production/Observers/WoOperationRealtimeObserver.php
+- api/app/Modules/Production/Observers/WorkOrderAssignmentRealtimeObserver.php
+- api/app/Modules/Production/Observers/WorkOrderSchedulingDiagnosticRealtimeObserver.php
+- api/app/Modules/Purchasing/Events/PurchaseOrderApproved.php
+- api/app/Modules/Purchasing/Events/PurchaseOrderCancelled.php
+- api/app/Modules/Purchasing/Events/PurchaseOrderSent.php
+- api/app/Modules/Purchasing/Events/PurchaseOrderSubmitted.php
+- api/app/Modules/Purchasing/Events/PurchaseRequestApproved.php
+- api/app/Modules/Purchasing/Events/RequestForQuoteChanged.php
+- api/app/Modules/Purchasing/Events/RfqLifecycleEvent.php
+- api/app/Modules/Purchasing/Events/SupplierCatalogChanged.php
+- api/app/Modules/Purchasing/Events/SupplierPerformanceChanged.php
+- api/app/Modules/Purchasing/Events/SupplierPerformanceComputed.php
+- api/app/Modules/Purchasing/Events/SupplierRfqChanged.php
+- api/app/Modules/Purchasing/Listeners/AlertOnSupplierDeterioration.php
+- api/app/Modules/Purchasing/Listeners/CloseSupplierDispatchOnPurchaseOrderCancelled.php
+- api/app/Modules/Purchasing/Listeners/ConsolidatePurchaseOrders.php
+- api/app/Modules/Purchasing/Listeners/DeliverRfqLifecycleNotification.php
+- api/app/Modules/Purchasing/Listeners/NotifyOnPurchaseOrderApproved.php
+- api/app/Modules/Purchasing/Listeners/NotifyOnPurchaseOrderSubmitted.php
+- api/app/Modules/Purchasing/Listeners/NotifyOnPurchaseRequestApproved.php
+- api/app/Modules/Purchasing/Listeners/PrepareSupplierDispatch.php
+- api/app/Modules/Purchasing/Observers/ProcurementChainCacheObserver.php
+- api/app/Modules/Quality/Events/InspectionChanged.php
+- api/app/Modules/Quality/Events/InspectionFailed.php
+- api/app/Modules/Quality/Events/InspectionPassed.php
+- api/app/Modules/Quality/Events/NcrChanged.php
+- api/app/Modules/Quality/Events/NcrRecurrenceLinked.php
+- api/app/Modules/Quality/Events/OutgoingQuantityReleased.php
+- api/app/Modules/Quality/Events/QualityRecordChanged.php
+- api/app/Modules/Quality/Jobs/ProcessNcrRecurrenceScan.php
+- api/app/Modules/Quality/Listeners/AcceptGrnOnIncomingQcPass.php
+- api/app/Modules/Quality/Listeners/CloseReworkNcrAfterQcApproval.php
+- api/app/Modules/Quality/Listeners/CreateDeliveryDraftOnQcPass.php
+- api/app/Modules/Quality/Listeners/NotifyOnInspectionFailed.php
+- api/app/Modules/Quality/Listeners/RejectGRNOnQcFail.php
+- api/app/Modules/Quality/Listeners/TriggerInProcessQC.php
+- api/app/Modules/Quality/Listeners/TriggerIncomingQC.php
+- api/app/Modules/Quality/Listeners/TriggerOutgoingQC.php
+- api/app/Modules/Quality/Observers/InspectionRealtimeObserver.php
+- api/app/Modules/Quality/Observers/InspectionResultAuthorRealtimeObserver.php
+- api/app/Modules/Quality/Observers/InspectionSpecItemRealtimeObserver.php
+- api/app/Modules/Quality/Observers/ItemQualityPlanRealtimeObserver.php
+- api/app/Modules/Quality/Observers/NcrActionRealtimeObserver.php
+- api/app/Modules/Quality/Observers/NcrRealtimeObserver.php
+- api/app/Modules/Quality/Observers/PpapElementRealtimeObserver.php
+- api/app/Modules/Quality/Observers/QualityRecordRealtimeObserver.php
+- api/app/Modules/ReturnManagement/Events/ReturnCaseChanged.php
+- api/app/Modules/ReturnManagement/Events/ReturnInspectionRequested.php
+- api/app/Modules/ReturnManagement/Events/ReturnRequestChanged.php
+- api/app/Modules/ReturnManagement/Events/ReturnRequestUpdated.php
+- api/app/Modules/ReturnManagement/Listeners/CompleteCustomerReplacement.php
+- api/app/Modules/ReturnManagement/Listeners/CreateReturnInspectionOnRequested.php
+- api/app/Modules/ReturnManagement/Listeners/EmailPartyOnReturnRequestUpdated.php
+- api/app/Modules/ReturnManagement/Observers/ReturnCaseAttachmentRealtimeObserver.php
+- api/app/Modules/ReturnManagement/Observers/ReturnCaseEventRealtimeObserver.php
+- api/app/Modules/ReturnManagement/Observers/ReturnCaseLineRealtimeObserver.php
+- api/app/Modules/ReturnManagement/Observers/ReturnCaseRealtimeObserver.php
+- api/app/Modules/ReturnManagement/Observers/ReturnCaseReceiptAllocationRealtimeObserver.php
+- api/app/Modules/ReturnManagement/Observers/ReturnRequestRealtimeObserver.php
+- api/app/Modules/SupplyChain/Events/DeliveryConfirmed.php
+- api/app/Modules/SupplyChain/Events/DeliveryInvoiceRequested.php
+- api/app/Modules/SupplyChain/Events/ShipmentChanged.php
+- api/app/Modules/SupplyChain/Events/ShipmentLotChanged.php
+- api/app/Modules/SupplyChain/Events/VehicleChanged.php
+- api/app/Modules/SupplyChain/Listeners/CreateDraftInvoiceOnDeliveryInvoiceRequested.php
+- api/app/Modules/SupplyChain/Listeners/EmailCustomerOnDeliveryConfirmed.php
+- api/app/Modules/SupplyChain/Observers/DeliveryVehicleRealtimeObserver.php
+- api/app/Modules/SupplyChain/Observers/ShipmentComponentRealtimeObserver.php
+- api/app/Modules/SupplyChain/Observers/ShipmentLotRealtimeObserver.php
+- api/app/Modules/SupplyChain/Observers/ShipmentRealtimeObserver.php
+- api/app/Modules/SupplyChain/Observers/VehicleRealtimeObserver.php

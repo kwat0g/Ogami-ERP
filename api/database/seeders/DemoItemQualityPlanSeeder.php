@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Database\Seeders;
 
+use App\Common\Support\ProductionAssertions;
 use App\Common\Exceptions\BusinessRuleException;
 use App\Common\Services\SettingsService;
 use App\Modules\Auth\Models\User;
@@ -18,6 +19,8 @@ class DemoItemQualityPlanSeeder extends Seeder
         if (! config('app.seed_demo_data')) {
             return;
         }
+
+        ProductionAssertions::assertDemoSeedingAllowed();
 
         $settings = app(SettingsService::class);
         $actorRoles = array_values(array_filter((array) $settings->get('system.automation.actor_roles', []), static fn ($role): bool => is_string($role) && $role !== ''));

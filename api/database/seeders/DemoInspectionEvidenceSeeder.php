@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Database\Seeders;
 
+use App\Common\Support\ProductionAssertions;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 
@@ -14,6 +15,8 @@ class DemoInspectionEvidenceSeeder extends Seeder
         if (! config('app.seed_demo_data')) {
             return;
         }
+
+        ProductionAssertions::assertDemoSeedingAllowed();
 
         $inspections = DB::table('inspections')
             ->where('stage', 'outgoing')

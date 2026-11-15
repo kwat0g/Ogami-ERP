@@ -4,12 +4,17 @@ declare(strict_types=1);
 
 namespace Database\Seeders;
 
+use App\Common\Support\ProductionAssertions;
 use Illuminate\Database\Seeder;
 
 class DatabaseSeeder extends Seeder
 {
     public function run(): void
     {
+        if (config('app.seed_demo_data')) {
+            ProductionAssertions::assertDemoSeedingAllowed();
+        }
+
         $this->call([
             // Sprint 1 foundation.
             RolePermissionSeeder::class,   // Task 10
@@ -67,7 +72,6 @@ class DatabaseSeeder extends Seeder
                 MoldSeeder::class,
                 MoldCompatibilitySeeder::class,
                 ProductRoutingSeeder::class,
-                DemoBomCostBasisSeeder::class,
                 DefectTypeSeeder::class,
                 VehicleSeeder::class,
             ]);
@@ -76,6 +80,7 @@ class DatabaseSeeder extends Seeder
         // Demo records are deliberately opt-in.
         if (config('app.seed_demo_data')) {
             $this->call([
+                DemoBomCostBasisSeeder::class,
                 // Product BOMs already exist from the reference-data pass.
                 // Create the matching inventory identities before DemoDataSeeder
                 // establishes stock levels for the demo catalog.

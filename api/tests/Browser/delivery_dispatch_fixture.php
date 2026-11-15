@@ -43,12 +43,19 @@ if (strlen($run) < 6 || strlen($run) > 16) {
 if (Product::where('part_number', 'FG-'.$run)->exists()) {
     throw new RuntimeException('Use a fresh database and run identifier.');
 }
+require_once __DIR__.'/demo_seed_helpers.php';
+
 foreach ([
     RolePermissionSeeder::class, SettingsSeeder::class,
     ChartOfAccountsSeeder::class, DepartmentSeeder::class,
     PositionSeeder::class, DemoAccountSeeder::class,
     WorkflowSeeder::class,
 ] as $seeder) {
+    if ($seeder === DemoAccountSeeder::class) {
+        seedBrowserDemoAccounts();
+        continue;
+    }
+
     (new $seeder)->run();
 }
 foreach (['supply_chain', 'inventory', 'quality', 'b2b', 'return_management'] as $module) {
