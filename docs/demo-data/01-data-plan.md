@@ -14,7 +14,7 @@ Status: approved by user; implementation is in progress by phase. Based on [00-d
 
 | Entity/history | small | demo | full |
 |---|---:|---:|---:|
-| Employees | 20 | 200–210 | 230–250 |
+| Employees | 21 | 200–210 | 230–250 |
 | Customers / suppliers | 4 / 6 | 10–12 / 18–22 | 12–15 / 25 |
 | Raw/consumable items | 12–18 | 70–90 | 100–120 |
 | Finished goods | 8–12 | 45–60 | 70–80 |
