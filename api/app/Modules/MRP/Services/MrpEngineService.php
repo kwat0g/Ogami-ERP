@@ -1050,7 +1050,7 @@ class MrpEngineService
         $q = MrpPlan::query()
             ->with([
                 'salesOrder:id,so_number,customer_id,status', 'salesOrder.customer:id,name',
-                'stockProductionWorkOrder:id,wo_number,product_id,quantity_target,status',
+            'stockProductionWorkOrder:id,wo_number,product_id,quantity_target,status',
                 'stockProductionWorkOrder.product:id,part_number,name',
                 'customerProductionRequest.customer:id,name',
                 'generator:id,name,role_id',
@@ -1094,10 +1094,12 @@ class MrpEngineService
         return $plan->load([
             'salesOrder.customer:id,name',
             'stockProductionWorkOrder.product:id,part_number,name',
+            'stockProductionWorkOrder.materials.item',
             'customerProductionRequest.customer:id,name',
             'generator:id,name,role_id',
-            'workOrders:id,wo_number,product_id,quantity_target,status,planned_start,planned_end,preferred_production_date,mrp_plan_id,parent_wo_id',
+            'workOrders:id,wo_number,product_id,quantity_target,status,planned_start,planned_end,preferred_production_date,mrp_plan_id,parent_wo_id,production_purpose,bom_id',
             'workOrders.parent:id,wo_number',
+            'workOrders.materials.item',
             'workOrders.currentProductionSchedule',
             'priorProgressedWorkOrders' => fn ($query) => $query->where('mrp_plans.version', '<', $plan->version),
             'priorProgressedWorkOrders.parent:id,wo_number',

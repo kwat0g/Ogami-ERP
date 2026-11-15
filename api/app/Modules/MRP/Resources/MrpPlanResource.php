@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace App\Modules\MRP\Resources;
 
+use App\Common\Support\Money;
 use App\Modules\MRP\Enums\MrpPlanStatus;
+use App\Modules\MRP\Models\Bom;
 use App\Modules\Production\Enums\WorkOrderStatus;
+use App\Modules\Production\Models\WorkOrder;
 use App\Modules\Purchasing\Enums\PurchaseOrderStatus;
 use App\Modules\Purchasing\Enums\PurchaseRequestPriority;
 use App\Modules\Purchasing\Enums\PurchaseRequestStatus;
@@ -16,6 +19,17 @@ class MrpPlanResource extends JsonResource
 {
     public function toArray(Request $request): array
     {
+        $rawDiagnostics = $this->diagnostics ?? [];
+        $snapshotDiagnostics = $this->relationLoaded('workOrders')
+            ? $this->stockMaterialSnapshotDiagnostics($rawDiagnostics)
+            : [];
+        $diagnostics = array_merge($rawDiagnostics, $snapshotDiagnostics);
+        $costSummary = MrpPlanningResponseSerializer::costSummary($this->cost_summary);
+        if ($this->relationLoaded('workOrders') && $this->isStockDerived()
+            && ($costSummary === null || ! array_key_exists('material_cost', $costSummary))) {
+            $costSummary = $this->stockCostSummary($snapshotDiagnostics);
+        }
+
         return [
             'id' => $this->hash_id,
             'mrp_plan_no' => $this->mrp_plan_no,
@@ -60,8 +74,8 @@ class MrpPlanResource extends JsonResource
             'shortages_found' => (int) $this->shortages_found,
             'auto_pr_count' => (int) $this->auto_pr_count,
             'draft_wo_count' => (int) $this->draft_wo_count,
-            'diagnostics' => MrpPlanningResponseSerializer::diagnostics($this->diagnostics ?? []),
-            'cost_summary' => MrpPlanningResponseSerializer::costSummary($this->cost_summary),
+            'diagnostics' => MrpPlanningResponseSerializer::diagnostics($diagnostics),
+            'cost_summary' => $costSummary,
             'generation' => MrpPlanningResponseSerializer::generationContext($this->generation_context),
             'generator' => $this->whenLoaded('generator', fn () => $this->generator ? [
                 'id' => $this->generator->hash_id, 'name' => $this->generator->name,
@@ -117,5 +131,124 @@ class MrpPlanResource extends JsonResource
             'created_at' => optional($this->created_at)->toIso8601String(),
             'updated_at' => optional($this->updated_at)->toIso8601String(),
         ];
+    }
+
+    /** @param array<int, array<string, mixed>> $diagnostics @return list<array<string, mixed>> */
+    private function stockMaterialSnapshotDiagnostics(array $diagnostics): array
+    {
+        if (! $this->isStockDerived() || collect($diagnostics)->contains('kind', 'stock_material_requirement')) {
+            return [];
+        }
+
+        $workOrders = collect();
+        if ($this->relationLoaded('stockProductionWorkOrder') && $this->stockProductionWorkOrder) {
+            $workOrders->push($this->stockProductionWorkOrder);
+        }
+        if ($this->relationLoaded('workOrders')) {
+            $workOrders = $workOrders->concat($this->workOrders);
+        }
+        $workOrders = $workOrders->filter(fn (WorkOrder $workOrder): bool => $workOrder->production_purpose === 'stock')
+            ->unique('id')->values();
+        if ($workOrders->isEmpty()) {
+            return [];
+        }
+        foreach ($workOrders as $workOrder) {
+            $workOrder->loadMissing('materials.item');
+        }
+
+        $plannedPurchases = collect($diagnostics)
+            ->filter(fn (array $row): bool => ($row['kind'] ?? null) === 'material_shortage' && isset($row['item_id']))
+            ->keyBy(fn (array $row): int => (int) $row['item_id']);
+        $requirements = [];
+        foreach ($workOrders as $workOrder) {
+            foreach ($workOrder->materials as $material) {
+                $itemId = (int) $material->item_id;
+                $quantity = (string) $material->bom_quantity;
+                $unitCost = (string) $material->standard_unit_cost;
+                $requirements[$itemId] ??= [
+                    'kind' => 'stock_material_requirement',
+                    'type' => 'work_order_material_snapshot',
+                    'item_id' => $itemId,
+                    'item_code' => (string) ($material->item?->code ?? 'Unknown item'),
+                    'item_name' => (string) ($material->item?->name ?? 'Material details unavailable'),
+                    'unit' => (string) ($material->item?->unit_of_measure ?? ''),
+                    'required_quantity' => '0.000',
+                    'available_quantity' => null,
+                    'shortage_quantity' => null,
+                    'purchase_quantity' => isset($plannedPurchases[$itemId]) ? (string) $plannedPurchases[$itemId]['quantity'] : null,
+                    'standard_unit_cost' => $unitCost,
+                    'required_cost' => '0.00',
+                    'shortage_cost' => null,
+                    'work_order_numbers' => [],
+                    'action' => isset($plannedPurchases[$itemId]) ? 'purchase_required' : 'availability_not_recorded',
+                    '_unit_cost_total' => '0.00000000',
+                ];
+
+                $requirements[$itemId]['required_quantity'] = bcadd($requirements[$itemId]['required_quantity'], $quantity, 3);
+                $requirements[$itemId]['required_cost'] = Money::add($requirements[$itemId]['required_cost'], (string) $material->standard_cost);
+                $requirements[$itemId]['_unit_cost_total'] = bcadd(
+                    $requirements[$itemId]['_unit_cost_total'],
+                    bcmul($quantity, $unitCost, 8),
+                    8,
+                );
+                $requirements[$itemId]['work_order_numbers'][] = (string) $workOrder->wo_number;
+            }
+        }
+
+        foreach ($requirements as &$requirement) {
+            if (bccomp($requirement['required_quantity'], '0', 3) > 0) {
+                $requirement['standard_unit_cost'] = bcdiv($requirement['_unit_cost_total'], $requirement['required_quantity'], 4);
+            }
+            $requirement['work_order_numbers'] = array_values(array_unique($requirement['work_order_numbers']));
+            unset($requirement['_unit_cost_total']);
+        }
+        unset($requirement);
+
+        return array_values($requirements);
+    }
+
+    /** @param list<array<string, mixed>> $snapshotDiagnostics @return array<string, mixed>|null */
+    private function stockCostSummary(array $snapshotDiagnostics): ?array
+    {
+        $workOrders = $this->relationLoaded('workOrders') ? $this->workOrders : collect();
+        $root = ($this->relationLoaded('stockProductionWorkOrder') ? $this->stockProductionWorkOrder : null) ?? $workOrders->first(
+            fn (WorkOrder $workOrder): bool => $workOrder->parent_wo_id === null,
+        );
+        if (! $root instanceof WorkOrder) {
+            return null;
+        }
+
+        $bom = $root->bom_id ? Bom::withTrashed()->find($root->bom_id) : null;
+        if ($bom) {
+            $quantity = (string) $root->quantity_target;
+
+            return [
+                'material_cost' => Money::round2(bcmul($quantity, (string) ($bom->material_cost ?? '0.00'), 8)),
+                'labor_cost' => Money::round2(bcmul($quantity, (string) ($bom->labor_cost ?? '0.00'), 8)),
+                'machine_cost' => Money::round2(bcmul($quantity, (string) ($bom->machine_cost ?? '0.00'), 8)),
+                'overhead_cost' => Money::round2(bcmul($quantity, (string) ($bom->overhead_cost ?? '0.00'), 8)),
+                'planned_production_cost' => Money::round2(bcmul($quantity, (string) ($bom->total_cost ?? '0.00'), 8)),
+            ];
+        }
+
+        if (count($snapshotDiagnostics) === 0 || $workOrders->count() > 1) {
+            return null;
+        }
+
+        return [
+            'material_cost' => Money::add(...array_map(
+                static fn (array $row): string => (string) ($row['required_cost'] ?? '0.00'),
+                $snapshotDiagnostics,
+            )),
+            'labor_cost' => null,
+            'machine_cost' => null,
+            'overhead_cost' => null,
+            'planned_production_cost' => null,
+        ];
+    }
+
+    private function isStockDerived(): bool
+    {
+        return $this->stock_production_work_order_id !== null || $this->customer_production_request_id !== null;
     }
 }

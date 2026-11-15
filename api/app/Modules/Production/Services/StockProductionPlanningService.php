@@ -13,6 +13,8 @@ use App\Modules\CRM\Models\CustomerProductionRequest;
 use App\Modules\Inventory\Models\Item;
 use App\Modules\Inventory\Models\StockLevel;
 use App\Modules\Inventory\Services\StockLocationSummaryService;
+use App\Common\Support\Money;
+use App\Modules\MRP\Models\Bom;
 use App\Modules\MRP\Services\BomService;
 use App\Modules\MRP\Enums\MrpPlanStatus;
 use App\Modules\MRP\Models\MrpPlan;
@@ -215,16 +217,44 @@ final class StockProductionPlanningService
             app(WorkOrderService::class)->reconcilePlannedMaterialPlan($root);
             $this->children($productionPlan['subassemblies'], $root, $actor);
             $shortages = [];
+            $materialRequirements = [];
             foreach ($productionPlan['materials'] as $row) {
                 $item = Item::findOrFail($row['item_id']);
                 $supply = app(OpenSupplyService::class)->stockPlanningSupply($item->id, $root->id);
-                $free = $supply['available_to_root'];
-                $needed = bcsub($row['gross_quantity'], bccomp($free, '0', 3) < 0 ? '0.000' : $free, 3);
+                $available = bccomp($supply['available_to_root'], '0', 3) < 0
+                    ? '0.000'
+                    : bcadd((string) $supply['available_to_root'], '0', 3);
+                $shortage = bcsub((string) $row['gross_quantity'], $available, 3);
+                if (bccomp($shortage, '0', 3) < 0) {
+                    $shortage = '0.000';
+                }
+                $purchaseQuantity = $shortage;
+                if (bccomp($purchaseQuantity, '0', 3) > 0
+                    && bccomp((string) $item->minimum_order_quantity, '0', 3) > 0) {
+                    $multiple = bcdiv($purchaseQuantity, (string) $item->minimum_order_quantity, 8);
+                    $purchaseQuantity = bcmul((string) ceil((float) $multiple), (string) $item->minimum_order_quantity, 3);
+                }
+
+                $standardUnitCost = (string) $item->standard_cost;
+                $materialRequirements[] = [
+                    'kind' => 'stock_material_requirement',
+                    'type' => 'stock_material_requirement',
+                    'item_id' => (int) $item->id,
+                    'item_code' => (string) $item->code,
+                    'item_name' => (string) $item->name,
+                    'unit' => (string) $item->unit_of_measure,
+                    'required_quantity' => (string) $row['gross_quantity'],
+                    'available_quantity' => $available,
+                    'shortage_quantity' => $shortage,
+                    'purchase_quantity' => $purchaseQuantity,
+                    'standard_unit_cost' => $standardUnitCost,
+                    'required_cost' => Money::round2(bcmul((string) $row['gross_quantity'], $standardUnitCost, 8)),
+                    'shortage_cost' => Money::round2(bcmul($shortage, $standardUnitCost, 8)),
+                    'action' => bccomp($shortage, '0', 3) > 0 ? 'purchase_required' : 'covered',
+                ];
+
+                $needed = $purchaseQuantity;
                 if (bccomp($needed, '0', 3) > 0) {
-                    if (bccomp((string) $item->minimum_order_quantity, '0', 3) > 0) {
-                        $multiple = bcdiv($needed, (string) $item->minimum_order_quantity, 8);
-                        $needed = bcmul((string) ceil((float) $multiple), (string) $item->minimum_order_quantity, 3);
-                    }
                     $shortages[] = [$item, $needed];
                 }
             }
@@ -248,7 +278,7 @@ final class StockProductionPlanningService
                 }
                 if ($shortages === []) {
                     app(PurchaseRequestService::class)->cancel($request);
-                    $this->syncMrpPlan($root, $productionPlan, [], null);
+                    $this->syncMrpPlan($root, $productionPlan, $materialRequirements, [], null);
 
                     return ['material_shortages' => 0];
                 }
@@ -274,7 +304,7 @@ final class StockProductionPlanningService
                 );
             }
 
-            $this->syncMrpPlan($root, $productionPlan, $shortages, $request);
+            $this->syncMrpPlan($root, $productionPlan, $materialRequirements, $shortages, $request);
 
             return ['material_shortages' => count($shortages)];
         }, 3);
@@ -334,7 +364,7 @@ final class StockProductionPlanningService
     }
 
     /** @param array{materials: array, subassemblies: array} $productionPlan */
-    private function syncMrpPlan(WorkOrder $root, array $productionPlan, array $shortages, ?PurchaseRequest $request): void
+    private function syncMrpPlan(WorkOrder $root, array $productionPlan, array $materialRequirements, array $shortages, ?PurchaseRequest $request): void
     {
         $plan = $root->mrp_plan_id !== null
             ? MrpPlan::query()->whereKey($root->mrp_plan_id)->where('status', MrpPlanStatus::Active->value)->lockForUpdate()->first()
@@ -351,6 +381,7 @@ final class StockProductionPlanningService
             'material_line_count' => count($productionPlan['materials']),
             'subassembly_count' => count($productionPlan['subassemblies']),
         ]];
+        array_push($diagnostics, ...$materialRequirements);
         foreach ($shortages as [$item, $quantity]) {
             $diagnostics[] = [
                 'kind' => 'material_shortage',
@@ -369,8 +400,29 @@ final class StockProductionPlanningService
             'draft_wo_count' => WorkOrder::query()->where('mrp_plan_id', $plan->id)
                 ->where('status', WorkOrderStatus::Planned->value)->count(),
             'diagnostics' => $diagnostics,
+            'cost_summary' => $this->costSummary($root),
             'generated_at' => now(),
         ])->save();
+    }
+
+    /** @return array{material_cost:string, labor_cost:string, machine_cost:string, overhead_cost:string, planned_production_cost:string} */
+    private function costSummary(WorkOrder $root): array
+    {
+        $bom = Bom::query()->where('product_id', $root->product_id)->where('is_active', true)->first();
+        if ($bom === null) {
+            return [];
+        }
+
+        $bom = app(BomService::class)->ensureFreshForPlanning($bom);
+        $quantity = (string) $root->quantity_target;
+
+        return [
+            'material_cost' => Money::round2(bcmul($quantity, (string) ($bom->material_cost ?? '0.00'), 8)),
+            'labor_cost' => Money::round2(bcmul($quantity, (string) ($bom->labor_cost ?? '0.00'), 8)),
+            'machine_cost' => Money::round2(bcmul($quantity, (string) ($bom->machine_cost ?? '0.00'), 8)),
+            'overhead_cost' => Money::round2(bcmul($quantity, (string) ($bom->overhead_cost ?? '0.00'), 8)),
+            'planned_production_cost' => Money::round2(bcmul($quantity, (string) ($bom->total_cost ?? '0.00'), 8)),
+        ];
     }
 
     private function children(array $nodes, WorkOrder $parent, User $actor): void

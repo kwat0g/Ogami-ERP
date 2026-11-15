@@ -30,6 +30,7 @@ use App\Modules\Inventory\Services\ItemService;
 use App\Modules\Inventory\Services\MovementGlPostingService;
 use App\Modules\Inventory\Services\StockMovementService;
 use App\Modules\Inventory\Support\StockMovementInput;
+use App\Modules\MRP\Models\MrpPlan;
 use App\Modules\MRP\Services\BomService;
 use App\Modules\MRP\Services\MrpEngineService;
 use App\Modules\Production\Models\WorkOrder;
@@ -406,6 +407,40 @@ class SalesOrderStockFulfillmentTest extends TestCase
         $this->assertEqualsCanonicalizing(['created', 'updated'], $actions);
         $this->expectException(BusinessRuleException::class);
         $planner->create(array_replace($data, ['quantity_target' => 4]), $actor);
+    }
+
+    public function test_stock_mrp_plan_keeps_material_supply_shortage_and_cost_details(): void
+    {
+        $fixture = $this->stockFixture();
+        $material = Item::factory()->create([
+            'unit_of_measure' => 'kg',
+            'item_type' => 'raw_material',
+            'standard_cost' => '2.5000',
+            'minimum_order_quantity' => '5.000',
+            'safety_stock' => '0.000',
+        ]);
+        app(BomService::class)->create($fixture[1]->product_id, [[
+            'item_id' => $material->id,
+            'quantity_per_unit' => '4',
+            'unit' => 'kg',
+            'waste_factor' => 0,
+        ]]);
+
+        $root = $this->stockPlan($fixture, 3);
+        $plan = MrpPlan::query()->findOrFail($root->mrp_plan_id);
+        $line = collect($plan->diagnostics)->firstWhere('kind', 'stock_material_requirement');
+
+        $this->assertNotNull($line, 'Stock MRP must retain a line for each required material.');
+        $this->assertSame($material->code, $line['item_code']);
+        $this->assertSame('12.000', $line['required_quantity']);
+        $this->assertSame('0.000', $line['available_quantity']);
+        $this->assertSame('12.000', $line['shortage_quantity']);
+        $this->assertSame('15.000', $line['purchase_quantity'], 'The planned purchase quantity must reflect the item MOQ.');
+        $this->assertSame('2.5000', $line['standard_unit_cost']);
+        $this->assertSame('30.00', $line['required_cost']);
+        $this->assertSame('30.00', $plan->cost_summary['material_cost']);
+        $this->assertSame(1, $plan->total_lines);
+        $this->assertSame(1, $plan->shortages_found);
     }
 
     public function test_stock_allocation_dispatch_consumes_once_and_release_keeps_history(): void

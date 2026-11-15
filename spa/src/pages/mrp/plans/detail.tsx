@@ -20,12 +20,15 @@ import { Td, Th, tableCls, theadTrCls, trCls } from '@/components/ui/table-cells
 import type {
   MrpMaterialDiagnostic,
   MrpPlanDiagnostic,
+  MrpStockProductionDiagnostic,
   MrpPlanWarningDiagnostic,
 } from '@/types/mrp';
 
 const isWarningDiagnostic = (row: MrpPlanDiagnostic): row is MrpPlanWarningDiagnostic =>
   'kind' in row && row.kind === 'warning';
 const isMaterialDiagnostic = (row: MrpPlanDiagnostic): row is MrpMaterialDiagnostic => !('kind' in row);
+const isStockMaterialRequirement = (row: MrpPlanDiagnostic): row is MrpStockProductionDiagnostic =>
+  'kind' in row && row.kind === 'stock_material_requirement';
 
 export default function MrpPlanDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -96,6 +99,13 @@ export default function MrpPlanDetailPage() {
         />
       </div>
     );
+
+  const stockMaterials = data.diagnostics.filter(isStockMaterialRequirement);
+  const otherProductionDiagnostics = data.diagnostics.filter(
+    (diagnostic) =>
+      !isStockMaterialRequirement(diagnostic)
+      && !('kind' in diagnostic && ['stock_production_plan', 'material_shortage'].includes(diagnostic.kind)),
+  );
 
   return (
     <div>
@@ -326,42 +336,110 @@ export default function MrpPlanDetailPage() {
               </table>
             </div>
           )}
-        </Panel> : <Panel title="Production diagnostics" meta={`${data.diagnostics.length} records`}>
-          <div className="space-y-2 text-sm">
-            {data.diagnostics.map((diagnostic, index) => 'kind' in diagnostic && diagnostic.kind === 'material_shortage' ? <div key={`${diagnostic.kind}-${diagnostic.item_id}-${index}`} className="flex flex-wrap justify-between gap-3 rounded-md border border-warning bg-warning-bg p-3 text-warning-fg">
-              <span><span className="font-mono">{diagnostic.item_code ?? diagnostic.item_name ?? 'Material'}</span> shortage</span><span className="font-mono">{formatQuantity(Number(diagnostic.quantity ?? 0))}</span>
-            </div> : 'kind' in diagnostic && diagnostic.kind === 'stock_production_plan' ? <div key={`${diagnostic.kind}-${index}`} className="rounded-md border border-default bg-canvas p-3">
-              <p className="font-medium">Exact stock production quantity retained</p><p className="mt-1 text-muted">{formatQuantity(diagnostic.quantity_target ?? 0)} finished pieces · {diagnostic.material_line_count ?? 0} material lines · {diagnostic.subassembly_count ?? 0} subassemblies</p>
-            </div> : <div key={`other-${index}`} className="rounded-md border border-default p-3 text-muted">{'type' in diagnostic ? diagnostic.type.replaceAll('_', ' ') : 'Planning diagnostic'}</div>)}
-          </div>
-        </Panel>}
+        </Panel> : <>
+          <Panel title="Material requirements" meta={`${stockMaterials.length} materials`} noPadding>
+            {stockMaterials.length === 0 ? (
+              <div className="p-4 text-sm text-muted">No material snapshots were saved for this plan.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className={`${tableCls} min-w-max`}>
+                  <thead>
+                    <tr className={theadTrCls}>
+                      <Th>Material</Th>
+                      <Th align="right" className="whitespace-nowrap">Required</Th>
+                      <Th align="right" className="whitespace-nowrap">Available to plan</Th>
+                      <Th align="right" className="whitespace-nowrap">Shortage</Th>
+                      <Th align="right" className="whitespace-nowrap">Planned purchase</Th>
+                      <Th align="right" className="whitespace-nowrap">Unit cost</Th>
+                      <Th align="right" className="whitespace-nowrap">Required cost</Th>
+                      <Th>Plan status</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stockMaterials.map((material, index) => (
+                      <tr key={`${material.item_id ?? material.item_code}-${index}`} className={trCls}>
+                        <Td>
+                          <div className="font-mono text-xs">{material.item_code ?? 'Material'}</div>
+                          <div className="text-muted">{material.item_name}</div>
+                          {material.work_order_numbers?.length ? (
+                            <div className="mt-1 text-xs text-muted">
+                              Work order{material.work_order_numbers.length > 1 ? 's' : ''}: {material.work_order_numbers.join(', ')}
+                            </div>
+                          ) : null}
+                        </Td>
+                        <Td align="right" mono className="whitespace-nowrap">
+                          {formatQuantity(material.required_quantity)} {material.unit}
+                        </Td>
+                        <Td align="right" mono className="whitespace-nowrap">
+                          {material.available_quantity == null ? 'Not recorded' : `${formatQuantity(material.available_quantity)} ${material.unit}`}
+                        </Td>
+                        <Td align="right" mono className="whitespace-nowrap">
+                          {material.shortage_quantity == null ? 'Not recorded' : `${formatQuantity(material.shortage_quantity)} ${material.unit}`}
+                        </Td>
+                        <Td align="right" mono className="whitespace-nowrap">
+                          {material.purchase_quantity == null ? 'Not recorded' : `${formatQuantity(material.purchase_quantity)} ${material.unit}`}
+                        </Td>
+                        <Td align="right" mono className="whitespace-nowrap">
+                          {material.standard_unit_cost == null ? 'Not recorded' : formatPeso(material.standard_unit_cost)}
+                        </Td>
+                        <Td align="right" mono className="whitespace-nowrap">
+                          {material.required_cost == null ? 'Not recorded' : formatPeso(material.required_cost)}
+                        </Td>
+                        <Td>
+                          {material.action === 'purchase_required' ? (
+                            <Chip variant="warning">Purchase required</Chip>
+                          ) : material.action === 'covered' ? (
+                            <Chip variant="success">Covered</Chip>
+                          ) : (
+                            <Chip variant="neutral">Availability not recorded</Chip>
+                          )}
+                        </Td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Panel>
+          {otherProductionDiagnostics.length > 0 && (
+            <Panel title="Production diagnostics" meta={`${otherProductionDiagnostics.length} records`}>
+              <div className="space-y-2 text-sm">
+                {otherProductionDiagnostics.map((diagnostic, index) => (
+                  <div key={`production-diagnostic-${index}`} className="rounded-md border border-default p-3 text-muted">
+                    {'message' in diagnostic ? diagnostic.message : 'type' in diagnostic ? diagnostic.type.replaceAll('_', ' ') : 'Planning diagnostic'}
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          )}
+        </>}
 
         <div className="grid gap-4 xl:grid-cols-2">
-          {data.cost_summary && (
+          {(data.cost_summary || data.source_type === 'stock_production_work_order' || data.source_type === 'customer_production_request') && (
             <Panel title="Cost estimate">
               <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
                 <div>
                   <div className="text-2xs uppercase text-muted">Material</div>
                   <div className="mt-1 font-mono tabular-nums">
-                    {formatPeso(data.cost_summary.material_cost)}
+                    {data.cost_summary?.material_cost == null ? 'Not recorded' : formatPeso(data.cost_summary.material_cost)}
                   </div>
                 </div>
                 <div>
                   <div className="text-2xs uppercase text-muted">Labor</div>
                   <div className="mt-1 font-mono tabular-nums">
-                    {formatPeso(data.cost_summary.labor_cost)}
+                    {data.cost_summary?.labor_cost == null ? 'Not estimated' : formatPeso(data.cost_summary.labor_cost)}
                   </div>
                 </div>
                 <div>
                   <div className="text-2xs uppercase text-muted">Machine</div>
                   <div className="mt-1 font-mono tabular-nums">
-                    {formatPeso(data.cost_summary.machine_cost)}
+                    {data.cost_summary?.machine_cost == null ? 'Not estimated' : formatPeso(data.cost_summary.machine_cost)}
                   </div>
                 </div>
                 <div>
                   <div className="text-2xs uppercase text-muted">Overhead</div>
                   <div className="mt-1 font-mono tabular-nums">
-                    {formatPeso(data.cost_summary.overhead_cost)}
+                    {data.cost_summary?.overhead_cost == null ? 'Not estimated' : formatPeso(data.cost_summary.overhead_cost)}
                   </div>
                 </div>
               </div>

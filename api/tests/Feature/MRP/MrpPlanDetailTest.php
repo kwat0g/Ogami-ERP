@@ -8,6 +8,7 @@ use App\Modules\Auth\Models\Role;
 use App\Modules\Auth\Models\User;
 use App\Modules\CRM\Enums\SalesOrderStatus;
 use App\Modules\CRM\Models\SalesOrder;
+use App\Modules\Inventory\Models\Item;
 use App\Modules\MRP\Enums\MrpPlanStatus;
 use App\Modules\MRP\Models\Machine;
 use App\Modules\MRP\Models\Mold;
@@ -94,6 +95,69 @@ final class MrpPlanDetailTest extends TestCase
             ->assertJsonPath('data.purchase_requests.0.status', 'approved')
             ->assertJsonPath('data.purchase_requests.0.priority_label', 'Normal')
             ->assertJsonPath('data.purchase_requests.0.status_label', 'Approved');
+    }
+
+    public function test_legacy_stock_plan_detail_builds_materials_from_work_order_snapshots(): void
+    {
+        $this->seed([RolePermissionSeeder::class, SettingsSeeder::class]);
+        $viewer = User::factory()->create([
+            'role_id' => Role::query()->where('slug', 'ppc_head')->value('id'),
+        ]);
+        $workOrder = WorkOrder::factory()->create([
+            'production_purpose' => 'stock',
+            'quantity_target' => 2,
+            'sales_order_id' => null,
+            'sales_order_item_id' => null,
+            'parent_wo_id' => null,
+        ]);
+        $plan = MrpPlan::create([
+            'mrp_plan_no' => 'MRP-STOCK-SNAPSHOT-0001',
+            'stock_production_work_order_id' => $workOrder->id,
+            'version' => 1,
+            'status' => MrpPlanStatus::Active,
+            'generated_by' => $viewer->id,
+            'total_lines' => 1,
+            'diagnostics' => [[
+                'kind' => 'stock_production_plan',
+                'type' => 'exact_make_quantity',
+                'work_order_id' => $workOrder->id,
+                'quantity_target' => 2,
+                'material_line_count' => 1,
+                'subassembly_count' => 0,
+            ]],
+            'cost_summary' => [],
+            'generated_at' => now(),
+        ]);
+        $workOrder->forceFill(['mrp_plan_id' => $plan->id])->save();
+        $item = Item::factory()->create([
+            'code' => 'RM-STOCK-SNAPSHOT',
+            'name' => 'Stock plan snapshot material',
+            'unit_of_measure' => 'kg',
+            'standard_cost' => '2.5000',
+        ]);
+        $workOrder->materials()->create([
+            'item_id' => $item->id,
+            'bom_quantity' => '2.000',
+            'standard_unit_cost' => '2.5000',
+            'standard_cost' => '5.00',
+            'actual_quantity_issued' => '0.000',
+            'actual_cost' => '0.00',
+            'cost_variance' => '-5.00',
+            'variance' => '0.000',
+        ]);
+
+        $payload = $this->actingAs($viewer)
+            ->getJson('/api/v1/mrp/plans/'.$plan->hash_id)
+            ->assertOk()
+            ->json('data');
+        $materialLines = collect($payload['diagnostics'])->where('kind', 'stock_material_requirement')->values();
+
+        $this->assertCount(1, $materialLines);
+        $this->assertSame($item->hash_id, $materialLines[0]['item_id']);
+        $this->assertSame('RM-STOCK-SNAPSHOT', $materialLines[0]['item_code']);
+        $this->assertSame('2.000', $materialLines[0]['required_quantity']);
+        $this->assertSame('5.00', $materialLines[0]['required_cost']);
+        $this->assertSame('5.00', $payload['cost_summary']['material_cost']);
     }
 
     public function test_latest_plan_detail_includes_prior_progressed_prs_and_their_pos_only_for_its_sales_order(): void
