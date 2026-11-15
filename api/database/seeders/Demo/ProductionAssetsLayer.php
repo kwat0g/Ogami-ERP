@@ -171,7 +171,9 @@ final class ProductionAssetsLayer extends DemoSeeder
         int $departmentId,
     ): array {
         $targetCount = match ($context->options->scale) {
-            'small' => 8,
+            // Small keeps one mold per finished good so BOM/routing E2E
+            // baselines can exercise every cataloged product.
+            'small' => 16,
             'demo' => 60,
             'full' => 96,
         };
