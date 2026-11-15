@@ -50,6 +50,7 @@ final class WorkforceIdentityLayer extends DemoSeeder
         ['key' => 'actor.ppc-head', 'role' => 'ppc_head', 'email' => 'ppc.head@accounts.ogami-demo.test', 'department' => 'PPC', 'position' => 'PPC Head', 'first' => 'Gemma', 'middle' => 'Bautista', 'last' => 'Navarro'],
         ['key' => 'actor.purchasing-officer', 'role' => 'purchasing_officer', 'email' => 'purchasing.officer@accounts.ogami-demo.test', 'department' => 'PUR', 'position' => 'Purchasing Officer', 'first' => 'Isabel', 'middle' => 'Mae', 'last' => 'Ramos'],
         ['key' => 'actor.warehouse-staff', 'role' => 'warehouse_staff', 'email' => 'warehouse.staff@accounts.ogami-demo.test', 'department' => 'WH', 'position' => 'Warehouse Staff', 'first' => 'Joel', 'middle' => 'Antonio', 'last' => 'Mendoza'],
+        ['key' => 'actor.warehouse-supervisor', 'role' => 'warehouse_staff', 'email' => 'warehouse.supervisor@accounts.ogami-demo.test', 'department' => 'WH', 'position' => 'Warehouse Head', 'first' => 'Rogelio', 'middle' => 'Luis', 'last' => 'Bautista'],
         ['key' => 'actor.qc-inspector', 'role' => 'qc_inspector', 'email' => 'qc.inspector@accounts.ogami-demo.test', 'department' => 'QC', 'position' => 'QC Inspector', 'first' => 'Lorna', 'middle' => 'Mae', 'last' => 'Bautista'],
         ['key' => 'actor.maintenance-tech-1', 'role' => 'maintenance_tech', 'email' => 'maintenance.tech.one@accounts.ogami-demo.test', 'department' => 'MAINT', 'position' => 'Maintenance Technician', 'first' => 'Carlo', 'middle' => 'Miguel', 'last' => 'Dizon'],
         ['key' => 'actor.maintenance-supervisor', 'role' => 'maintenance_supervisor', 'email' => 'maintenance.supervisor@accounts.ogami-demo.test', 'department' => 'MAINT', 'position' => 'Maintenance Head', 'first' => 'Teresita', 'middle' => 'Lopez', 'last' => 'Flores'],
@@ -106,9 +107,9 @@ final class WorkforceIdentityLayer extends DemoSeeder
 
     /** @var array<string, array<string, int>> */
     private const HEADCOUNTS = [
-        'small' => ['EXEC' => 1, 'HR' => 1, 'FIN' => 2, 'PROD' => 3, 'QC' => 1, 'WH' => 2, 'PUR' => 2, 'PPC' => 1, 'MAINT' => 3, 'IMPEX' => 1, 'SALES' => 1, 'CS' => 1, 'IT' => 1],
-        'demo' => ['EXEC' => 4, 'HR' => 5, 'FIN' => 4, 'PROD' => 100, 'QC' => 16, 'WH' => 15, 'PUR' => 7, 'PPC' => 8, 'MAINT' => 17, 'MOLD' => 6, 'IMPEX' => 2, 'SALES' => 4, 'CS' => 4, 'ADMIN' => 4, 'IT' => 4],
-        'full' => ['EXEC' => 5, 'HR' => 6, 'FIN' => 6, 'PROD' => 115, 'QC' => 19, 'WH' => 19, 'PUR' => 8, 'PPC' => 10, 'MAINT' => 21, 'MOLD' => 7, 'IMPEX' => 3, 'SALES' => 5, 'CS' => 6, 'ADMIN' => 5, 'IT' => 5],
+        'small' => ['EXEC' => 1, 'HR' => 1, 'FIN' => 2, 'PROD' => 3, 'QC' => 1, 'WH' => 3, 'PUR' => 2, 'PPC' => 1, 'MAINT' => 3, 'IMPEX' => 1, 'SALES' => 1, 'CS' => 1, 'IT' => 1],
+        'demo' => ['EXEC' => 4, 'HR' => 5, 'FIN' => 4, 'PROD' => 100, 'QC' => 16, 'WH' => 16, 'PUR' => 7, 'PPC' => 8, 'MAINT' => 17, 'MOLD' => 6, 'IMPEX' => 2, 'SALES' => 4, 'CS' => 4, 'ADMIN' => 4, 'IT' => 4],
+        'full' => ['EXEC' => 5, 'HR' => 6, 'FIN' => 6, 'PROD' => 115, 'QC' => 19, 'WH' => 20, 'PUR' => 8, 'PPC' => 10, 'MAINT' => 21, 'MOLD' => 7, 'IMPEX' => 3, 'SALES' => 5, 'CS' => 6, 'ADMIN' => 5, 'IT' => 5],
     ];
 
     /** @var array<string, list<string>> */
