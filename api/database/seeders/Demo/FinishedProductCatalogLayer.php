@@ -87,10 +87,59 @@ final class FinishedProductCatalogLayer extends DemoSeeder
                     $product = $this->products->restore($product);
                 }
 
+                $product = $this->ensureSyntheticSpecifications($product, $definition);
+
                 $item = $this->finishedGoods->ensureItem($product);
                 $context->records()->remember('product.'.$definition['part_number'], $product);
                 $context->records()->remember('inventory.item.'.$definition['part_number'], $item);
             }
         });
+    }
+
+    /** @param array{part_number: string, name: string, description: string, standard_cost: string, material: string, dimensions: array{length: float, width: float, height: float}, finish: string} $definition */
+    private function ensureSyntheticSpecifications(Product $product, array $definition): Product
+    {
+        $specifications = is_array($product->specifications) ? $product->specifications : [];
+        $dimensions = is_array($specifications['dimensions'] ?? null) ? $specifications['dimensions'] : [];
+        $unit = in_array($dimensions['unit'] ?? null, ['mm', 'cm', 'in'], true)
+            ? $dimensions['unit']
+            : 'mm';
+        $millimetresPerUnit = match ($unit) {
+            'cm' => 10.0,
+            'in' => 25.4,
+            default => 1.0,
+        };
+
+        foreach ($definition['dimensions'] as $axis => $millimetres) {
+            if (! isset($dimensions[$axis]) || ! is_numeric($dimensions[$axis]) || (float) $dimensions[$axis] <= 0) {
+                $dimensions[$axis] = round($millimetres / $millimetresPerUnit, 4);
+            }
+        }
+        $dimensions['unit'] = $unit;
+        $specifications['dimensions'] = $dimensions;
+
+        if (! is_string($specifications['material'] ?? null) || trim($specifications['material']) === '') {
+            $specifications['material'] = $definition['material'];
+        }
+        if (! is_string($specifications['finish'] ?? null) || trim($specifications['finish']) === '') {
+            $specifications['finish'] = $definition['finish'];
+        }
+        if (! preg_match('/±\s*(\d+(?:\.\d+)?)/u', (string) ($specifications['tolerances'] ?? ''))) {
+            $tolerance = match ($unit) {
+                'cm' => '0.02 cm',
+                'in' => '0.008 in',
+                default => '0.20 mm',
+            };
+            $specifications['tolerances'] = "Illustrative nominal tolerance: ±{$tolerance}.";
+        }
+        if (! is_string($specifications['notes'] ?? null) || trim($specifications['notes']) === '') {
+            $specifications['notes'] = 'Synthetic demo specification; not a released customer drawing.';
+        }
+
+        if ($specifications === ($product->specifications ?? [])) {
+            return $product;
+        }
+
+        return $this->products->update($product, ['specifications' => $specifications]);
     }
 }
