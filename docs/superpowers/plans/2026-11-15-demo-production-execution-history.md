@@ -11,7 +11,7 @@ Add a deterministic, service-backed production execution scenario that creates t
 - [x] Implement a new production execution history layer using stock planning, capacity, work-order, QC, handover, and output services.
 - [x] Register the layer after production planning and before maintenance history; document dependencies and scenario.
 - [x] Run focused tests, formatter, static analysis, guarded small seed and replay on `ogami_test` only.
-- [ ] Reconcile output totals, stock ledger, inspection result and OEE; update findings/progress and open a stacked draft PR.
+- [x] Reconcile output totals, stock ledger, inspection result and OEE; update findings/progress and open a stacked draft PR.
 
 ## Verification notes
 
