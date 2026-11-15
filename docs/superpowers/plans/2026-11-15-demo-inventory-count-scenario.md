@@ -7,7 +7,7 @@ Add one deterministic inventory scenario parked in the current application's sto
 ## Current-code constraints
 
 - Use `StockCountService::createSession()`, `startSession()`, and `recordCount()` for every count transition.
-- Use the seeded warehouse actor and current zone/item/stock rows. Do not insert scenario transaction rows from the seeder.
+- Use the seeded warehouse actors and current zone/item/stock rows. The maker/counter, variance approver, and finalizer must be three distinct eligible users. Do not insert scenario transaction rows from the seeder.
 - Keep the scenario inside the demo layer registry with its `opening-stock-balances` and `workforce-identities` dependencies.
 - Create and transition records at a stable Asia/Manila timestamp derived from `--as-of`, backing up to the previous business day if as-of is not a business day.
 - Use a stable scenario marker in the session title and validate state on replay so drift is reported instead of silently repaired.
@@ -17,6 +17,7 @@ Add one deterministic inventory scenario parked in the current application's sto
 
 - A focused feature test fails before the layer is registered, then passes after implementation.
 - The seeded session is `in_progress`, the chosen count line is `counted` with a non-zero variance, and other stock lines remain `pending`.
+- A focused feature test continues the workflow through `StockCountService`: the system administrator approves the variance, warehouse staff records all remaining lines, and the separate warehouse supervisor completes the session and posts the stock movement.
 - Session and line timestamps are controlled by the as-of clock; the actor is the active warehouse staff demo user.
 - A second seed run leaves session, lines, audit rows, and stock balances unchanged.
 - Run the focused Laravel feature test, Pint, and PHPStan for changed PHP files. Do not run the full PHP suite.
