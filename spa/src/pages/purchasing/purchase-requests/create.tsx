@@ -30,10 +30,12 @@ import { useFormSafety } from '@/hooks/useFormSafety';
 import { FormDraftBanner } from '@/components/ui/FormDraftBanner';
 import { FormActions } from '@/components/ui/FormActions';
 import { reconcileRealtimeMutationResponse } from '@/lib/realtime/invalidationMap';
+const PURCHASE_LINE_DESCRIPTION_MAX = 200;
+
 // eslint-disable-next-line react-refresh/only-export-components
 export const lineSchema = z.object({
   item_id: z.string().optional().or(z.literal('')),
-  description: z.string().trim().min(2, 'Description is required.').max(200),
+  description: z.string().trim().min(2, 'Description is required.').max(PURCHASE_LINE_DESCRIPTION_MAX),
   quantity: z
     .string()
     .regex(/^\d+(\.\d{1,3})?$/, 'Up to 3 decimals.')
@@ -145,7 +147,17 @@ export default function CreatePurchaseRequestPage() {
     setValue(`items.${index}.item_id`, itemId);
     const item = itemById.get(itemId);
     if (item) {
-      setValue(`items.${index}.description`, item.description || item.name);
+      const catalogDescription = item.description?.trim() ?? '';
+      const itemName = item.name.trim().slice(0, PURCHASE_LINE_DESCRIPTION_MAX);
+      // Purchasing lines are limited to 200 characters by the API and
+      // database. Catalog descriptions are free-form and can exceed that, so
+      // use the concise catalog name instead of putting an invalid value here.
+      setValue(
+        `items.${index}.description`,
+        catalogDescription.length > PURCHASE_LINE_DESCRIPTION_MAX
+          ? itemName
+          : catalogDescription || itemName,
+      );
       setValue(`items.${index}.unit`, item.unit_of_measure);
       // items.standard_cost is decimal(15,4) — e.g. "0.5000". The schema (and the
       // estimated_unit_price remains money at 2 decimals, so normalize here
@@ -366,11 +378,20 @@ export default function CreatePurchaseRequestPage() {
                       <Input
                         fieldSize="md"
                         aria-label="Description"
+                        maxLength={PURCHASE_LINE_DESCRIPTION_MAX}
                         {...register(`items.${i}.description` as const)}
                         readOnly={!!watched[i]?.item_id}
+                        helper={
+                          watched[i]?.item_id
+                          && (itemById.get(watched[i].item_id)?.description?.trim().length ?? 0) > PURCHASE_LINE_DESCRIPTION_MAX
+                            ? 'Catalog description is over 200 characters; the item name is used on this purchasing line.'
+                            : undefined
+                        }
                         title={
                           watched[i]?.item_id
-                            ? 'Description is copied from the selected item'
+                            ? (itemById.get(watched[i].item_id)?.description?.trim().length ?? 0) > PURCHASE_LINE_DESCRIPTION_MAX
+                              ? 'Catalog description exceeds the purchasing line limit; the item name is used.'
+                              : 'Description is copied from the selected item'
                             : 'Editable for ad-hoc lines only'
                         }
                         error={errors.items?.[i]?.description?.message}
