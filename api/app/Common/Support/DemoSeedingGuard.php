@@ -10,7 +10,9 @@ final class DemoSeedingGuard
 {
     /**
      * Stop demo writes unless an explicit opt-in, local host, and exact DB
-     * allowlist are configured. Local browser tests may use ogami_test_* names.
+     * allowlist are configured. Demo mode may target a non-demo database only
+     * when a second explicit opt-in is set. Local browser tests may use
+     * ogami_test_* names.
      */
     public function assertAllowed(): void
     {
@@ -35,7 +37,9 @@ final class DemoSeedingGuard
             'local' => ['ogami_demo', 'ogami_test'],
             default => ['ogami_demo'],
         };
-        if (! $this->hasOneOfPrefixes($database, $prefixes)) {
+        $explicitLiveDemoTarget = $environment === 'demo'
+            && config('demo.seeding.allow_non_demo_database') === true;
+        if (! $this->hasOneOfPrefixes($database, $prefixes) && ! $explicitLiveDemoTarget) {
             throw new RuntimeException("Demo seeding in {$environment} must use an ".implode(' or ', $prefixes).' database.');
         }
 

@@ -8,9 +8,11 @@ use App\Common\DemoData\DemoSeedOptions;
 use App\Common\DemoData\DemoSeedRunner;
 use App\Modules\CRM\Models\Product;
 use App\Modules\Inventory\Models\Item;
+use App\Modules\MRP\Enums\MachineStatus;
 use App\Modules\MRP\Models\Bom;
 use App\Modules\MRP\Models\BomItem;
 use App\Modules\MRP\Models\Machine;
+use App\Modules\MRP\Services\MachineService;
 use App\Modules\Production\Models\ProductRouting;
 use App\Modules\Production\Models\RoutingOperation;
 use Carbon\CarbonImmutable;
@@ -74,6 +76,13 @@ class BomRoutingCatalogLayerTest extends TestCase
 
         $boms = Bom::query()->orderBy('product_id')->pluck('id')->all();
         $routings = ProductRouting::query()->orderBy('product_id')->pluck('id')->all();
+
+        $chProduct = Product::query()->where('part_number', 'CH-001')->firstOrFail();
+        $chMachineId = ProductRouting::query()->where('product_id', $chProduct->id)->where('is_active', true)
+            ->firstOrFail()->operations()->where('sequence', 1)->value('machine_id');
+        $machine = Machine::query()->findOrFail($chMachineId);
+        app(MachineService::class)->transitionStatus($machine, MachineStatus::Maintenance, 'Synthetic maintenance replay scenario.');
+
         $runner->run($options);
 
         $this->assertSame(16, Bom::query()->count());
