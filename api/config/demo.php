@@ -13,6 +13,7 @@ use Database\Seeders\Demo\OpeningStockBalancesLayer;
 use Database\Seeders\Demo\OrganizationReferenceDataLayer;
 use Database\Seeders\Demo\ProductionAssetsLayer;
 use Database\Seeders\Demo\PurchasingHistoryLayer;
+use Database\Seeders\Demo\PurchasingReceivingHistoryLayer;
 use Database\Seeders\Demo\QualityInspectionReferencesLayer;
 use Database\Seeders\Demo\QualityPlanLayer;
 use Database\Seeders\Demo\SupplierListingLayer;
@@ -59,5 +60,6 @@ return [
         OpeningStockBalancesLayer::class,
         CrmPricingLayer::class,
         PurchasingHistoryLayer::class,
+        PurchasingReceivingHistoryLayer::class,
     ],
 ];
