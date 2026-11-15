@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
+use App\Common\DemoData\DemoResetGate;
 use App\Common\DemoData\DemoSeedLayerRegistry;
 use App\Common\DemoData\DemoSeedOptionsParser;
 use App\Common\DemoData\DemoSeedRunner;
@@ -27,6 +28,7 @@ class DemoResetCommand extends Command
     public function handle(
         DemoSeedingGuard $guard,
         DemoSeedLayerRegistry $registry,
+        DemoResetGate $resetGate,
         DemoSeedOptionsParser $optionsParser,
         DemoSeedRunner $runner,
         DemoSideEffectScope $sideEffects,
@@ -42,6 +44,7 @@ class DemoResetCommand extends Command
             // Fail before migrate:fresh if the approved plan has not registered
             // its data layers yet.
             $registry->ordered();
+            $resetGate->assertReady();
         } catch (Throwable $exception) {
             $this->error($exception->getMessage());
 
