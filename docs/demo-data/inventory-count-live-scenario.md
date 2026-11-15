@@ -1,6 +1,6 @@
 # Inventory cycle-count live scenario
 
-Implementation is on branch `feat/demo-inventory-count-scenario`, stacked on the O2C history branch.
+Implementation is in draft [PR #546](https://github.com/kwat0g/kwatog/pull/546), on `feat/demo-inventory-count-scenario`, stacked on the O2C history branch.
 
 ## Seeded starting state
 
