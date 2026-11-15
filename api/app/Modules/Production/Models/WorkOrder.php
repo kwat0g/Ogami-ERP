@@ -13,6 +13,7 @@ use App\Modules\CRM\Models\SalesOrder;
 use App\Modules\CRM\Models\SalesOrderItem;
 use App\Modules\MRP\Models\Machine;
 use App\Modules\MRP\Models\Mold;
+use App\Modules\MRP\Models\MrpPlan;
 use App\Modules\Production\Enums\WorkOrderStatus;
 use App\Modules\Quality\Enums\InspectionStage;
 use App\Modules\Quality\Enums\InspectionStatus;
@@ -110,6 +111,11 @@ class WorkOrder extends Model
     public function salesOrderItem(): BelongsTo
     {
         return $this->belongsTo(SalesOrderItem::class);
+    }
+
+    public function mrpPlan(): BelongsTo
+    {
+        return $this->belongsTo(MrpPlan::class);
     }
 
     /**

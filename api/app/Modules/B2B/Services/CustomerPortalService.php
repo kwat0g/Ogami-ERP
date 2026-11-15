@@ -23,6 +23,8 @@ use App\Modules\CRM\Enums\ComplaintStatus;
 use App\Modules\CRM\Enums\SalesOrderStatus;
 use App\Modules\CRM\Enums\SalesOrderSubmissionSource;
 use App\Modules\CRM\Models\CustomerComplaint;
+use App\Modules\CRM\Models\CustomerProductionRequest;
+use App\Modules\CRM\Enums\CustomerProductionRequestStatus as CustomerProductionRequestStatus;
 use App\Modules\CRM\Models\CustomerProductWarrantyOption;
 use App\Modules\CRM\Models\Product;
 use App\Modules\CRM\Models\SalesOrder;
@@ -276,6 +278,12 @@ class CustomerPortalService
     {
         $idempotencyKey = (string) $data['idempotency_key'];
         unset($data['idempotency_key']);
+        $productionRequestId = isset($data['production_request_id']) && $data['production_request_id'] !== ''
+            ? HashIdFilter::decode((string) $data['production_request_id'], CustomerProductionRequest::class)
+            : null;
+        if (isset($data['production_request_id']) && $data['production_request_id'] !== '' && $productionRequestId === null) {
+            throw new BusinessRuleException('The production request link is invalid. Refresh the request and try again.');
+        }
 
         $orderDateString = today()->toDateString();
 
@@ -307,6 +315,7 @@ class CustomerPortalService
             'notes' => $data['notes'] ?? null,
             'payment_method' => $data['payment_method'] ?? null,
             'payment_terms_days' => (int) $data['payment_terms_days'],
+            'production_request_id' => $productionRequestId,
             'items' => $items,
         ];
 
@@ -322,6 +331,7 @@ class CustomerPortalService
             $idempotencyKey,
             $fingerprintData,
             $portalUser,
+            $productionRequestId,
         ): array {
             DB::statement('SELECT pg_advisory_xact_lock(20261009, 1)');
             // Serialise first-order submissions per customer. The unique index
@@ -353,7 +363,13 @@ class CustomerPortalService
             foreach ($items as $idx => $item) {
                 $this->assertRequestedDeliveryDate($item['delivery_date'], $idx);
             }
-            $this->orderAvailability->assertOrderAvailability($customer, $items);
+            $productionRequest = null;
+            if ($productionRequestId !== null) {
+                $productionRequest = CustomerProductionRequest::query()->lockForUpdate()->findOrFail($productionRequestId);
+                $this->assertProductionRequestOrder($productionRequest, $customerId, $items);
+            } else {
+                $this->orderAvailability->assertOrderAvailability($customer, $items);
+            }
 
             $so = $this->systemUser->impersonate(function () use ($customerId, $orderDateString, $items, $data, $idempotencyKey, $fingerprint): SalesOrder {
                 return $this->salesOrderService->create([
@@ -369,6 +385,13 @@ class CustomerPortalService
                     'portal_idempotency_fingerprint' => $fingerprint,
                 ], $this->systemUser->user()->id);
             });
+
+            if ($productionRequest) {
+                $line = $so->items()->where('product_id', $productionRequest->product_id)->lockForUpdate()->firstOrFail();
+                app(\App\Modules\CRM\Services\CustomerProductionRequestStockHoldService::class)->transferToOrder(
+                    $productionRequest, $line, (int) $this->systemUser->user()->id, (string) Str::uuid(), (int) $portalUser->id,
+                );
+            }
 
             // Keep external-actor attribution in the same transaction as the
             // source order so a committed order cannot lose its portal audit.
@@ -539,7 +562,18 @@ class CustomerPortalService
             }
             $items[] = ['product_id' => $productId, 'quantity' => $item['quantity'], 'delivery_date' => $item['delivery_date'], 'warranty_option_id' => $optionId];
         }
-        $this->orderAvailability->assertOrderAvailability(Customer::query()->findOrFail($user->customer_id), $items, $existing?->id);
+        $productionRequestId = isset($data['production_request_id']) && $data['production_request_id'] !== ''
+            ? HashIdFilter::decode((string) $data['production_request_id'], CustomerProductionRequest::class)
+            : null;
+        if (isset($data['production_request_id']) && $data['production_request_id'] !== '' && $productionRequestId === null) {
+            throw new BusinessRuleException('The production request link is invalid. Refresh the request and try again.');
+        }
+        if ($productionRequestId !== null) {
+            $request = CustomerProductionRequest::query()->findOrFail($productionRequestId);
+            $this->assertProductionRequestOrder($request, (int) $user->customer_id, $items);
+        } else {
+            $this->orderAvailability->assertOrderAvailability(Customer::query()->findOrFail($user->customer_id), $items, $existing?->id);
+        }
         $quote = $this->salesOrderService->quoteOrder($user->customer_id, $items, $existing, true);
         $quote['items'] = array_map(function ($line): array {
             $line['product_id'] = app('hashids')->encode($line['product_id']);
@@ -566,6 +600,9 @@ class CustomerPortalService
             DB::statement('SELECT pg_advisory_xact_lock(20261009, 1)');
             $row = SalesOrder::query()->lockForUpdate()->findOrFail($salesOrder->id);
             abort_if($row->customer_id !== $user->customer_id, 403);
+            if (CustomerProductionRequest::query()->where('converted_sales_order_id', $row->id)->exists()) {
+                throw new BusinessRuleException('An order created from a production request cannot be edited. Cancel it and contact Sales if you need a different quantity.');
+            }
             $before = $this->salesOrderDetail($user->customer_id, $row)->toArray();
             $items = [];
             foreach ($data['items'] as $idx => $item) {
@@ -600,6 +637,36 @@ class CustomerPortalService
 
             return $updated;
         });
+    }
+
+    private function assertProductionRequestOrder(CustomerProductionRequest $request, int $customerId, array $items): void
+    {
+        if ((int) $request->customer_id !== $customerId) {
+            abort(404);
+        }
+        if ($request->status !== CustomerProductionRequestStatus::ReadyToOrder
+            || $request->hold_expires_at === null || $request->hold_expires_at->lte(now())) {
+            throw new BusinessRuleException('This production request is not currently ready to order. Refresh its status.');
+        }
+        if (count($items) !== 1 || (int) $items[0]['product_id'] !== (int) $request->product_id
+            || bccomp((string) $items[0]['quantity'], (string) $request->requested_quantity, 3) !== 0) {
+            throw new BusinessRuleException('Place an order for the exact ready quantity on this production request.');
+        }
+        if ($request->offered_ready_date !== null && $items[0]['delivery_date'] < $request->offered_ready_date->toDateString()) {
+            throw new BusinessRuleException('Choose a requested delivery date on or after the ready date offered by Ogami.');
+        }
+        $product = Product::query()->active()->find($request->product_id);
+        if (! $product || ! $product->isAvailableToCustomer($customerId)) {
+            throw new BusinessRuleException('This product is no longer available under your customer catalog. Contact Sales.');
+        }
+        $limits = $this->orderAvailability->forProduct(Customer::query()->findOrFail($customerId), $product);
+        if (bccomp((string) $items[0]['quantity'], (string) $limits['minimum_order_quantity'], 3) < 0) {
+            throw new BusinessRuleException("Order at least {$limits['minimum_order_quantity']} units of this product.");
+        }
+        if ($limits['maximum_order_quantity'] !== null
+            && bccomp((string) $items[0]['quantity'], (string) $limits['maximum_order_quantity'], 3) > 0) {
+            throw new BusinessRuleException("Order no more than {$limits['maximum_order_quantity']} units of this product per sales order.");
+        }
     }
 
     public function cancelOrder(SalesOrder $salesOrder, CustomerPortalUser $user, ?string $reason): SalesOrder

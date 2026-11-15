@@ -198,7 +198,7 @@ class PriceNegotiationLifecycleTest extends TestCase
         ]);
     }
 
-    public function test_customer_can_request_a_limit_review_without_changing_the_current_limit(): void
+    public function test_customer_cannot_use_a_pricing_request_to_exceed_the_current_limit(): void
     {
         $buyer = $this->portal();
         $product = $this->product();
@@ -215,9 +215,12 @@ class PriceNegotiationLifecycleTest extends TestCase
             'requested_price' => '24.00',
             'request_order_limit_increase' => true,
             'notes' => 'Planned quarterly replenishment.',
-        ])->assertCreated()
-            ->assertJsonPath('data.order_limit_increase_request.current_maximum_quantity', '20.000')
-            ->assertJsonPath('data.order_limit_increase_request.requested_quantity', '25');
+        ])->assertUnprocessable()->assertJsonValidationErrors('quantity');
+
+        $this->assertDatabaseMissing('price_requests', [
+            'customer_id' => $buyer->customer_id,
+            'product_id' => $product->id,
+        ]);
 
         $this->assertSame('20.000', DB::table('customer_product_access')
             ->where('customer_id', $buyer->customer_id)->where('product_id', $product->id)

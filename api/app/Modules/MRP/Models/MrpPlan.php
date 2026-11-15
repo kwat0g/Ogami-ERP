@@ -24,7 +24,7 @@ class MrpPlan extends Model
     use HasFactory, HasHashId, HasAuditLog;
 
     protected $fillable = [
-        'mrp_plan_no', 'sales_order_id', 'version', 'status',
+        'mrp_plan_no', 'sales_order_id', 'stock_production_work_order_id', 'customer_production_request_id', 'version', 'status',
         'generated_by', 'mrp_run_id', 'total_lines', 'shortages_found',
         'auto_pr_count', 'draft_wo_count', 'diagnostics', 'cost_summary',
         'generation_context', 'generated_at',
@@ -48,6 +48,16 @@ class MrpPlan extends Model
         return $this->belongsTo(SalesOrder::class);
     }
 
+    public function stockProductionWorkOrder(): BelongsTo
+    {
+        return $this->belongsTo(WorkOrder::class, 'stock_production_work_order_id');
+    }
+
+    public function customerProductionRequest(): BelongsTo
+    {
+        return $this->belongsTo(\App\Modules\CRM\Models\CustomerProductionRequest::class);
+    }
+
     public function generator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'generated_by');
@@ -63,10 +73,20 @@ class MrpPlan extends Model
         return $this->hasMany(WorkOrder::class);
     }
 
-    /** Earlier WOs still owning or having fulfilled demand for this sales order. */
+    /** Earlier progressed work orders for this plan's source. */
     public function priorProgressedWorkOrders(): HasManyThrough
     {
-        return $this->hasManyThrough(WorkOrder::class, self::class, 'sales_order_id', 'mrp_plan_id', 'sales_order_id', 'id')
+        $relation = match (true) {
+            $this->sales_order_id !== null => $this->hasManyThrough(WorkOrder::class, self::class, 'sales_order_id', 'mrp_plan_id', 'sales_order_id', 'id'),
+            $this->customer_production_request_id !== null => $this->hasManyThrough(
+                WorkOrder::class, self::class, 'customer_production_request_id', 'mrp_plan_id', 'customer_production_request_id', 'id',
+            ),
+            default => $this->hasManyThrough(
+                WorkOrder::class, self::class, 'stock_production_work_order_id', 'mrp_plan_id', 'stock_production_work_order_id', 'id',
+            ),
+        };
+
+        return $relation
             ->where(fn ($q) => $q->whereNotIn('work_orders.status', [WorkOrderStatus::Planned->value, WorkOrderStatus::Cancelled->value])
                 ->orWhere(fn ($cancelled) => $cancelled->where('work_orders.status', WorkOrderStatus::Cancelled->value)
                     ->where('work_orders.quantity_good', '>', 0)));
@@ -77,10 +97,20 @@ class MrpPlan extends Model
         return $this->hasMany(PurchaseRequest::class);
     }
 
-    /** Progressed auto-PRs linked to this SO; detail limits these to earlier versions. */
+    /** Progressed auto-PRs linked to this source; detail limits these to earlier versions. */
     public function priorProgressedPurchaseRequests(): HasManyThrough
     {
-        return $this->hasManyThrough(PurchaseRequest::class, self::class, 'sales_order_id', 'mrp_plan_id', 'sales_order_id', 'id')
+        $relation = match (true) {
+            $this->sales_order_id !== null => $this->hasManyThrough(PurchaseRequest::class, self::class, 'sales_order_id', 'mrp_plan_id', 'sales_order_id', 'id'),
+            $this->customer_production_request_id !== null => $this->hasManyThrough(
+                PurchaseRequest::class, self::class, 'customer_production_request_id', 'mrp_plan_id', 'customer_production_request_id', 'id',
+            ),
+            default => $this->hasManyThrough(
+                PurchaseRequest::class, self::class, 'stock_production_work_order_id', 'mrp_plan_id', 'stock_production_work_order_id', 'id',
+            ),
+        };
+
+        return $relation
             ->where('purchase_requests.is_auto_generated', true)
             ->whereIn('purchase_requests.status', [
                 PurchaseRequestStatus::Pending->value,

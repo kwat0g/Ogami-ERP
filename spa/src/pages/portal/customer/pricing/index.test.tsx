@@ -51,7 +51,7 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
-async function startRequest(quantity: string, targetPrice = '24.50', requestHigherLimit = false) {
+async function startRequest(quantity: string, targetPrice = '24.50') {
   renderPage();
   fireEvent.click(screen.getByRole('button', { name: 'Request pricing' }));
   const productSelect = await screen.findByRole('combobox', { name: 'Product' });
@@ -69,9 +69,6 @@ async function startRequest(quantity: string, targetPrice = '24.50', requestHigh
   fireEvent.change(screen.getByRole('textbox', { name: 'Reason for request' }), {
     target: { value: 'Planning a quarterly replenishment order.' },
   });
-  if (requestHigherLimit) {
-    fireEvent.click(screen.getByRole('checkbox', { name: /review a higher per-order limit/i }));
-  }
   fireEvent.click(screen.getByRole('button', { name: 'Submit request' }));
 }
 
@@ -121,53 +118,19 @@ describe('customer pricing request form', () => {
     expect((await screen.findAllByText('Cancelled by you'))[0]).toBeVisible();
   });
 
-  it('requires Sales limit review before allowing a quantity above the product order limit', async () => {
+  it('keeps limit increase requests separate from pricing inquiries', async () => {
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: 'Request pricing' }));
+
+    expect(await screen.findByRole('spinbutton', { name: 'Quantity you plan to order' })).toBeVisible();
+    expect(screen.queryByRole('checkbox', { name: /review a higher per-order limit/i })).not.toBeInTheDocument();
+  });
+
+  it('does not let a pricing inquiry exceed the current order limit', async () => {
     await startRequest('21');
 
     expect(await screen.findByText(/maximum order quantity is 20 pcs/i)).toBeInTheDocument();
     expect(customerPortalApi.requestPrice).not.toHaveBeenCalled();
-  });
-
-  it('allows a higher-quantity pricing request only when the customer explicitly requests a limit review', async () => {
-    await startRequest('25', '24.50', true);
-
-    await waitFor(() => expect(customerPortalApi.requestPrice).toHaveBeenCalledTimes(1));
-    expect(customerPortalApi.requestPrice).toHaveBeenCalledWith({
-      product_id: product.id,
-      quantity: 25,
-      requested_price: '24.50',
-      notes: 'Planning a quarterly replenishment order.',
-      request_order_limit_increase: true,
-    });
-  });
-
-  it('does not carry a limit-review choice from one product to another', async () => {
-    const secondProduct = {
-      ...product,
-      id: 'product-2',
-      part_number: 'WB-002',
-      name: 'Wiper Bushing Type B',
-      maximum_order_quantity: '40.000',
-    };
-    vi.mocked(customerPortalApi.listCatalog).mockResolvedValue([product, secondProduct]);
-    renderPage();
-    fireEvent.click(screen.getByRole('button', { name: 'Request pricing' }));
-    const productSelect = await screen.findByRole('combobox', { name: 'Product' });
-    await waitFor(() => expect(productSelect).toBeEnabled());
-    fireEvent.click(productSelect);
-    fireEvent.click(await screen.findByRole('option', { name: 'WB-001 · Wiper Bushing' }));
-    fireEvent.change(screen.getByLabelText(/quantity you plan to order/i), { target: { value: '25' } });
-    const limitReview = await screen.findByRole('checkbox', { name: /review a higher per-order limit/i });
-    fireEvent.click(limitReview);
-    expect(limitReview).toBeChecked();
-
-    fireEvent.click(productSelect);
-    fireEvent.click(await screen.findByRole('option', { name: /WB-002 · Wiper Bushing Type B/ }));
-    expect(screen.queryByRole('checkbox', { name: /review a higher per-order limit/i })).not.toBeInTheDocument();
-
-    fireEvent.click(productSelect);
-    fireEvent.click(await screen.findByRole('option', { name: 'WB-001 · Wiper Bushing' }));
-    expect(await screen.findByRole('checkbox', { name: /review a higher per-order limit/i })).not.toBeChecked();
   });
 
   it('rejects a planned quantity below the product minimum', async () => {
@@ -198,7 +161,6 @@ describe('customer pricing request form', () => {
       quantity: 100,
       requested_price: '24.50',
       notes: 'Planning a quarterly replenishment order.',
-      request_order_limit_increase: false,
     });
   });
 

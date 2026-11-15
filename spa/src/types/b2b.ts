@@ -286,6 +286,50 @@ export interface PortalCatalogItem {
   }>;
 }
 
+export type CustomerProductionRequestStatus =
+  | 'requested' | 'planning' | 'date_offered' | 'accepted' | 'in_production'
+  | 'ready_to_order' | 'converted' | 'declined' | 'cancelled' | 'expired';
+
+export interface CustomerProductionRequest {
+  id: string;
+  request_number: string;
+  status: CustomerProductionRequestStatus;
+  status_label?: string;
+  product: { id: string; part_number: string; name: string; unit_of_measure: string } | null;
+  customer?: { id: string; name: string } | null;
+  requested_quantity: number;
+  requested_need_by_date: string;
+  offered_ready_date: string | null;
+  customer_notes: string | null;
+  decision_notes: string | null;
+  created_at: string | null;
+  offered_at: string | null;
+  accepted_at: string | null;
+  ready_notified_at: string | null;
+  hold_expires_at: string | null;
+  converted_sales_order?: { id: string; so_number: string } | null;
+  mrp_plan?: { id: string; mrp_plan_no: string; status: string; shortages_found: number; diagnostics: unknown[] } | null;
+  planning_work_order?: { id: string; wo_number: string; quantity_target: number; status: string } | null;
+  events?: Array<{ from_status: string | null; to_status: string; action: string; details?: unknown; created_at: string | null }>;
+  capabilities: { can_cancel: boolean; can_accept_offer: boolean; can_decline_offer: boolean; can_place_order: boolean };
+}
+
+export interface CustomerOrderLimitIncreaseRequest {
+  id: string;
+  product: { id: string; part_number: string; name: string; unit_of_measure: string | null };
+  customer?: { id: string; name: string };
+  current_maximum_quantity: string;
+  requested_maximum_quantity: string;
+  status: 'requested' | 'approved' | 'rejected' | 'cancelled';
+  status_label: string;
+  customer_notes: string | null;
+  decision_notes: string | null;
+  version: number;
+  created_at: string | null;
+  reviewed_at: string | null;
+  available_actions: { can_cancel: boolean; can_decide: boolean };
+}
+
 export interface PortalSoDetail extends PortalSoSummary {
   requested_delivery_dates?: string[];
   delivery_dates?: string[];

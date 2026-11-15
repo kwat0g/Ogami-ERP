@@ -244,6 +244,39 @@ describe('customer order entry', () => {
     expect(screen.getByRole('button', { name: 'Request price and availability' })).toBeVisible();
   });
 
+  it('offers a separate production request action for a stock-limited product with no stock', async () => {
+    vi.mocked(customerPortalApi.listCatalog).mockResolvedValue([{
+      ...product, availability_mode: 'stock_limited', available_quantity: '0.000',
+    }]);
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: 'Add products' }));
+
+    const requestProduction = await screen.findByRole('button', { name: 'Request production' });
+    expect(requestProduction).toBeVisible();
+    fireEvent.click(requestProduction);
+    expect(navigate).toHaveBeenCalledWith('/portal/customer/production-requests/new?product_id=product-1');
+  });
+
+  it('offers a separate order-limit request when the entered quantity exceeds the account maximum', async () => {
+    vi.mocked(customerPortalApi.listCatalog).mockResolvedValue([{
+      ...product,
+      maximum_order_quantity: '20.000',
+      availability_mode: 'stock_limited',
+      available_quantity: '40.000',
+    }]);
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: 'Add products' }));
+    fireEvent.click(await screen.findByRole('button', { name: `Add ${product.name} to order` }));
+    fireEvent.click(screen.getByRole('button', { name: 'Done selecting products' }));
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Quantity for WB-001' }), { target: { value: '25' } });
+
+    const requestIncrease = screen.getByRole('button', { name: 'Request higher order limit' });
+    expect(requestIncrease).toBeVisible();
+    fireEvent.click(requestIncrease);
+    expect(navigate).toHaveBeenCalledWith('/portal/customer/order-limit-requests/new?product_id=product-1&requested_maximum_quantity=25');
+    expect(screen.getByText('Maximum order quantity is 20.000 per sales order.')).toBeVisible();
+  });
+
   it('uses the agreement quantity range as the per-order minimum and maximum', async () => {
     vi.mocked(customerPortalApi.listCatalog).mockResolvedValue([{
       ...product, minimum_order_quantity: '5.000', maximum_order_quantity: '20.000',

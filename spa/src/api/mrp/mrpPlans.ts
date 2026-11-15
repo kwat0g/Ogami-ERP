@@ -5,6 +5,9 @@ import type { MrpPlan } from '@/types/mrp';
 export interface MrpPlanListParams extends ListParams {
  status?: string;
  sales_order_id?: string;
+ source_type?: 'sales_order' | 'customer_production_request' | 'stock_production_work_order' | '';
+ stock_production_work_order_id?: string;
+ customer_production_request_id?: string;
 }
 
 export const mrpPlansApi = {
@@ -17,4 +20,6 @@ export const mrpPlansApi = {
  client.post<ApiSuccess<MrpPlan>>(`/mrp/plans/${id}/rerun`).then((r) => r.data.data),
  forSalesOrder: (soId: string) =>
  client.get<ApiSuccess<MrpPlan> | { data: null }>(`/mrp/sales-orders/${soId}/mrp-plan`).then((r) => r.data.data ?? null),
+ forStockWorkOrder: (workOrderId: string) =>
+ client.get<ApiSuccess<MrpPlan> | { data: null }>(`/mrp/stock-work-orders/${workOrderId}/mrp-plan`).then((r) => r.data.data ?? null),
 };

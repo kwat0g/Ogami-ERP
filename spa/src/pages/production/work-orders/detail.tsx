@@ -18,6 +18,7 @@ import {
 import { AxiosError } from 'axios';
 import toast from 'react-hot-toast';
 import { workOrdersApi } from '@/api/production/workOrders';
+import { mrpPlansApi } from '@/api/mrp/mrpPlans';
 import { woOperationsApi } from '@/api/production/routings';
 import { Button } from '@/components/ui/Button';
 import { DataTable, type Column } from '@/components/ui/DataTable';
@@ -131,6 +132,11 @@ export default function WorkOrderDetailPage() {
     enabled: !!id,
   });
   const stockProduction = data?.production_purpose === 'stock';
+  const stockMrpPlan = useQuery({
+    queryKey: ['mrp', 'plans', 'stock-work-order', id],
+    queryFn: () => mrpPlansApi.forStockWorkOrder(id!),
+    enabled: !!id && !!data && data.production_purpose === 'stock' && !data.parent && can('mrp.plans.view'),
+  });
   const finishFirst = data?.qc_workflow === 'finish_first_v1';
   const routingExecutionEnabled = data?.routing_execution_enabled !== false;
   const physicalQuantity = finishFirst ? data?.produced_quantity ?? data?.quantity_produced ?? 0 : data?.quantity_good ?? 0;
@@ -684,6 +690,17 @@ export default function WorkOrderDetailPage() {
         }
         bottom={chain.data ? <ChainHeader steps={chain.data} className="mt-2" /> : null}
       />
+
+      {stockMrpPlan.data && <div className="rounded-md border border-info bg-info-bg px-4 py-3 text-sm text-info-fg">
+        <span className="font-medium">MRP plan {stockMrpPlan.data.mrp_plan_no}</span>
+        {stockMrpPlan.data.customer_production_request
+          ? <> · Customer request {stockMrpPlan.data.customer_production_request.request_number}</>
+          : <> · exact stock make quantity {stockMrpPlan.data.stock_production_work_order?.quantity_target ?? data.quantity_target} pieces</>}
+        <Link className="ml-2 font-medium underline" to={`/mrp/plans/${stockMrpPlan.data.id}`}>Review materials and plan</Link>
+      </div>}
+      {stockMrpPlan.isError && <div role="alert" className="rounded-md border border-warning bg-warning-bg px-4 py-3 text-sm text-warning-fg">
+        The MRP link could not be loaded. <button type="button" className="font-medium underline" onClick={() => stockMrpPlan.refetch()}>Retry</button>
+      </div>}
 
       {showPause &&
         operationCrew.data?.schedule &&

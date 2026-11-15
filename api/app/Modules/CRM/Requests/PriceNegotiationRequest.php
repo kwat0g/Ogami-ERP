@@ -59,7 +59,7 @@ class PriceNegotiationRequest extends FormRequest
             return [
                 'product_id' => ['required', 'integer', 'exists:products,id'], 'quantity' => ['required', 'integer', 'min:1', 'max:2147483647'],
                 'requested_price' => ['required', 'decimal:0,2', 'gt:0', 'max:9999999999999.99'],
-                'request_order_limit_increase' => ['sometimes', 'boolean'], 'notes' => ['required', 'string', 'max:1000'],
+                'notes' => ['required', 'string', 'max:1000'],
             ];
         }
         $replacement = $this->route('priceAgreement') !== null;

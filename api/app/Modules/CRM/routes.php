@@ -8,6 +8,8 @@ use App\Modules\CRM\Controllers\CustomerAgreementDocumentController;
 use App\Modules\CRM\Controllers\CustomerAgreementSampleController;
 use App\Modules\CRM\Controllers\CustomerProductAccessController;
 use App\Modules\CRM\Controllers\CustomerWarrantyTermsController;
+use App\Modules\CRM\Controllers\CustomerProductionRequestController;
+use App\Modules\CRM\Controllers\CustomerOrderLimitIncreaseRequestController;
 use App\Modules\CRM\Controllers\PriceAgreementController;
 use App\Modules\CRM\Controllers\PriceNegotiationController;
 use App\Modules\CRM\Controllers\ProductBlueprintController;
@@ -26,6 +28,21 @@ use Illuminate\Support\Facades\Route;
  */
 
 Route::middleware(['auth:sanctum', 'feature:crm'])->prefix('crm')->group(function () {
+
+    Route::get('/customer-production-requests', [CustomerProductionRequestController::class, 'index'])
+        ->middleware('permission_any:crm.sales_orders.view,mrp.plans.view,production.wo.view');
+    Route::get('/customer-production-requests/{customerProductionRequest}', [CustomerProductionRequestController::class, 'show'])
+        ->middleware('permission_any:crm.sales_orders.view,mrp.plans.view,production.wo.view');
+    Route::post('/customer-production-requests/{customerProductionRequest}/plan', [CustomerProductionRequestController::class, 'plan'])
+        ->middleware(['permission:production.wo.create', 'throttle:sensitive']);
+    Route::post('/customer-production-requests/{customerProductionRequest}/offer', [CustomerProductionRequestController::class, 'offer'])
+        ->middleware(['permission:crm.sales_orders.confirm', 'throttle:sensitive']);
+    Route::post('/customer-production-requests/{customerProductionRequest}/decline', [CustomerProductionRequestController::class, 'decline'])
+        ->middleware(['permission:crm.sales_orders.confirm', 'throttle:sensitive']);
+    Route::get('/order-limit-increase-requests', [CustomerOrderLimitIncreaseRequestController::class, 'index'])
+        ->middleware('permission:accounting.customers.view');
+    Route::post('/order-limit-increase-requests/{orderLimitIncreaseRequest}/decision', [CustomerOrderLimitIncreaseRequestController::class, 'decide'])
+        ->middleware(['permission:accounting.customers.manage', 'throttle:sensitive']);
 
     /* ─── Customers (delegated to Accounting CustomerController) ─── */
     Route::get('/customers', [CustomerController::class, 'index'])->middleware('permission:accounting.customers.view');

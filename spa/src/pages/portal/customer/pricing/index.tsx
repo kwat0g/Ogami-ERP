@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -11,7 +11,6 @@ import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
 import { Select } from '@/components/ui/Select';
 import { Chip } from '@/components/ui/Chip';
-import { Checkbox } from '@/components/ui/Checkbox';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { DataTable, type Column } from '@/components/ui/DataTable';
 import { SkeletonTable } from '@/components/ui/Skeleton';
@@ -36,14 +35,12 @@ const schema = z.object({
     .regex(/^\d+(\.\d{1,2})?$/, 'Use a price with up to two decimals.')
     .refine((v) => Number(v) > 0, 'Target unit price must be greater than zero.'),
   notes: z.string().min(1, 'Explain your request').max(1000),
-  request_order_limit_increase: z.boolean(),
 });
 type Values = z.infer<typeof schema>;
 
 function quantityLimitError(
   product: PortalCatalogItem | undefined,
   quantity: string,
-  requestHigherLimit = false,
 ): string | undefined {
   if (!product || !/^[1-9]\d*$/.test(quantity)) return undefined;
 
@@ -57,16 +54,11 @@ function quantityLimitError(
     product.maximum_order_quantity === null || product.maximum_order_quantity === undefined
       ? null
       : Number(product.maximum_order_quantity);
-  if (maximum !== null && requested > maximum && !requestHigherLimit) {
-    return `Maximum order quantity is ${maximum} ${product.unit_of_measure}. Ask Sales to review a higher per-order limit to continue.`;
+  if (maximum !== null && requested > maximum) {
+    return `Maximum order quantity is ${maximum} ${product.unit_of_measure}. Submit a separate order limit request to ask Sales for an increase.`;
   }
 
   return undefined;
-}
-
-function quantityExceedsMaximum(product: PortalCatalogItem | undefined, quantity: string): boolean {
-  if (!product || !/^[1-9]\d*$/.test(quantity) || product.maximum_order_quantity == null) return false;
-  return Number(quantity) > Number(product.maximum_order_quantity);
 }
 
 function formatOrderLimit(quantity: string): string {
@@ -82,7 +74,7 @@ function quantityLimitHint(product: PortalCatalogItem | undefined): string {
   }
 
   const maximum = formatOrderLimit(product.maximum_order_quantity);
-  return `Allowed per-order range: ${minimum}–${maximum} ${product.unit_of_measure}. Above the cap, request Sales review below; the final offer states qualifying quantities.`;
+  return `Allowed per-order range: ${minimum}–${maximum} ${product.unit_of_measure}. Request an increase separately if you need a higher order limit.`;
 }
 
 export default function CustomerPricingPage() {
@@ -110,29 +102,20 @@ export default function CustomerPricingPage() {
   });
   const form = useForm<Values>({
     resolver: zodResolver(schema),
-    defaultValues: { product_id: '', quantity: '', requested_price: '', notes: '', request_order_limit_increase: false },
+    defaultValues: { product_id: '', quantity: '', requested_price: '', notes: '' },
   });
   const selectedProductId = form.watch('product_id');
-  const limitReviewProductId = useRef(selectedProductId);
   const quantityValue = form.watch('quantity');
   const selectedProduct = catalog.data?.find((product) => product.id === selectedProductId);
-  const requestHigherLimit = form.watch('request_order_limit_increase');
-  const liveQuantityError = quantityLimitError(selectedProduct, quantityValue, requestHigherLimit);
-  const needsLimitReview = quantityExceedsMaximum(selectedProduct, quantityValue);
+  const liveQuantityError = quantityLimitError(selectedProduct, quantityValue);
   const existingOpenRequest = openRequests.data?.find((request) => request.product_id === selectedProductId);
   const exceedsAvailableStock = selectedProduct?.availability_mode === 'stock_limited'
     && selectedProduct.available_quantity != null
     && /^\d+$/.test(quantityValue)
     && Number(quantityValue) > Number(selectedProduct.available_quantity);
-  useEffect(() => {
-    if (limitReviewProductId.current !== selectedProductId || !needsLimitReview) {
-      form.setValue('request_order_limit_increase', false);
-    }
-    limitReviewProductId.current = selectedProductId;
-  }, [form, needsLimitReview, selectedProductId]);
   const submitRequest = (values: Values) => {
     const product = catalog.data?.find((item) => item.id === values.product_id);
-    if (quantityLimitError(product, values.quantity, values.request_order_limit_increase)) {
+    if (quantityLimitError(product, values.quantity)) {
       form.setFocus('quantity');
       return;
     }
@@ -157,7 +140,6 @@ export default function CustomerPricingPage() {
       customerPortalApi.requestPrice({
         ...v,
         quantity: Number(v.quantity),
-        request_order_limit_increase: v.request_order_limit_increase,
       }),
     onSuccess: (created: PriceRequest) => {
       if (page === 1 && !requestId) {
@@ -248,11 +230,6 @@ export default function CustomerPricingPage() {
             {r.quantity ? `${r.quantity} ${r.product.unit_of_measure}` : 'Company proposal'}
           </div>
           {r.requested_price && <div>{formatPeso(r.requested_price)}</div>}
-          {r.order_limit_increase_request && (
-            <p className="mt-1 text-xs text-warning-fg">
-              Higher order limit review requested. Current limit: {formatOrderLimit(r.order_limit_increase_request.current_maximum_quantity)}; account limit remains unchanged until Sales updates it.
-            </p>
-          )}
           <p className="text-muted">{r.notes}</p>
         </>
       ),
@@ -427,20 +404,12 @@ export default function CustomerPricingPage() {
                 required
                 type="number"
                 min={selectedProduct?.minimum_order_quantity ?? 1}
-                max={requestHigherLimit ? undefined : selectedProduct?.maximum_order_quantity ?? undefined}
+                max={selectedProduct?.maximum_order_quantity ?? undefined}
                 step={1}
                 {...form.register('quantity')}
                 error={liveQuantityError ?? form.formState.errors.quantity?.message}
                 helper={quantityLimitHint(selectedProduct)}
               />
-              {needsLimitReview && (
-                <div className="rounded-md border border-warning/40 bg-warning/5 p-3 sm:col-span-2">
-                  <Checkbox
-                    {...form.register('request_order_limit_increase')}
-                    label={<span><strong>Ask Sales to review a higher per-order limit</strong><span className="mt-0.5 block text-xs text-muted">This does not change your current limit. Sales must approve and update your account before an order above the current maximum can be placed.</span></span>}
-                  />
-                </div>
-              )}
               {exceedsAvailableStock && selectedProduct?.available_quantity != null && (
                 <p role="status" className="rounded-md border border-default bg-elevated p-3 text-sm text-muted sm:col-span-2">
                   Only {formatOrderLimit(selectedProduct.available_quantity)} {selectedProduct.unit_of_measure} are currently available. You can still request pricing for this quantity; Sales will confirm replenishment and delivery availability.

@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
+import { useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { LuCheck, LuPackage, LuPlus, LuX, LuSend, LuSearch } from '@/lib/icons';
 import { useDebounce } from '@/hooks/useDebounce';
@@ -33,6 +33,10 @@ const PAYMENT_METHODS = [
 export default function CustomerPlaceOrderPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  const productionRequestId = searchParams.get('production_request_id') ?? '';
+  const requestedProductId = searchParams.get('product_id') ?? '';
+  const requestedAvailableQuantity = Number(searchParams.get('quantity') ?? 0);
   const portalSession = useOutletContext<CustomerPortalUser>();
   const queryClient = useQueryClient();
   const initializedOrderRef = useRef<string | null>(null);
@@ -63,6 +67,17 @@ export default function CustomerPlaceOrderPage() {
   const addProductsRef = useRef<HTMLButtonElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const orderRequestRef = useRef<{ fingerprint: string; key: string } | null>(null);
+  const initializedPortalOrderRef = useRef<string | null>(null);
+  const isProductionRequestOrder = !!productionRequestId && !id;
+  const productionRequestQuery = useQuery({
+    queryKey: ['portal', 'customer', 'production-request', productionRequestId],
+    queryFn: () => customerPortalApi.getProductionRequest(productionRequestId),
+    enabled: isProductionRequestOrder,
+  });
+  const productionRequest = productionRequestQuery.data;
+  const minimumDeliveryDate = isProductionRequestOrder && productionRequest?.offered_ready_date
+    ? [earliestDeliveryDate, productionRequest.offered_ready_date].sort().at(-1)!
+    : earliestDeliveryDate;
 
   useEffect(() => {
     if (catalogOpen) searchInputRef.current?.focus();
@@ -102,6 +117,27 @@ export default function CustomerPlaceOrderPage() {
     }] : []));
   }, [id, existingOrder]);
   useEffect(() => {
+    if (id || !catalog || initializedPortalOrderRef.current) return;
+    const request = productionRequest;
+    const productId = request?.product?.id ?? requestedProductId;
+    if (!productId) return;
+    const product = catalog.find((row) => row.id === productId);
+    if (!product || product.unit_price === null) return;
+    if (request && (request.status !== 'ready_to_order' || !request.capabilities.can_place_order)) return;
+    const quantity = request
+      ? request.requested_quantity
+      : Number.isSafeInteger(requestedAvailableQuantity) && requestedAvailableQuantity > 0
+        ? Math.min(requestedAvailableQuantity, Math.floor(Number(product.available_quantity ?? 0)))
+        : Math.max(1, Math.ceil(Number(product.minimum_order_quantity ?? 1)));
+    if (!Number.isSafeInteger(quantity) || quantity < 1) return;
+    initializedPortalOrderRef.current = request?.id ?? `${productId}:${quantity}`;
+    setLines([{
+      product: { ...product, unit_price: product.unit_price },
+      quantity: String(quantity),
+      warranty_option_id: product.warranty_options?.length === 1 ? product.warranty_options[0].id : undefined,
+    }]);
+  }, [id, catalog, productionRequest, requestedProductId, requestedAvailableQuantity]);
+  useEffect(() => {
     if (id || !portalUser || paymentTermsTouchedRef.current) return;
     setPaymentTermsDays(String(portalUser.customer_terms?.payment_terms_days ?? ''));
   }, [id, portalUser]);
@@ -110,7 +146,7 @@ export default function CustomerPlaceOrderPage() {
     const quantity = Number(line.quantity);
     const minimum = Number(line.product.minimum_order_quantity ?? 1);
     const maximum = line.product.maximum_order_quantity == null ? null : Number(line.product.maximum_order_quantity);
-    const exceedsStock = line.product.availability_mode === 'stock_limited'
+    const exceedsStock = !isProductionRequestOrder && line.product.availability_mode === 'stock_limited'
       && line.product.available_quantity != null
       && quantity > Number(line.product.available_quantity);
     const belowMinimum = Number.isFinite(minimum) && quantity < minimum;
@@ -124,9 +160,12 @@ export default function CustomerPlaceOrderPage() {
   const paymentTermsError = paymentTermsValid ? undefined
     : paymentTermsDays === '' ? 'Enter the payment terms requested for this order.' : 'Use a whole number from 0 to 365 days.';
   const deliveryError = !deliveryDate ? 'Choose a delivery date.'
-    : deliveryDate < earliestDeliveryDate ? 'Choose a date more than 3 days from today.' : undefined;
+    : deliveryDate < minimumDeliveryDate
+      ? isProductionRequestOrder ? `Choose a date on or after ${minimumDeliveryDate}.` : 'Choose a date more than 3 days from today.'
+      : undefined;
   const quotePayload = JSON.stringify({
     sales_order_id: id,
+    production_request_id: isProductionRequestOrder ? productionRequestId : undefined,
     items: lines.map((line) => ({ product_id: line.product.id, quantity: line.quantity, delivery_date: deliveryDate })),
   });
   const debouncedQuotePayload = useDebounce(quotePayload, 300);
@@ -178,6 +217,7 @@ export default function CustomerPlaceOrderPage() {
         payment_method: paymentMethod || undefined,
         payment_terms_days: paymentTermsValue,
         quote_signature: quote?.signature,
+        ...(isProductionRequestOrder ? { production_request_id: productionRequestId } : {}),
         items: lines.map((line) => ({
           product_id: line.product.id,
           quantity: line.quantity,
@@ -186,7 +226,7 @@ export default function CustomerPlaceOrderPage() {
         })),
       };
       if (id) return customerPortalApi.updateOrder(id, payload);
-      const fingerprint = JSON.stringify({ notes: payload.notes, payment_method: payload.payment_method, payment_terms_days: payload.payment_terms_days, items: payload.items });
+      const fingerprint = JSON.stringify({ notes: payload.notes, payment_method: payload.payment_method, payment_terms_days: payload.payment_terms_days, production_request_id: productionRequestId || undefined, items: payload.items });
       if (orderRequestRef.current?.fingerprint !== fingerprint) {
         orderRequestRef.current = { fingerprint, key: window.crypto.randomUUID() };
       }
@@ -204,7 +244,7 @@ export default function CustomerPlaceOrderPage() {
   });
 
   const canSubmit =
-    (!id || !!existingOrder?.capabilities?.can_edit) && !!portalUser && !!paymentMethod && paymentMethodOptions.some((method) => method.value === paymentMethod) && paymentTermsValid && taxReady && !!quote && !deliveryError && lines.length > 0 && invalidLines.length === 0 && !createMut.isPending;
+    (!id || !!existingOrder?.capabilities?.can_edit) && (!isProductionRequestOrder || !!productionRequest?.capabilities.can_place_order) && !!portalUser && !!paymentMethod && paymentMethodOptions.some((method) => method.value === paymentMethod) && paymentTermsValid && taxReady && !!quote && !deliveryError && lines.length > 0 && invalidLines.length === 0 && !createMut.isPending;
   const submissionError = createMut.isError
     ? createMut.error.response?.data?.message ?? 'Unable to submit your order. Your items are saved on this page; please try again.'
     : null;
@@ -222,8 +262,10 @@ export default function CustomerPlaceOrderPage() {
   return (
     <div className="[color-scheme:light] dark:[color-scheme:dark]">
       <ProductPhotoViewer photo={photoPreview} onClose={() => setPhotoPreview(null)} />
-      <PageHeader title={id ? `Edit ${existingOrder?.so_number ?? 'order'}` : 'Place an Order'} subtitle={id ? 'Changes are allowed until sales confirms this order.' : 'Select products and quantities. Prices reflect your delivery date and any customer agreement.'}
-        backTo={id ? `/portal/customer/orders/${id}` : '/portal/customer/orders'} backLabel={id ? 'Order' : 'My orders'} />
+      <PageHeader title={id ? `Edit ${existingOrder?.so_number ?? 'order'}` : isProductionRequestOrder ? 'Place your production request order' : 'Place an Order'} subtitle={id ? 'Changes are allowed until sales confirms this order.' : isProductionRequestOrder ? `Order the exact ${productionRequest?.requested_quantity ?? ''} pieces held for ${productionRequest?.product?.name ?? 'your production request'}.` : 'Select products and quantities. Prices reflect your delivery date and any customer agreement.'}
+        backTo={id ? `/portal/customer/orders/${id}` : isProductionRequestOrder ? `/portal/customer/production-requests/${productionRequestId}` : '/portal/customer/orders'} backLabel={id ? 'Order' : isProductionRequestOrder ? 'Production request' : 'My orders'} />
+      {isProductionRequestOrder && productionRequestQuery.isError && <div className="mx-4 mt-4 rounded-md border border-danger bg-danger-bg p-3 text-sm text-danger-fg">Unable to load this production request. Refresh the page or open it from Production requests.</div>}
+      {isProductionRequestOrder && productionRequest && productionRequest.status !== 'ready_to_order' && <div className="mx-4 mt-4 rounded-md border border-warning bg-warning-bg p-3 text-sm text-warning-fg">This request is no longer ready to order. Return to the request to review its status.</div>}
       <form data-portal-guide-target="form" onSubmit={(event) => {
         event.preventDefault();
         if (canSubmit) createMut.mutate();
@@ -240,8 +282,8 @@ export default function CustomerPlaceOrderPage() {
                 value={orderDate} helper={id ? 'Original submission date.' : 'Set automatically when submitted.'} />
               <Input fieldSize="lg" label="Requested delivery date" aria-label="Requested delivery date" type="date" required
                 containerClassName="[&>label]:min-h-8 sm:[&>label]:min-h-0"
-                min={earliestDeliveryDate} value={deliveryDate} error={deliveryError}
-                helper={id ? `Current schedule: ${existingOrder?.delivery_dates?.join(', ') || existingOrder?.items?.[0]?.delivery_date || '—'}. Select a date to save.` : `Earliest available date: ${earliestDeliveryDate}.`}
+                min={minimumDeliveryDate} value={deliveryDate} error={deliveryError}
+                helper={id ? `Current schedule: ${existingOrder?.delivery_dates?.join(', ') || existingOrder?.items?.[0]?.delivery_date || '—'}. Select a date to save.` : isProductionRequestOrder ? `Your requested delivery date cannot be before the offered ready date. Earliest: ${minimumDeliveryDate}.` : `Earliest available date: ${earliestDeliveryDate}.`}
                 onChange={(e) => setDeliveryDate(e.target.value)} />
               <Select label="Payment method" required value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value as typeof paymentMethod)}>
                 <option value="">Choose payment method</option>
@@ -263,8 +305,8 @@ export default function CustomerPlaceOrderPage() {
                   <h2 id="order-items-heading" className="text-base font-semibold">Order items</h2>
                   <p role="status" className="mt-0.5 text-xs text-muted">{lines.length === 0 ? 'Select the products you need.' : `${lines.length} product${lines.length === 1 ? '' : 's'} selected`}</p>
                 </div>
-                <Button ref={addProductsRef} type="button" className="min-h-11 shrink-0" icon={<LuPlus size={16} />}
-                  aria-expanded={catalogOpen} aria-controls="product-picker" onClick={() => setCatalogOpen(!catalogOpen)}>Add products</Button>
+                {!isProductionRequestOrder && <Button ref={addProductsRef} type="button" className="min-h-11 shrink-0" icon={<LuPlus size={16} />}
+                  aria-expanded={catalogOpen} aria-controls="product-picker" onClick={() => setCatalogOpen(!catalogOpen)}>Add products</Button>}
               </div>
               {catalogOpen && <div id="product-picker" className="border-b border-default bg-surface">
                 <div className="flex items-center gap-2 p-3 sm:px-5">
@@ -320,7 +362,14 @@ export default function CustomerPlaceOrderPage() {
                           icon={added ? <LuCheck size={14} /> : <LuPlus size={14} />}
                           aria-label={added ? `${product.name} added to order` : product.unit_price === null ? `${product.name} cannot be ordered: ${product.pricing_issue ?? 'price unavailable'}` : `Add ${product.name} to order`}
                           disabled={added || product.unit_price === null || outOfStock} onClick={() => addLine(product)}>{added ? 'Added' : product.unit_price === null || outOfStock ? 'Unavailable' : 'Add'}</Button>
-                        {outOfStock && <button type="button" className="col-start-2 col-span-2 row-start-3 justify-self-start text-xs font-medium text-accent underline underline-offset-2" onClick={() => navigate(`/portal/customer/pricing?product_id=${encodeURIComponent(product.id)}&quantity=1`)}>Request price and availability</button>}
+                        {product.availability_mode === 'stock_limited' && <div className="col-start-2 col-span-2 row-start-3 flex flex-wrap items-center gap-2">
+                          <Button type="button" size="sm" variant="secondary" className="min-h-9 border-accent text-accent"
+                            onClick={() => navigate(`/portal/customer/production-requests/new?product_id=${encodeURIComponent(product.id)}`)}>Request production</Button>
+                          {product.maximum_order_quantity != null && <button type="button" className="min-h-9 rounded-md px-2 text-xs font-medium text-accent underline underline-offset-2 hover:bg-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                            onClick={() => navigate(`/portal/customer/order-limit-requests/new?product_id=${encodeURIComponent(product.id)}&requested_maximum_quantity=${encodeURIComponent(String(Math.floor(Number(product.maximum_order_quantity)) + 1))}`)}>Request higher order limit</button>}
+                          {outOfStock && <button type="button" className="min-h-9 rounded-md px-2 text-xs font-medium text-accent underline underline-offset-2 hover:bg-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                            onClick={() => navigate(`/portal/customer/pricing?product_id=${encodeURIComponent(product.id)}&quantity=1`)}>Request price and availability</button>}
+                        </div>}
                       </li>;
                     })}
                   </ul>
@@ -330,7 +379,13 @@ export default function CustomerPlaceOrderPage() {
               </div>}
               {lines.length === 0 ? <div className="flex min-h-52 flex-col items-center justify-center gap-2 px-5 py-8 text-center">
                 <h3 className="text-base font-medium">Your order starts here</h3>
-                <p className="max-w-sm text-sm leading-relaxed text-muted">Use Add products to select from your catalog, then enter a whole-number quantity for each product.</p>
+                <p className="max-w-sm text-sm leading-relaxed text-muted">{!isProductionRequestOrder
+                  ? 'Use Add products to select from your catalog, then enter a whole-number quantity for each product.'
+                  : productionRequestQuery.isLoading || isLoading
+                    ? 'Loading the production request and held quantity…'
+                    : productionRequest?.capabilities.can_place_order
+                      ? 'Loading the held quantity for this production request…'
+                      : 'This production request is not ready to order.'}</p>
               </div> : <>
                 <div role="region" aria-label="Order items" tabIndex={0}
                   className="max-h-[min(46dvh,380px)] overflow-auto overscroll-contain focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
@@ -369,7 +424,7 @@ export default function CustomerPlaceOrderPage() {
                           {(() => {
                             const minimum = Math.max(1, Math.ceil(Number(line.product.minimum_order_quantity ?? 1)));
                             const agreementMaximum = line.product.maximum_order_quantity == null ? null : Number(line.product.maximum_order_quantity);
-                            const stockMaximum = line.product.availability_mode === 'stock_limited' && line.product.available_quantity != null
+                            const stockMaximum = !isProductionRequestOrder && line.product.availability_mode === 'stock_limited' && line.product.available_quantity != null
                               ? Number(line.product.available_quantity) : null;
                             const maximum = agreementMaximum == null ? stockMaximum
                               : stockMaximum == null ? agreementMaximum : Math.min(agreementMaximum, stockMaximum);
@@ -380,18 +435,19 @@ export default function CustomerPlaceOrderPage() {
                                   : stockMaximum !== null && quantity > stockMaximum ? `Maximum available is ${line.product.available_quantity}.` : undefined;
                             return <Input fieldSize="lg" aria-label={`Quantity for ${line.product.part_number}`} type="number" min={minimum}
                             max={maximum ?? undefined}
-                            step={1} inputMode="numeric" required
+                            step={1} inputMode="numeric" required readOnly={isProductionRequestOrder}
                             className="font-mono tabular-nums" value={line.quantity}
-                            helper={`Allowed: ${line.product.minimum_order_quantity ?? '1.000'}–${line.product.maximum_order_quantity ?? 'no maximum'}${stockMaximum === null ? '' : ` · Available: ${line.product.available_quantity}`}`}
+                            helper={isProductionRequestOrder ? 'Fixed to the full quantity held for your accepted production request.' : `Allowed: ${line.product.minimum_order_quantity ?? '1.000'}–${line.product.maximum_order_quantity ?? 'no maximum'}${stockMaximum === null ? '' : ` · Available: ${line.product.available_quantity}`}`}
                             error={error} onChange={(e) => updateQuantity(idx, e.target.value)} />;
                           })()}
-                          {line.product.availability_mode === 'stock_limited' && Number(line.quantity) > Number(line.product.available_quantity ?? 0) && <button type="button" className="mt-1 text-xs font-medium text-accent underline underline-offset-2" onClick={() => navigate(`/portal/customer/pricing?product_id=${encodeURIComponent(line.product.id)}&quantity=${encodeURIComponent(line.quantity)}`)}>Request price and availability</button>}
+                          {!isProductionRequestOrder && line.product.maximum_order_quantity != null && Number(line.quantity) > Number(line.product.maximum_order_quantity) && <button type="button" className="mt-1 min-h-9 rounded-md px-2 text-xs font-medium text-accent underline underline-offset-2 hover:bg-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent" onClick={() => navigate(`/portal/customer/order-limit-requests/new?product_id=${encodeURIComponent(line.product.id)}&requested_maximum_quantity=${encodeURIComponent(line.quantity)}`)}>Request higher order limit</button>}
+                          {!isProductionRequestOrder && line.product.availability_mode === 'stock_limited' && Number(line.quantity) > Number(line.product.available_quantity ?? 0) && <button type="button" className="mt-1 min-h-9 rounded-md px-2 text-xs font-medium text-accent underline underline-offset-2 hover:bg-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent" onClick={() => navigate(`/portal/customer/pricing?product_id=${encodeURIComponent(line.product.id)}&quantity=${encodeURIComponent(line.quantity)}`)}>Request price and availability</button>}
                         </Td>
                         <Td align="right" mono className="whitespace-nowrap text-muted">{quotedLine(line) ? formatPeso(quotedLine(line)!.unit_price) : pricingError ? 'Unavailable' : 'Pending'}<p className="mt-1 font-sans text-xs">{quotedLine(line)?.price_source === 'agreement' ? 'Agreed price' : quotedLine(line)?.price_source === 'base' ? 'Standard price' : quote ? 'Price unavailable' : pricingError ? 'Price check failed' : 'Checking price…'}</p></Td>
                         <Td align="right" mono className="whitespace-nowrap font-medium">{quotedLine(line) ? formatPeso(quotedLine(line)!.total) : pricingError ? 'Unavailable' : 'Pending'}</Td>
                         <Td>
-                          <Button type="button" variant="ghost" iconOnly className="min-h-11 min-w-11"
-                            icon={<LuX size={18} />} aria-label={`Remove ${line.product.name}`} onClick={() => removeLine(idx)} />
+                          {!isProductionRequestOrder && <Button type="button" variant="ghost" iconOnly className="min-h-11 min-w-11"
+                            icon={<LuX size={18} />} aria-label={`Remove ${line.product.name}`} onClick={() => removeLine(idx)} />}
                         </Td>
                       </tr>)}
                     </tbody>

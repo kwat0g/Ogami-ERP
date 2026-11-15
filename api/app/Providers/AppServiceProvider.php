@@ -354,6 +354,7 @@ use App\Modules\Quality\Events\OutgoingQuantityReleased;
 use App\Modules\Quality\Listeners\AcceptGrnOnIncomingQcPass;
 use App\Modules\Quality\Listeners\CloseReworkNcrAfterQcApproval;
 use App\Modules\Quality\Listeners\CreateDeliveryDraftOnQcPass;
+use App\Modules\CRM\Listeners\MarkCustomerProductionRequestReady;
 use App\Modules\Quality\Listeners\NotifyOnInspectionFailed;
 use App\Modules\Quality\Listeners\RejectGRNOnQcFail;
 use App\Modules\Quality\Listeners\TriggerIncomingQC;
@@ -851,8 +852,10 @@ class AppServiceProvider extends ServiceProvider
         Event::listen(WorkOrderQualityResolved::class, [AutoCloseResolvedWorkOrder::class, 'handle']);
         Event::listen(WorkOrderCompleted::class, [NotifyOnWorkOrderCompleted::class,  'handle']);
         Event::listen(InspectionPassed::class, [CreateDeliveryDraftOnQcPass::class, 'handle']);
+        Event::listen(InspectionPassed::class, [MarkCustomerProductionRequestReady::class, 'handle']);
         Event::listen(InspectionPassed::class, [CloseReworkNcrAfterQcApproval::class, 'handle']);
         Event::listen(OutgoingQuantityReleased::class, [CreateDeliveryDraftOnQcPass::class, 'handle']);
+        Event::listen(OutgoingQuantityReleased::class, [MarkCustomerProductionRequestReady::class, 'handle']);
         Event::listen(InspectionPassed::class, [AcceptGrnOnIncomingQcPass::class,      'handle']);
         // OGAMI-005 — an incoming pass with a CoA on file verifies the CoA
         // (trace §7.7: the column previously had no writer at all).

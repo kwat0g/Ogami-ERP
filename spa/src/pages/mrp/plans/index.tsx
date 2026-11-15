@@ -97,11 +97,12 @@ export default function MrpPlansListPage() {
     },
     {
       key: 'so',
-      header: 'Sales order',
-      cell: (r) =>
-        r.sales_order ? <span className="font-mono">{r.sales_order.so_number}</span> : '—',
+      header: 'Source',
+      cell: (r) => r.sales_order ? <span className="font-mono">SO {r.sales_order.so_number}</span>
+        : r.customer_production_request ? <span className="font-mono">Request {r.customer_production_request.request_number}</span>
+          : r.stock_production_work_order ? <span className="font-mono">Stock WO {r.stock_production_work_order.wo_number}</span> : '—',
     },
-    { key: 'cust', header: 'Customer', cell: (r) => r.sales_order?.customer?.name ?? '—' },
+    { key: 'cust', header: 'Customer / product', cell: (r) => r.sales_order?.customer?.name ?? r.customer_production_request?.customer?.name ?? r.stock_production_work_order?.product?.name ?? '—' },
     {
       key: 'version',
       header: 'Version',

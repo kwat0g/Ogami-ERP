@@ -935,7 +935,7 @@ class WorkOrderOutputService
     public function retryProductionReceipt(WorkOrderOutput $output, User $by): WorkOrderOutput
     {
         try {
-            return DB::transaction(function () use ($output, $by): WorkOrderOutput {
+            $receipt = DB::transaction(function () use ($output, $by): WorkOrderOutput {
                 $workOrder = WorkOrder::query()->whereKey($output->work_order_id)->lockForUpdate()->first();
                 if ($output->trial_inspection_id !== null) {
                     Inspection::query()->whereKey($output->trial_inspection_id)->lockForUpdate()->first();
@@ -995,6 +995,20 @@ class WorkOrderOutputService
 
                 return $receipt;
             });
+            try {
+                $workOrder = WorkOrder::query()->find($receipt->work_order_id);
+                if ($workOrder) {
+                    app(\App\Modules\CRM\Services\CustomerProductionRequestStockHoldService::class)->tryReadyForWorkOrder($workOrder);
+                }
+            } catch (\Throwable $handoffError) {
+                Log::warning('Customer production request readiness could not be refreshed after receipt retry.', [
+                    'work_order_id' => $receipt->work_order_id,
+                    'output_id' => $receipt->id,
+                    'error' => $handoffError->getMessage(),
+                ]);
+            }
+
+            return $receipt;
         } catch (ProductionReceiptHandoffException|BusinessRuleException|InvalidMovementException $e) {
             DB::transaction(function () use ($output): void {
                 if (! $this->markProductionReceiptManual($output->id)) {

@@ -35,17 +35,4 @@ class CustomerOrderQuantityLimitTest extends TestCase
         self::assertNull(CustomerOrderQuantityLimit::error('1000000', '5.000', null, 'pcs'));
     }
 
-    public function test_allows_an_over_maximum_quantity_only_for_a_requested_limit_review(): void
-    {
-        self::assertSame(
-            'Maximum order quantity is 20 pcs.',
-            CustomerOrderQuantityLimit::error('25', '5.000', '20.000', 'pcs'),
-        );
-        self::assertNull(CustomerOrderQuantityLimit::error('25', '5.000', '20.000', 'pcs', allowAboveMaximum: true));
-        self::assertSame(
-            'Minimum order quantity is 5 pcs.',
-            CustomerOrderQuantityLimit::error('4', '5.000', '20.000', 'pcs', allowAboveMaximum: true),
-            'A limit review must not bypass the minimum quantity.',
-        );
-    }
 }

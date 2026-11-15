@@ -9,11 +9,15 @@ use App\Common\Services\ChainBroadcaster;
 use App\Common\Services\DocumentSequenceService;
 use App\Modules\Auth\Models\User;
 use App\Modules\CRM\Models\Product;
+use App\Modules\CRM\Models\CustomerProductionRequest;
 use App\Modules\Inventory\Models\Item;
 use App\Modules\Inventory\Models\StockLevel;
 use App\Modules\Inventory\Services\StockLocationSummaryService;
 use App\Modules\MRP\Services\BomService;
+use App\Modules\MRP\Enums\MrpPlanStatus;
+use App\Modules\MRP\Models\MrpPlan;
 use App\Modules\Production\Models\WorkOrder;
+use App\Modules\Production\Enums\WorkOrderStatus;
 use App\Modules\Production\Support\StockProductionLimits;
 use App\Modules\Purchasing\Enums\PurchaseRequestStatus;
 use App\Modules\Purchasing\Models\PurchaseRequest;
@@ -75,9 +79,10 @@ final class StockProductionPlanningService
                 if ($prior->trashed() || ! hash_equals((string) $prior->stock_creation_fingerprint, $fingerprint)) {
                     throw new BusinessRuleException('This stock creation key already belongs to another payload or archived work order.');
                 }
+                $this->ensureMrpPlan($prior, $actor);
                 $this->reconcile($prior, $actor);
 
-                return app(WorkOrderService::class)->show($prior);
+                return app(WorkOrderService::class)->show($prior->fresh());
             }
             if ((int) $data['quantity_target'] > StockProductionLimits::MAX_QUANTITY) {
                 throw new BusinessRuleException('Stock work orders are limited to 5,000 pieces.');
@@ -98,7 +103,90 @@ final class StockProductionPlanningService
                 'production_purpose' => 'stock', 'stock_creation_request_key' => $key,
                 'stock_creation_fingerprint' => $fingerprint, 'created_by' => $actor->id,
             ]));
+            $this->ensureMrpPlan($root, $actor);
             $this->reconcile($root, $actor);
+
+            return app(WorkOrderService::class)->show($root->fresh());
+        }, 3);
+    }
+
+    public function createForCustomerRequest(array $data, User $actor, CustomerProductionRequest $request): WorkOrder
+    {
+        $key = strtolower((string) ($request->planning_request_key ?? ''));
+        if (! Str::isUuid($key) || $request->status->value !== 'planning'
+            || (int) $data['product_id'] !== (int) $request->product_id
+            || (int) $data['quantity_target'] !== (int) $request->requested_quantity) {
+            throw new BusinessRuleException('Customer production planning must match an active request and its exact product quantity.');
+        }
+
+        return DB::transaction(function () use ($data, $actor, $request, $key): WorkOrder {
+            DB::statement('SELECT pg_advisory_xact_lock(20261009, 1)');
+            $request = CustomerProductionRequest::query()->lockForUpdate()->findOrFail($request->id);
+            $activePlan = MrpPlan::query()
+                ->where('customer_production_request_id', $request->id)
+                ->where('status', MrpPlanStatus::Active->value)
+                ->lockForUpdate()->first();
+            if ($activePlan) {
+                $root = WorkOrder::query()->where('mrp_plan_id', $activePlan->id)
+                    ->whereNull('parent_wo_id')->lockForUpdate()->first();
+                if (! $root) {
+                    throw new BusinessRuleException('The active request plan has no root work order. Review its planning history before retrying.');
+                }
+                $this->reconcile($root, $actor);
+
+                return app(WorkOrderService::class)->show($root->fresh());
+            }
+            if ((int) $request->requested_quantity > StockProductionLimits::MAX_QUANTITY
+                || Carbon::parse($data['planned_end'])->lte(now())
+                || (int) ($data['minimum_workers'] ?? 1) < 1 || (int) ($data['maximum_workers'] ?? 4) > 4
+                || (int) ($data['maximum_workers'] ?? 4) < (int) ($data['minimum_workers'] ?? 1)) {
+                throw new BusinessRuleException('Request quantity, deadline, or worker range cannot be planned. Review the request with the customer.');
+            }
+
+            $product = Product::query()->lockForUpdate()->findOrFail($request->product_id);
+            $readiness = $this->productReadiness($product);
+            if (! $readiness['eligible']) {
+                throw new BusinessRuleException(implode(' ', $readiness['blockers']));
+            }
+            $boms = app(BomService::class);
+            $boms->assertComponentIntegrity($boms->ensureFreshForPlanning($boms->activeForProduct($product->id)));
+
+            $fingerprint = hash('sha256', json_encode([
+                'customer_production_request_id' => $request->id,
+                'product_id' => $product->id,
+                'quantity_target' => $request->requested_quantity,
+                'planned_end' => Carbon::parse($data['planned_end'])->toIso8601String(),
+            ], JSON_THROW_ON_ERROR));
+            $root = app(WorkOrderService::class)->createDraft(array_replace($data, [
+                'production_purpose' => 'stock',
+                'stock_creation_request_key' => $key,
+                'stock_creation_fingerprint' => $fingerprint,
+                'created_by' => $actor->id,
+            ]));
+            $plan = MrpPlan::create([
+                'mrp_plan_no' => app(DocumentSequenceService::class)->generate('mrp_plan'),
+                'customer_production_request_id' => $request->id,
+                'version' => 1,
+                'status' => MrpPlanStatus::Active->value,
+                'generated_by' => $actor->id,
+                'total_lines' => 0,
+                'shortages_found' => 0,
+                'auto_pr_count' => 0,
+                'draft_wo_count' => 0,
+                'diagnostics' => [],
+                'cost_summary' => [],
+                'generation_context' => [
+                    'source' => 'customer_production_request',
+                    'trigger' => 'request_planning',
+                    'reason' => 'customer_production_request',
+                    'actor_type' => 'user',
+                    'source_id' => $request->id,
+                    'actor_id' => $actor->id,
+                ],
+                'generated_at' => now(),
+            ]);
+            $root->forceFill(['mrp_plan_id' => $plan->id])->save();
+            $this->reconcile($root->fresh(), $actor);
 
             return app(WorkOrderService::class)->show($root->fresh());
         }, 3);
@@ -113,8 +201,9 @@ final class StockProductionPlanningService
                 || $root->currentProductionSchedule()->exists() || $root->materials()->where('actual_quantity_issued', '>', 0)->exists()) {
                 return [];
             }
+            $this->ensureMrpPlan($root, $actor);
             $available = [];
-            $plan = app(BomService::class)->productionPlan($root->product_id, (float) $root->quantity_target,
+            $productionPlan = app(BomService::class)->productionPlan($root->product_id, (float) $root->quantity_target,
                 function (int $productId, int $itemId, float $gross) use (&$available): float {
                     $available[$itemId] ??= max(0, (float) app(StockLocationSummaryService::class)->availability(
                         StockLevel::where('item_id', $itemId)->with('location.zone.warehouse')->get())['usable_quantity'] - (float) Item::findOrFail($itemId)->safety_stock);
@@ -124,9 +213,9 @@ final class StockProductionPlanningService
                     return $gross - $take;
                 });
             app(WorkOrderService::class)->reconcilePlannedMaterialPlan($root);
-            $this->children($plan['subassemblies'], $root, $actor);
+            $this->children($productionPlan['subassemblies'], $root, $actor);
             $shortages = [];
-            foreach ($plan['materials'] as $row) {
+            foreach ($productionPlan['materials'] as $row) {
                 $item = Item::findOrFail($row['item_id']);
                 $supply = app(OpenSupplyService::class)->stockPlanningSupply($item->id, $root->id);
                 $free = $supply['available_to_root'];
@@ -145,6 +234,7 @@ final class StockProductionPlanningService
                 $request = PurchaseRequest::create([
                     'pr_number' => app(DocumentSequenceService::class)->generate('pr'),
                     'requested_by' => $actor->id, 'department_id' => DB::table('departments')->where('code', 'PPC')->value('id'),
+                    'mrp_plan_id' => $root->mrp_plan_id,
                     'date' => today(), 'required_delivery_date' => $root->planned_end->toDateString(),
                     'reason' => "Materials for stock production {$root->wo_number}", 'priority' => 'normal',
                     'is_auto_generated' => true, 'stock_production_work_order_id' => $root->id,
@@ -153,8 +243,12 @@ final class StockProductionPlanningService
                 $requestWasCreated = true;
             }
             if ($request && ($request->status?->value ?? 'draft') === 'draft' && ! $request->purchaseOrders()->exists() && ! $request->rfqs()->exists()) {
+                if ((int) $request->mrp_plan_id !== (int) $root->mrp_plan_id) {
+                    $request->forceFill(['mrp_plan_id' => $root->mrp_plan_id])->save();
+                }
                 if ($shortages === []) {
                     app(PurchaseRequestService::class)->cancel($request);
+                    $this->syncMrpPlan($root, $productionPlan, [], null);
 
                     return ['material_shortages' => 0];
                 }
@@ -180,8 +274,103 @@ final class StockProductionPlanningService
                 );
             }
 
+            $this->syncMrpPlan($root, $productionPlan, $shortages, $request);
+
             return ['material_shortages' => count($shortages)];
         }, 3);
+    }
+
+    private function ensureMrpPlan(WorkOrder $root, User $actor): MrpPlan
+    {
+        $root = WorkOrder::query()->lockForUpdate()->findOrFail($root->id);
+        if ($root->production_purpose !== 'stock' || $root->parent_wo_id !== null || $root->sales_order_id !== null) {
+            throw new BusinessRuleException('Only an internal root stock work order can own a stock production MRP plan.');
+        }
+
+        if ($root->mrp_plan_id !== null) {
+            $linked = MrpPlan::query()->lockForUpdate()->find($root->mrp_plan_id);
+            if ($linked && $linked->status === MrpPlanStatus::Active
+                && ($linked->stock_production_work_order_id === $root->id || $linked->customer_production_request_id !== null)) {
+                return $linked;
+            }
+            if ($linked && $linked->customer_production_request_id !== null) {
+                throw new BusinessRuleException('The customer request MRP plan is no longer active. Review the request before replanning.');
+            }
+        }
+
+        $plan = MrpPlan::query()->where('stock_production_work_order_id', $root->id)
+            ->where('status', MrpPlanStatus::Active->value)->lockForUpdate()->first();
+
+        if (! $plan) {
+            $plan = MrpPlan::create([
+                'mrp_plan_no' => app(DocumentSequenceService::class)->generate('mrp_plan'),
+                'stock_production_work_order_id' => $root->id,
+                'version' => 1,
+                'status' => MrpPlanStatus::Active->value,
+                'generated_by' => $actor->id,
+                'total_lines' => 0,
+                'shortages_found' => 0,
+                'auto_pr_count' => 0,
+                'draft_wo_count' => 0,
+                'diagnostics' => [],
+                'cost_summary' => [],
+                'generation_context' => [
+                    'source' => 'stock_production_work_order',
+                    'trigger' => 'produce_for_stock',
+                    'reason' => 'internal_stock_production',
+                    'actor_type' => 'user',
+                    'source_id' => $root->id,
+                    'actor_id' => $actor->id,
+                ],
+                'generated_at' => now(),
+            ]);
+        }
+
+        if ((int) $root->mrp_plan_id !== (int) $plan->id) {
+            $root->forceFill(['mrp_plan_id' => $plan->id])->save();
+        }
+
+        return $plan;
+    }
+
+    /** @param array{materials: array, subassemblies: array} $productionPlan */
+    private function syncMrpPlan(WorkOrder $root, array $productionPlan, array $shortages, ?PurchaseRequest $request): void
+    {
+        $plan = $root->mrp_plan_id !== null
+            ? MrpPlan::query()->whereKey($root->mrp_plan_id)->where('status', MrpPlanStatus::Active->value)->lockForUpdate()->first()
+            : null;
+        if (! $plan) {
+            return;
+        }
+
+        $diagnostics = [[
+            'kind' => 'stock_production_plan',
+            'type' => 'exact_make_quantity',
+            'work_order_id' => (int) $root->id,
+            'quantity_target' => (int) $root->quantity_target,
+            'material_line_count' => count($productionPlan['materials']),
+            'subassembly_count' => count($productionPlan['subassemblies']),
+        ]];
+        foreach ($shortages as [$item, $quantity]) {
+            $diagnostics[] = [
+                'kind' => 'material_shortage',
+                'type' => 'stock_material_shortage',
+                'item_id' => (int) $item->id,
+                'item_code' => $item->code,
+                'item_name' => $item->name,
+                'quantity' => (string) $quantity,
+            ];
+        }
+
+        $plan->forceFill([
+            'total_lines' => count($productionPlan['materials']),
+            'shortages_found' => count($shortages),
+            'auto_pr_count' => $request && $request->status?->value !== 'cancelled' ? 1 : 0,
+            'draft_wo_count' => WorkOrder::query()->where('mrp_plan_id', $plan->id)
+                ->where('status', WorkOrderStatus::Planned->value)->count(),
+            'diagnostics' => $diagnostics,
+            'generated_at' => now(),
+        ])->save();
     }
 
     private function children(array $nodes, WorkOrder $parent, User $actor): void
@@ -200,12 +389,13 @@ final class StockProductionPlanningService
                 $child = app(WorkOrderService::class)->createDraft([
                     'product_id' => $node['product_id'], 'quantity_target' => $target,
                     'planned_start' => $parent->planned_start, 'planned_end' => $parent->planned_end,
-                    'parent_wo_id' => $parent->id, 'production_purpose' => 'stock', 'created_by' => $actor->id,
+                    'parent_wo_id' => $parent->id, 'production_purpose' => 'stock',
+                    'mrp_plan_id' => $parent->mrp_plan_id, 'created_by' => $actor->id,
                 ]);
             }
             if ($child->status->value === 'planned' && ! $child->currentProductionSchedule()->exists()
                 && ! $child->materials()->where('actual_quantity_issued', '>', 0)->exists()) {
-                $child->forceFill(['quantity_target' => $target])->save();
+                $child->forceFill(['quantity_target' => $target, 'mrp_plan_id' => $parent->mrp_plan_id])->save();
                 app(WorkOrderService::class)->reconcilePlannedMaterialPlan($child);
                 $this->children($node['children'], $child, $actor);
             } elseif ((int) $child->quantity_target !== $target) {
@@ -224,5 +414,18 @@ final class StockProductionPlanningService
             $this->retireUntouched($descendant);
         }
         app(WorkOrderService::class)->cancel($child, 'Untouched subassembly no longer required by its stock production plan.');
+    }
+
+    public function cancelCustomerRequestPlan(CustomerProductionRequest $request, string $reason): void
+    {
+        DB::statement('SELECT pg_advisory_xact_lock(20261009, 1)');
+        $plan = MrpPlan::query()->where('customer_production_request_id', $request->id)
+            ->where('status', MrpPlanStatus::Active->value)->lockForUpdate()->first();
+        if (! $plan) return;
+        $root = WorkOrder::query()->where('mrp_plan_id', $plan->id)->whereNull('parent_wo_id')->lockForUpdate()->first();
+        if ($root && $root->status !== WorkOrderStatus::Cancelled) {
+            app(WorkOrderService::class)->cancel($root, $reason);
+        }
+        $plan->forceFill(['status' => MrpPlanStatus::Cancelled->value])->save();
     }
 }

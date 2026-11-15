@@ -19,6 +19,12 @@ class MrpPlanResource extends JsonResource
         return [
             'id' => $this->hash_id,
             'mrp_plan_no' => $this->mrp_plan_no,
+            'source_type' => match (true) {
+                $this->sales_order_id !== null => 'sales_order',
+                $this->customer_production_request_id !== null => 'customer_production_request',
+                $this->stock_production_work_order_id !== null => 'stock_production_work_order',
+                default => null,
+            },
             'sales_order' => $this->whenLoaded('salesOrder', fn () => $this->salesOrder ? [
                 'id' => $this->salesOrder->hash_id,
                 'so_number' => $this->salesOrder->so_number,
@@ -26,6 +32,26 @@ class MrpPlanResource extends JsonResource
                 'customer' => $this->salesOrder->relationLoaded('customer') && $this->salesOrder->customer
                     ? ['id' => $this->salesOrder->customer->hash_id, 'name' => $this->salesOrder->customer->name]
                     : null,
+            ] : null),
+            'customer_production_request' => $this->whenLoaded('customerProductionRequest', fn () => $this->customerProductionRequest ? [
+                'id' => $this->customerProductionRequest->hash_id,
+                'request_number' => $this->customerProductionRequest->request_number ?? null,
+                'status' => $this->customerProductionRequest->status?->value ?? (string) $this->customerProductionRequest->status,
+                'requested_quantity' => (int) $this->customerProductionRequest->requested_quantity,
+                'requested_need_by_date' => optional($this->customerProductionRequest->requested_need_by_date)->toDateString(),
+                'customer' => $this->customerProductionRequest->relationLoaded('customer') && $this->customerProductionRequest->customer
+                    ? ['id' => $this->customerProductionRequest->customer->hash_id, 'name' => $this->customerProductionRequest->customer->name]
+                    : null,
+            ] : null),
+            'stock_production_work_order' => $this->whenLoaded('stockProductionWorkOrder', fn () => $this->stockProductionWorkOrder ? [
+                'id' => $this->stockProductionWorkOrder->hash_id,
+                'wo_number' => $this->stockProductionWorkOrder->wo_number,
+                'product' => $this->stockProductionWorkOrder->relationLoaded('product') && $this->stockProductionWorkOrder->product
+                    ? ['id' => $this->stockProductionWorkOrder->product->hash_id, 'name' => $this->stockProductionWorkOrder->product->name,
+                        'part_number' => $this->stockProductionWorkOrder->product->part_number]
+                    : null,
+                'quantity_target' => (int) $this->stockProductionWorkOrder->quantity_target,
+                'status' => $this->stockProductionWorkOrder->status?->value,
             ] : null),
             'version' => (int) $this->version,
             'status' => (string) $this->status?->value,

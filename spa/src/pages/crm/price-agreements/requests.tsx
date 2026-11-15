@@ -377,14 +377,6 @@ export default function PricingRequestsPage() {
                   {selected.notes}
                 </p>
               )}
-              {selected.order_limit_increase_request && (
-                <div className="mt-3 rounded-md border border-warning/40 bg-warning/5 p-3 text-sm">
-                  <p className="font-medium text-warning-fg">Customer requested a higher per-order limit</p>
-                  <p className="mt-1 text-secondary">
-                    Current maximum: {formatQuantity(selected.order_limit_increase_request.current_maximum_quantity)} {selected.product.unit_of_measure}. Requested quantity: {formatQuantity(selected.order_limit_increase_request.requested_quantity)} {selected.product.unit_of_measure}. The account limit stays unchanged until Customer Product Access is updated.
-                  </p>
-                </div>
-              )}
             </Panel>
             {mode === 'review' && costReview.isFetching && (
               <p role="status" className="text-sm text-muted">

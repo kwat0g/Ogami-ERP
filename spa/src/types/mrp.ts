@@ -182,7 +182,20 @@ export interface MrpPlanWarningDiagnostic {
   message: string;
 }
 
-export type MrpPlanDiagnostic = MrpMaterialDiagnostic | MrpPlanWarningDiagnostic;
+export interface MrpStockProductionDiagnostic {
+  kind: 'stock_production_plan' | 'material_shortage';
+  type: string;
+  work_order_id?: string;
+  quantity_target?: number;
+  material_line_count?: number;
+  subassembly_count?: number;
+  item_id?: string;
+  item_code?: string;
+  item_name?: string;
+  quantity?: string;
+}
+
+export type MrpPlanDiagnostic = MrpMaterialDiagnostic | MrpPlanWarningDiagnostic | MrpStockProductionDiagnostic;
 
 export interface MrpPlanCostSummary {
   material_cost: string;
@@ -203,7 +216,10 @@ export interface MrpPlanCostSummary {
 export interface MrpPlan {
   id: string;
   mrp_plan_no: string;
+  source_type?: 'sales_order' | 'customer_production_request' | 'stock_production_work_order' | null;
   sales_order?: { id: string; so_number: string; status?: string; customer?: { id: string; name: string } | null };
+  customer_production_request?: { id: string; request_number: string; status: string; requested_quantity: number; requested_need_by_date: string | null; customer?: { id: string; name: string } | null } | null;
+  stock_production_work_order?: { id: string; wo_number: string; quantity_target: number; status: string; product?: { id: string; name: string; part_number: string } | null } | null;
   version: number;
   status: MrpPlanStatus;
   status_label?: string;

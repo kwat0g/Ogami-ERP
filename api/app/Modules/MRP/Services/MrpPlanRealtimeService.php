@@ -9,6 +9,7 @@ use App\Modules\Auth\Models\User;
 use App\Modules\CRM\Models\SalesOrder;
 use App\Modules\MRP\Events\MrpPlanChanged;
 use App\Modules\MRP\Models\MrpPlan;
+use App\Modules\Production\Models\WorkOrder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -24,17 +25,30 @@ final class MrpPlanRealtimeService
             ? (string) DB::scalar('select txid_current()')
             : (string) Str::uuid();
         $actor = auth()->user();
-        $salesOrderHashId = SalesOrder::query()->find($plan->sales_order_id)?->hash_id;
-        if (! is_string($salesOrderHashId) || $salesOrderHashId === '') {
-            throw new \RuntimeException("Cannot stage an MRP plan refresh for missing sales order {$plan->sales_order_id}.");
+        [$sourceType, $sourceHashId] = match (true) {
+            $plan->sales_order_id !== null => ['sales_order', SalesOrder::query()->find($plan->sales_order_id)?->hash_id],
+            $plan->customer_production_request_id !== null => [
+                'customer_production_request',
+                \App\Modules\CRM\Models\CustomerProductionRequest::query()->find($plan->customer_production_request_id)?->hash_id,
+            ],
+            $plan->stock_production_work_order_id !== null => [
+                'work_order',
+                WorkOrder::query()->find($plan->stock_production_work_order_id)?->hash_id,
+            ],
+            default => [null, null],
+        };
+        if (! is_string($sourceHashId) || $sourceHashId === '') {
+            throw new \RuntimeException("Cannot stage an MRP plan refresh for missing source on plan {$plan->mrp_plan_no}.");
         }
 
         app(OutboxService::class)->recordCoalesced(new MrpPlanChanged(
             planHashId: (string) $plan->hash_id,
-            salesOrderHashId: $salesOrderHashId,
+            salesOrderHashId: $plan->sales_order_id !== null ? $sourceHashId : null,
             action: $action,
             version: $version,
             actorHashId: $actor instanceof User ? (string) $actor->hash_id : null,
+            sourceEntityType: $plan->sales_order_id !== null ? null : $sourceType,
+            sourceEntityHashId: $plan->sales_order_id !== null ? null : $sourceHashId,
         ), "mrp-plan-refresh:{$plan->getKey()}:{$transactionId}");
     }
 }

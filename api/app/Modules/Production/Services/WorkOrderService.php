@@ -358,6 +358,12 @@ class WorkOrderService
             $lockedWo->assertFinishFirstRoutingCompatible();
             $from = $lockedWo->status?->value ?? 'planned';
 
+            $customerRequestId = $lockedWo->mrpPlan()->value('customer_production_request_id');
+            if ($customerRequestId !== null
+                && ! in_array(\App\Modules\CRM\Models\CustomerProductionRequest::query()->whereKey($customerRequestId)->value('status'), ['accepted', 'in_production'], true)) {
+                throw new BusinessRuleException('The customer must accept the offered ready date before PPC can confirm this work order.');
+            }
+
             $targetMachineId = $machineId ?? $lockedWo->machine_id;
             $targetMoldId = $moldId ?? $lockedWo->mold_id;
             $machine = $targetMachineId
@@ -420,6 +426,9 @@ class WorkOrderService
 
             return $confirmed;
         });
+
+        app(\App\Modules\CRM\Services\CustomerProductionRequestService::class)
+            ->markWorkOrderConfirmed($result, auth()->user());
 
         return $result;
     }

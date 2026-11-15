@@ -25,6 +25,7 @@ import type {
 
 const isWarningDiagnostic = (row: MrpPlanDiagnostic): row is MrpPlanWarningDiagnostic =>
   'kind' in row && row.kind === 'warning';
+const isMaterialDiagnostic = (row: MrpPlanDiagnostic): row is MrpMaterialDiagnostic => !('kind' in row);
 
 export default function MrpPlanDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -58,10 +59,8 @@ export default function MrpPlanDetailPage() {
   });
 
   const summary = useMemo(() => {
-    if (!data) return null;
-    const d = data.diagnostics.filter(
-      (row): row is MrpMaterialDiagnostic => !isWarningDiagnostic(row),
-    );
+    if (!data || (data.source_type && data.source_type !== 'sales_order')) return null;
+    const d = data.diagnostics.filter(isMaterialDiagnostic);
     return {
       totalDemand: d.reduce((s, r) => s + r.gross, 0),
       shortageCount: d.filter((r) => r.net > 0).length,
@@ -117,11 +116,13 @@ export default function MrpPlanDetailPage() {
             </Chip>
           </div>
         }
-        subtitle={data.sales_order ? `for ${data.sales_order.so_number}` : undefined}
+        subtitle={data.sales_order ? `for Sales Order ${data.sales_order.so_number}`
+          : data.customer_production_request ? `for production request ${data.customer_production_request.request_number}`
+            : data.stock_production_work_order ? `for stock production ${data.stock_production_work_order.wo_number}` : undefined}
         backTo="/mrp/plans"
         backLabel="Plans"
         actions={<div className="flex gap-2">{data.sales_order && data.sales_order.status === 'confirmed' && (can('production.wo.confirm') || can('production.schedule.confirm')) && <Button variant="secondary" onClick={() => setReviewFulfillment(true)}>Review fulfillment</Button>}{
-          can('mrp.plans.run') ? (
+          can('mrp.plans.run') && (data.source_type !== 'customer_production_request' || data.customer_production_request?.status === 'planning') ? (
             <Button
               variant="primary"
               size="sm"
@@ -137,6 +138,17 @@ export default function MrpPlanDetailPage() {
 
       {reviewFulfillment && data.sales_order && <FulfillmentDialog orderId={data.sales_order.id} onClose={() => setReviewFulfillment(false)} />}
       <div className="space-y-4 px-5 py-4">
+        {data.source_type && data.source_type !== 'sales_order' && <Panel title="Plan source">
+          {data.customer_production_request ? <div className="space-y-2 text-sm">
+            <p>This plan exists for customer request <Link className="font-mono text-accent underline" to={`/crm/customer-production-requests/${data.customer_production_request.id}`}>{data.customer_production_request.request_number}</Link>.</p>
+            {data.customer_production_request.customer && <p>Customer: {data.customer_production_request.customer.name}</p>}
+            <p>Exact make quantity: <span className="font-mono">{formatQuantity(data.customer_production_request.requested_quantity)}</span> · Need by {data.customer_production_request.requested_need_by_date ?? '—'}</p>
+          </div> : data.stock_production_work_order ? <div className="space-y-2 text-sm">
+            <p>Internal stock production is rooted in work order <Link className="font-mono text-accent underline" to={`/production/work-orders/${data.stock_production_work_order.id}`}>{data.stock_production_work_order.wo_number}</Link>.</p>
+            <p>{data.stock_production_work_order.product?.part_number} · {data.stock_production_work_order.product?.name}</p>
+            <p>Exact make quantity: <span className="font-mono">{formatQuantity(data.stock_production_work_order.quantity_target)}</span></p>
+          </div> : <p className="text-sm text-muted">Source details are unavailable.</p>}
+        </Panel>}
         {data.status === 'active' && summary?.legacySafetyStockDiagnostics && (
           <div
             role="status"
@@ -195,7 +207,7 @@ export default function MrpPlanDetailPage() {
             </div>
           </div>
         )}
-        <Panel title="Diagnostics" meta={`${data.diagnostics.length} materials`} noPadding>
+        {data.source_type === 'sales_order' || !data.source_type ? <Panel title="Diagnostics" meta={`${data.diagnostics.length} materials`} noPadding>
           {data.diagnostics.length === 0 ? (
             <div className="p-4 text-sm text-muted">No materials evaluated (no active BOM).</div>
           ) : (
@@ -242,7 +254,7 @@ export default function MrpPlanDetailPage() {
                           <div className="text-warning-fg">{d.message}</div>
                         </Td>
                       </tr>
-                    ) : (
+                    ) : isMaterialDiagnostic(d) ? (
                       <tr key={d.item_id} className={trCls}>
                         <Td mono className="whitespace-nowrap">
                           {d.item_code}
@@ -308,13 +320,21 @@ export default function MrpPlanDetailPage() {
                           </div>
                         </Td>
                       </tr>
-                    ),
+                    ) : <tr key={`stock-${index}`} className={trCls}><Td colSpan={11}><div className="text-muted">{d.type.replaceAll('_', ' ')}</div></Td></tr>,
                   )}
                 </tbody>
               </table>
             </div>
           )}
-        </Panel>
+        </Panel> : <Panel title="Production diagnostics" meta={`${data.diagnostics.length} records`}>
+          <div className="space-y-2 text-sm">
+            {data.diagnostics.map((diagnostic, index) => 'kind' in diagnostic && diagnostic.kind === 'material_shortage' ? <div key={`${diagnostic.kind}-${diagnostic.item_id}-${index}`} className="flex flex-wrap justify-between gap-3 rounded-md border border-warning bg-warning-bg p-3 text-warning-fg">
+              <span><span className="font-mono">{diagnostic.item_code ?? diagnostic.item_name ?? 'Material'}</span> shortage</span><span className="font-mono">{formatQuantity(Number(diagnostic.quantity ?? 0))}</span>
+            </div> : 'kind' in diagnostic && diagnostic.kind === 'stock_production_plan' ? <div key={`${diagnostic.kind}-${index}`} className="rounded-md border border-default bg-canvas p-3">
+              <p className="font-medium">Exact stock production quantity retained</p><p className="mt-1 text-muted">{formatQuantity(diagnostic.quantity_target ?? 0)} finished pieces · {diagnostic.material_line_count ?? 0} material lines · {diagnostic.subassembly_count ?? 0} subassemblies</p>
+            </div> : <div key={`other-${index}`} className="rounded-md border border-default p-3 text-muted">{'type' in diagnostic ? diagnostic.type.replaceAll('_', ' ') : 'Planning diagnostic'}</div>)}
+          </div>
+        </Panel>}
 
         <div className="grid gap-4 xl:grid-cols-2">
           {data.cost_summary && (

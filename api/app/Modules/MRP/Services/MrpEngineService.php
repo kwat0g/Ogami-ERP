@@ -773,6 +773,26 @@ class MrpEngineService
 
     public function rerun(MrpPlan $plan, ?int $userId = null): MrpPlan
     {
+        if ($plan->customer_production_request_id !== null || $plan->stock_production_work_order_id !== null) {
+            if ($plan->customer_production_request_id !== null
+                && \App\Modules\CRM\Models\CustomerProductionRequest::query()
+                    ->whereKey($plan->customer_production_request_id)->where('status', '!=', 'planning')->exists()) {
+                throw new BusinessRuleException('Customer-request MRP cannot be changed after Ogami has offered a ready date or the customer has accepted it. Review the customer request before making a new plan.');
+            }
+            $root = $plan->stock_production_work_order_id !== null
+                ? WorkOrder::query()->findOrFail($plan->stock_production_work_order_id)
+                : WorkOrder::query()->where('mrp_plan_id', $plan->id)->whereNull('parent_wo_id')->firstOrFail();
+            if ($root->status !== WorkOrderStatus::Planned || $root->currentProductionSchedule()->exists()
+                || $root->materials()->where('actual_quantity_issued', '>', 0)->exists()) {
+                throw new BusinessRuleException('This stock plan has production commitments. Review the committed work before rerunning MRP.');
+            }
+            $actor = $userId ? User::query()->findOrFail($userId) : User::query()->findOrFail((int) $root->created_by);
+            app(\App\Modules\Production\Services\StockProductionPlanningService::class)->reconcile($root, $actor);
+            $result = $this->show($plan->fresh());
+            $result->setAttribute('rerun_outcome', 'updated');
+
+            return $result;
+        }
         $salesOrder = $plan->salesOrder()->firstOrFail();
         $run = $this->runForActiveSalesOrders(
             MrpRunTrigger::Manual,
@@ -1028,7 +1048,13 @@ class MrpEngineService
     public function list(array $filters): LengthAwarePaginator
     {
         $q = MrpPlan::query()
-            ->with(['salesOrder:id,so_number,customer_id,status', 'salesOrder.customer:id,name', 'generator:id,name,role_id']);
+            ->with([
+                'salesOrder:id,so_number,customer_id,status', 'salesOrder.customer:id,name',
+                'stockProductionWorkOrder:id,wo_number,product_id,quantity_target,status',
+                'stockProductionWorkOrder.product:id,part_number,name',
+                'customerProductionRequest.customer:id,name',
+                'generator:id,name,role_id',
+            ]);
 
         if (! empty($filters['status'])) {
             $q->where('status', $filters['status']);
@@ -1037,6 +1063,25 @@ class MrpEngineService
             $sid = HashIdFilter::decode($filters['sales_order_id'], SalesOrder::class);
             if ($sid) {
                 $q->where('sales_order_id', $sid);
+            }
+        }
+        if (($filters['source_type'] ?? null) === 'stock_production_work_order') {
+            $q->whereNotNull('stock_production_work_order_id');
+        } elseif (($filters['source_type'] ?? null) === 'customer_production_request') {
+            $q->whereNotNull('customer_production_request_id');
+        } elseif (($filters['source_type'] ?? null) === 'sales_order') {
+            $q->whereNotNull('sales_order_id');
+        }
+        if (! empty($filters['stock_production_work_order_id'])) {
+            $workOrderId = HashIdFilter::decode($filters['stock_production_work_order_id'], WorkOrder::class);
+            if ($workOrderId) {
+                $q->where('stock_production_work_order_id', $workOrderId);
+            }
+        }
+        if (! empty($filters['customer_production_request_id'])) {
+            $requestId = HashIdFilter::decode($filters['customer_production_request_id'], \App\Modules\CRM\Models\CustomerProductionRequest::class);
+            if ($requestId) {
+                $q->where('customer_production_request_id', $requestId);
             }
         }
 
@@ -1048,6 +1093,8 @@ class MrpEngineService
     {
         return $plan->load([
             'salesOrder.customer:id,name',
+            'stockProductionWorkOrder.product:id,part_number,name',
+            'customerProductionRequest.customer:id,name',
             'generator:id,name,role_id',
             'workOrders:id,wo_number,product_id,quantity_target,status,planned_start,planned_end,preferred_production_date,mrp_plan_id,parent_wo_id',
             'workOrders.parent:id,wo_number',

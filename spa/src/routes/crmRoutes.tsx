@@ -17,6 +17,9 @@ const SalesOrdersListPage = lazy(() => import('@/pages/crm/sales-orders'));
 const CreateSalesOrderPage = lazy(() => import('@/pages/crm/sales-orders/create'));
 const EditSalesOrderPage = lazy(() => import('@/pages/crm/sales-orders/edit'));
 const SalesOrderDetailPage = lazy(() => import('@/pages/crm/sales-orders/detail'));
+const CustomerProductionRequestsListPage = lazy(() => import('@/pages/crm/customer-production-requests'));
+const CustomerProductionRequestDetailPage = lazy(() => import('@/pages/crm/customer-production-requests/detail'));
+const CustomerOrderLimitIncreaseRequestsPage = lazy(() => import('@/pages/crm/customer-order-limit-increase-requests'));
 
 // Task 1 — CRM customer master
 const CrmCustomersListPage = lazy(() => import('@/pages/crm/customers'));
@@ -202,6 +205,9 @@ export const crmRoutes = (
           </PermissionGuard>
         }
       />
+      <Route path="/crm/customer-production-requests" element={<PermissionGuard anyOf={['crm.sales_orders.view', 'mrp.plans.view', 'production.wo.view']}><CustomerProductionRequestsListPage /></PermissionGuard>} />
+      <Route path="/crm/customer-production-requests/:id" element={<PermissionGuard anyOf={['crm.sales_orders.view', 'mrp.plans.view', 'production.wo.view']}><CustomerProductionRequestDetailPage /></PermissionGuard>} />
+      <Route path="/crm/order-limit-increase-requests" element={<PermissionGuard permission="accounting.customers.view"><CustomerOrderLimitIncreaseRequestsPage /></PermissionGuard>} />
 
       {/* Sprint 7 Task 68 — customer complaints + 8D */}
       <Route

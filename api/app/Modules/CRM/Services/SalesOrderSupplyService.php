@@ -9,6 +9,7 @@ use App\Modules\Auth\Models\User;
 use App\Modules\CRM\Models\SalesOrder;
 use App\Modules\CRM\Models\SalesOrderItem;
 use App\Modules\CRM\Models\SalesOrderStockAllocation;
+use App\Modules\CRM\Models\CustomerProductionRequestStockHold;
 use App\Modules\Inventory\Models\Item;
 use App\Modules\Inventory\Services\StockLocationSummaryService;
 use App\Modules\Inventory\Services\StockMovementService;
@@ -210,7 +211,7 @@ final class SalesOrderSupplyService
             'uncovered' => self::positive(bcsub((string) $line->quantity, $covered, 3))];
     }
 
-    public function sources(SalesOrderItem $line, bool $lock = false): array
+    public function sources(SalesOrderItem $line, bool $lock = false, ?int $includeCustomerRequestId = null): array
     {
         $line->loadMissing('product.inspectionSpec.currentRevision');
         $product = $line->product;
@@ -222,6 +223,12 @@ final class SalesOrderSupplyService
         $item = $items->first();
         $query = Inspection::where('product_id', $product->id)->where('stage', 'outgoing')->where('status', '!=', 'cancelled')
             ->whereHas('workOrderOutput.workOrder', fn ($q) => $q->where('production_purpose', 'stock')->whereNull('sales_order_id')->whereNull('parent_wo_id'))
+            ->whereDoesntHave('workOrderOutput.workOrder.mrpPlan.customerProductionRequest', function ($requests) use ($includeCustomerRequestId): void {
+                $requests->whereIn('status', ['planning', 'date_offered', 'accepted', 'in_production']);
+                if ($includeCustomerRequestId !== null) {
+                    $requests->where('id', '!=', $includeCustomerRequestId);
+                }
+            })
             ->with(['ncr', 'resultAuthors', 'workOrderOutput.workOrder', 'workOrderOutput.productionReceiptMovement'])->orderByDesc('id');
         if ($lock) {
             $query->lockForUpdate();
@@ -363,6 +370,10 @@ final class SalesOrderSupplyService
     {
         $sum = SalesOrderStockAllocation::where('item_id', $itemId)->where('location_id', $locationId)->where('lot_number', $lot)->get()
             ->reduce(fn ($sum, $allocation) => bcadd($sum, $allocation->untransferredQuantity(), 3), '0.000');
+
+        $sum = CustomerProductionRequestStockHold::query()->where('item_id', $itemId)->where('location_id', $locationId)
+            ->where('lot_number', $lot)->where('status', 'held')->get()
+            ->reduce(fn ($sum, $hold) => bcadd($sum, $hold->untransferredQuantity(), 3), $sum);
 
         return DeliveryStockReservation::where('item_id', $itemId)->where('location_id', $locationId)->where('lot_number', $lot)->where('status', 'reserved')->get()
             ->reduce(fn ($sum, $hold) => bcadd($sum, $hold->remainingQuantity(), 3), $sum);

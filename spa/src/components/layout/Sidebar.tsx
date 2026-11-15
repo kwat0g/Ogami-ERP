@@ -298,6 +298,20 @@ export const SECTIONS: NavSection[] = [
         permission: 'crm.sales_orders.view',
         badgeKey: 'pending_so',
       },
+      {
+        to: '/crm/customer-production-requests',
+        label: 'Production Requests',
+        icon: RequestIcon,
+        feature: 'crm',
+        anyPermissions: ['crm.sales_orders.view', 'mrp.plans.view', 'production.wo.view'],
+      },
+      {
+        to: '/crm/order-limit-increase-requests',
+        label: 'Order Limit Requests',
+        icon: RequestIcon,
+        feature: 'crm',
+        permission: 'accounting.customers.view',
+      },
       // Customers deduped 2026-08-08: /accounting/customers and /crm/customers are
       // the SAME table + controller (Accounting CustomerController). One entry kept
       // under Sales & CRM, gated on accounting.customers.view (the shared backend

@@ -72,6 +72,8 @@ Route::middleware(['auth:sanctum', 'feature:mrp'])->prefix('mrp')->group(functio
     Route::post('/plans/{mrpPlan}/rerun',   [MrpPlanController::class, 'rerun'])->middleware('permission:mrp.plans.run');
     Route::get('/sales-orders/{salesOrder}/mrp-plan', [MrpPlanController::class, 'forSalesOrder'])
         ->middleware('permission:mrp.plans.view');
+    Route::get('/stock-work-orders/{workOrder}/mrp-plan', [MrpPlanController::class, 'forStockWorkOrder'])
+        ->middleware('permission:mrp.plans.view');
 
     /* ─── Capacity scheduler (Task 53) ─── */
     Route::post('/scheduler/run',                    [SchedulerController::class, 'run']) ->middleware('permission:mrp.schedule');

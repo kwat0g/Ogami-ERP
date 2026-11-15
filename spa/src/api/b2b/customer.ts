@@ -19,6 +19,8 @@ import type {
  DeliveryScheduleLine,
  PortalReturnRequest,
  PortalReturnSourceOptions,
+ CustomerProductionRequest,
+ CustomerOrderLimitIncreaseRequest,
 } from '@/types/b2b';
 import type { PriceRequest } from '@/types/pricing';
 import type { ChainStep } from '@/types/chain';
@@ -36,9 +38,12 @@ type CustomerLoginResponse = {
 };
 
 export const customerPortalApi = {
+  orderLimitIncreaseRequests: (page = 1) => portalClient.get<PaginatedResponse<CustomerOrderLimitIncreaseRequest>>('/b2b/customer/order-limit-increase-requests', { params: { page } }).then(r => r.data),
+  createOrderLimitIncreaseRequest: (data: { product_id: string; requested_maximum_quantity: number; customer_notes?: string }) => portalClient.post<{ data: CustomerOrderLimitIncreaseRequest }>('/b2b/customer/order-limit-increase-requests', data).then(r => r.data.data),
+  cancelOrderLimitIncreaseRequest: (id: string, version: number) => portalClient.post<{ data: CustomerOrderLimitIncreaseRequest }>(`/b2b/customer/order-limit-increase-requests/${id}/cancel`, { version }).then(r => r.data.data),
   priceRequests: (page = 1, request?: string) => portalClient.get<PaginatedResponse<PriceRequest>>('/b2b/customer/price-requests', { params: { page, request } }).then(r => r.data),
   openPriceRequests: () => portalClient.get<{ data: Array<{ id: string; product_id: string; quantity: number; status: PriceRequest['status'] }> }>('/b2b/customer/price-requests/open').then(r => r.data.data),
-  requestPrice: (data: { product_id: string; quantity: number; requested_price: string; notes: string; request_order_limit_increase: boolean }) => portalClient.post<{ data: PriceRequest }>('/b2b/customer/price-requests', data).then(r => r.data.data),
+  requestPrice: (data: { product_id: string; quantity: number; requested_price: string; notes: string }) => portalClient.post<{ data: PriceRequest }>('/b2b/customer/price-requests', data).then(r => r.data.data),
   respondPrice: (id: string, decision: 'accept' | 'reject', version: number) => portalClient.post<{ data: PriceRequest }>(`/b2b/customer/price-requests/${id}/respond`, { decision, version }).then(r => r.data.data),
   cancelPriceRequest: (id: string, version: number) => portalClient.post<{ data: PriceRequest }>(`/b2b/customer/price-requests/${id}/cancel`, { version }).then(r => r.data.data),
  // ── Auth ──────────────────────────────────────────
@@ -100,18 +105,39 @@ export const customerPortalApi = {
  return data.data;
  },
 
+ listProductionRequests: async (params?: { status?: string; page?: number; per_page?: number }) => {
+  const { data } = await portalClient.get<PaginatedResponse<CustomerProductionRequest>>('/b2b/customer/production-requests', { params });
+  return data;
+ },
+
+ getProductionRequest: async (id: string) => {
+  const { data } = await portalClient.get<{ data: CustomerProductionRequest }>(`/b2b/customer/production-requests/${id}`);
+  return data.data;
+ },
+
+ createProductionRequest: async (form: { request_key: string; product_id: string; total_needed_quantity: number; requested_need_by_date: string; customer_notes?: string }) => {
+  const { data } = await portalClient.post<{ data: CustomerProductionRequest; message: string }>('/b2b/customer/production-requests', form);
+  return data;
+ },
+
+ decideProductionRequest: async (id: string, decision: 'accept' | 'decline' | 'cancel', reason?: string) => {
+  const { data } = await portalClient.post<{ data: CustomerProductionRequest }>(`/b2b/customer/production-requests/${id}/decision`, { decision, reason });
+  return data.data;
+ },
+
  listOrders: async (params?: { status?: string; search?: string; page?: number; per_page?: number }) => {
  const { data } = await portalClient.get<PaginatedResponse<PortalSoSummary>>('/b2b/customer/orders', { params });
  return data;
  },
 
- quoteOrder: async (form: { sales_order_id?: string; items: Array<{ product_id: string; quantity: string; delivery_date: string }> }) => {
+ quoteOrder: async (form: { sales_order_id?: string; production_request_id?: string; items: Array<{ product_id: string; quantity: string; delivery_date: string }> }) => {
   const { data } = await portalClient.post<{ data: PortalOrderQuote }>('/b2b/customer/orders/quote', form);
   return data.data;
  },
 
   createOrder: async (form: {
   quote_signature?: string;
+  production_request_id?: string;
   date?: string;
   notes?: string;
   payment_method?: 'cash' | 'check' | 'bank_transfer' | null;

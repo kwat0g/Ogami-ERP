@@ -15,10 +15,6 @@ export interface PriceRequest {
   customer: { id: string; name: string };
   quantity: number | null;
   requested_price: string | null;
-  order_limit_increase_request?: {
-    current_maximum_quantity: string;
-    requested_quantity: string;
-  } | null;
   notes: string;
   status:
     | 'requested'

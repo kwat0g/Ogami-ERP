@@ -23,6 +23,7 @@ class StorePortalOrderRequest extends FormRequest
     {
         return [
             'quote_signature' => ['sometimes', 'nullable', 'string', 'size:64'],
+            'production_request_id' => ['sometimes', 'nullable', 'string'],
             'idempotency_key' => ['required', 'string', 'max:128', 'regex:/\A[A-Za-z0-9._:-]+\z/'],
             'date' => ['sometimes', 'nullable', 'date'],
             'payment_method' => ['required', 'string', Rule::in(['cash', 'check', 'bank_transfer'])],

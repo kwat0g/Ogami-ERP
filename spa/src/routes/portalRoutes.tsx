@@ -43,6 +43,11 @@ const CustomerPricingPage = lazy(() => import('@/pages/portal/customer/pricing')
 const CustomerOrdersPage = lazy(() => import('@/pages/portal/customer/orders'));
 const CustomerPlaceOrderPage = lazy(() => import('@/pages/portal/customer/orders/new'));
 const CustomerOrderDetailPage = lazy(() => import('@/pages/portal/customer/orders/detail'));
+const CustomerProductionRequestsPage = lazy(() => import('@/pages/portal/customer/production-requests'));
+const CustomerProductionRequestDetailPage = lazy(() => import('@/pages/portal/customer/production-requests/detail'));
+const CustomerProductionRequestCreatePage = lazy(() => import('@/pages/portal/customer/production-requests/new'));
+const CustomerOrderLimitIncreaseRequestsPage = lazy(() => import('@/pages/portal/customer/order-limit-requests'));
+const CustomerOrderLimitIncreaseRequestCreatePage = lazy(() => import('@/pages/portal/customer/order-limit-requests/new'));
 const CustomerInvoicesPage = lazy(() => import('@/pages/portal/customer/invoices'));
 const CustomerInvoiceDetailPage = lazy(() => import('@/pages/portal/customer/invoices/detail'));
 const CustomerDeliveriesPage = lazy(() => import('@/pages/portal/customer/deliveries'));
@@ -137,6 +142,11 @@ export const portalRoutes = (
       <Route path="/portal/customer/pricing" element={<CustomerPricingPage />} />
       <Route path="/portal/customer/orders" element={<CustomerOrdersPage />} />
       <Route path="/portal/customer/orders/new" element={<CustomerPlaceOrderPage />} />
+      <Route path="/portal/customer/production-requests" element={<CustomerProductionRequestsPage />} />
+      <Route path="/portal/customer/production-requests/new" element={<CustomerProductionRequestCreatePage />} />
+      <Route path="/portal/customer/production-requests/:id" element={<CustomerProductionRequestDetailPage />} />
+      <Route path="/portal/customer/order-limit-requests" element={<CustomerOrderLimitIncreaseRequestsPage />} />
+      <Route path="/portal/customer/order-limit-requests/new" element={<CustomerOrderLimitIncreaseRequestCreatePage />} />
       <Route path="/portal/customer/orders/:id/edit" element={<CustomerPlaceOrderPage />} />
       <Route path="/portal/customer/orders/:id" element={<CustomerOrderDetailPage />} />
       <Route path="/portal/customer/invoices" element={<CustomerInvoicesPage />} />

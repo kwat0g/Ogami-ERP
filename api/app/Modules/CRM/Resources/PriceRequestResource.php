@@ -39,14 +39,8 @@ class PriceRequestResource extends JsonResource
         $canDecide = $portalUser !== null
             && (int) $portalUser->customer_id === (int) $this->customer_id
             && $status === 'offered';
-        $limitIncreaseRequest = collect($this->history ?? [])->firstWhere('action', 'order_limit_increase_requested');
-
         return ['id' => $this->hash_id, 'product' => ['id' => $this->product->hash_id, 'part_number' => $this->product->part_number, 'name' => $this->product->name, 'unit_of_measure' => $this->product->unit_of_measure],
             'customer' => ['id' => $this->customer->hash_id, 'name' => $this->customer->name], 'quantity' => $this->quantity, 'requested_price' => $this->requested_price,
-            'order_limit_increase_request' => $limitIncreaseRequest ? [
-                'current_maximum_quantity' => (string) $limitIncreaseRequest['data']['current_maximum_quantity'],
-                'requested_quantity' => (string) $limitIncreaseRequest['data']['requested_quantity'],
-            ] : null,
             'notes' => $this->notes, 'status' => $status, 'version' => $this->version,
             'permissions' => [
                 'view' => $portal

@@ -121,6 +121,8 @@ const CUSTOMER_NAV: PortalNavSection[] = [
     items: [
       { to: '/portal/customer/orders', label: 'Orders', icon: OrderIcon },
       { to: '/portal/customer/orders/new', label: 'Place Order', icon: LuPlus },
+      { to: '/portal/customer/production-requests', label: 'Production requests', icon: LuPackageCheck },
+      { to: '/portal/customer/order-limit-requests', label: 'Order limit requests', icon: LuPackageCheck },
       { to: '/portal/customer/pricing', label: 'Pricing agreements', icon: InvoiceIcon },
     ],
   },

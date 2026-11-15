@@ -61,8 +61,6 @@ class PriceNegotiationService
             if (! $by->customer->is_active || ! $product->isAvailableToCustomer($by->customer_id)) {
                 abort(404);
             }
-            $requestLimitIncrease = (bool) ($data['request_order_limit_increase'] ?? false);
-            $maximum = null;
             if (Schema::hasColumns('customer_product_access', ['minimum_order_quantity', 'maximum_order_quantity'])) {
                 $limits = DB::table('customer_product_access')
                     ->where('customer_id', $by->customer_id)
@@ -73,31 +71,17 @@ class PriceNegotiationService
                     (string) ($limits?->minimum_order_quantity ?? '1.000'),
                     $limits?->maximum_order_quantity === null ? null : (string) $limits->maximum_order_quantity,
                     (string) $product->unit_of_measure,
-                    allowAboveMaximum: $requestLimitIncrease,
                 );
-                $maximum = $limits?->maximum_order_quantity === null ? null : (string) $limits->maximum_order_quantity;
                 if ($quantityError !== null) {
                     throw ValidationException::withMessages(['quantity' => [$quantityError]]);
                 }
             }
-            $limitIncreaseRequested = $requestLimitIncrease
-                && $maximum !== null
-                && bccomp((string) $data['quantity'], $maximum, 3) > 0;
             $this->assertNoOpen($by->customer_id, $product->id);
             $row = PriceRequest::create(['customer_id' => $by->customer_id, 'product_id' => $product->id, 'requested_by' => $by->id,
                 'quantity' => $data['quantity'], 'requested_price' => $data['requested_price'] ?? null, 'notes' => $data['notes'], 'status' => Status::Requested]);
-            if ($limitIncreaseRequested) {
-                $this->history($row, 'order_limit_increase_requested', [
-                    'current_maximum_quantity' => $maximum,
-                    'requested_quantity' => (string) $data['quantity'],
-                ], $by->hash_id);
-                $row->save();
-            }
             $this->notice(
                 $row,
-                $limitIncreaseRequested
-                    ? 'Customer requested discount pricing and review of a higher per-order limit.'
-                    : 'Customer requested discount pricing.',
+                'Customer requested discount pricing.',
                 ['sales_officer', 'customer_service_officer'],
                 portalActor: $by,
             );

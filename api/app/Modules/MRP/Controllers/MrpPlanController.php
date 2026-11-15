@@ -9,6 +9,7 @@ use App\Modules\MRP\Enums\MrpPlanStatus;
 use App\Modules\MRP\Models\MrpPlan;
 use App\Modules\MRP\Resources\MrpPlanResource;
 use App\Modules\MRP\Services\MrpEngineService;
+use App\Modules\Production\Models\WorkOrder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -49,6 +50,26 @@ class MrpPlanController
             ->where('status', 'active')
             ->orderByDesc('version')
             ->first();
+        if (! $plan) {
+            return response()->json(['data' => null]);
+        }
+
+        return new MrpPlanResource($this->engine->show($plan));
+    }
+
+    /** GET /stock-work-orders/{workOrder}/mrp-plan — returns active plan or null. */
+    public function forStockWorkOrder(WorkOrder $workOrder): MrpPlanResource|JsonResponse
+    {
+        abort_unless($workOrder->production_purpose === 'stock' && $workOrder->parent_wo_id === null, 404);
+        $plan = MrpPlan::where('status', 'active')
+            ->where(function ($query) use ($workOrder): void {
+                $query->where('stock_production_work_order_id', $workOrder->id)
+                    ->orWhere(function ($requestPlan) use ($workOrder): void {
+                        $requestPlan->where('id', $workOrder->mrp_plan_id)
+                            ->whereNotNull('customer_production_request_id');
+                    });
+            })
+            ->orderByDesc('version')->first();
         if (! $plan) {
             return response()->json(['data' => null]);
         }

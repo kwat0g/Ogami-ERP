@@ -26,12 +26,14 @@ final class MrpPlanChanged implements ShouldBroadcast, ShouldDispatchAfterCommit
 
     public function __construct(
         public string $planHashId,
-        public string $salesOrderHashId,
+        public ?string $salesOrderHashId,
         public string $action,
         public string $version,
         public ?string $actorHashId = null,
         ?string $eventId = null,
         ?string $timestamp = null,
+        public ?string $sourceEntityType = null,
+        public ?string $sourceEntityHashId = null,
     ) {
         $this->eventId = $eventId ?? (string) Str::uuid();
         $this->timestamp = $timestamp ?? now()->toISOString();
@@ -54,6 +56,9 @@ final class MrpPlanChanged implements ShouldBroadcast, ShouldDispatchAfterCommit
     /** @return array<string, mixed> */
     public function broadcastWith(): array
     {
+        $sourceHashId = $this->sourceEntityHashId ?? $this->salesOrderHashId;
+        $sourceType = $this->sourceEntityType ?? 'sales_order';
+
         return BroadcastEventEnvelope::refresh(
             $this->eventId,
             'mrp_plan',
@@ -62,7 +67,7 @@ final class MrpPlanChanged implements ShouldBroadcast, ShouldDispatchAfterCommit
             $this->version,
             $this->actorHashId,
             $this->timestamp,
-            [['entity_type' => 'sales_order', 'hash_id' => $this->salesOrderHashId]],
+            $sourceHashId ? [['entity_type' => $sourceType, 'hash_id' => $sourceHashId]] : [],
         ) + ['hash_id' => $this->planHashId];
     }
 }

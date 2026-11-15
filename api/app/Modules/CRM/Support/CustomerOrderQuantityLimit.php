@@ -6,13 +6,13 @@ namespace App\Modules\CRM\Support;
 
 final class CustomerOrderQuantityLimit
 {
-    public static function error(string $quantity, string $minimum, ?string $maximum, string $unit, bool $allowAboveMaximum = false): ?string
+    public static function error(string $quantity, string $minimum, ?string $maximum, string $unit): ?string
     {
         if (bccomp($quantity, $minimum, 3) < 0) {
             return 'Minimum order quantity is '.self::display($minimum).' '.$unit.'.';
         }
 
-        if (! $allowAboveMaximum && $maximum !== null && bccomp($quantity, $maximum, 3) > 0) {
+        if ($maximum !== null && bccomp($quantity, $maximum, 3) > 0) {
             return 'Maximum order quantity is '.self::display($maximum).' '.$unit.'.';
         }
 

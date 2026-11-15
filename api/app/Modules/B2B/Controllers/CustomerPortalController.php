@@ -15,6 +15,7 @@ use App\Modules\B2B\Requests\Customer\CustomerStoreDeliveryScheduleRequest;
 use App\Modules\B2B\Requests\Customer\RespondToSalesOrderRequest;
 use App\Modules\B2B\Requests\Customer\StoreCustomerReturnRequest;
 use App\Modules\B2B\Requests\Customer\StorePortalOrderRequest;
+use App\Modules\B2B\Requests\Customer\StoreCustomerProductionRequest;
 use App\Modules\B2B\Requests\Customer\UpdatePortalOrderRequest;
 use App\Modules\B2B\Resources\CustomerDeliveryResource;
 use App\Modules\B2B\Resources\CustomerPortalComplaintResource;
@@ -25,10 +26,13 @@ use App\Modules\B2B\Services\CustomerPortalService;
 use App\Modules\CRM\Enums\ComplaintStatus;
 use App\Modules\CRM\Enums\SalesOrderStatus;
 use App\Modules\CRM\Models\CustomerComplaint;
+use App\Modules\CRM\Models\CustomerProductionRequest;
 use App\Modules\CRM\Models\SalesOrder;
 use App\Modules\CRM\Models\SalesOrderResponse;
 use App\Modules\CRM\Resources\SalesOrderResource;
 use App\Modules\CRM\Resources\SalesOrderResponseResource;
+use App\Modules\CRM\Resources\CustomerProductionRequestResource;
+use App\Modules\CRM\Services\CustomerProductionRequestService;
 use App\Modules\CRM\Services\SalesOrderResponseService;
 use App\Modules\Quality\Enums\NcrSeverity;
 use App\Modules\ReturnManagement\Models\ReturnRequest;
@@ -102,6 +106,7 @@ class CustomerPortalController extends Controller
     {
         $data = $request->validate([
             'sales_order_id' => ['nullable', 'string'],
+            'production_request_id' => ['nullable', 'string'],
             'items' => ['required', 'array', 'min:1'],
             'items.*.product_id' => ['required', 'string', 'distinct'],
             'items.*.quantity' => ['required', 'numeric', 'min:1', 'regex:/\A[0-9]+(?:\.0+)?\z/'],
@@ -121,6 +126,43 @@ class CustomerPortalController extends Controller
             'data' => new SalesOrderResource($result['order']),
             'message' => 'Order submitted. It will be confirmed by our sales team.',
         ], $result['replayed'] ? 200 : 201);
+    }
+
+    public function productionRequests(Request $request): AnonymousResourceCollection
+    {
+        $filters = $request->validate([
+            'status' => ['sometimes', 'nullable', 'in:requested,planning,date_offered,accepted,in_production,ready_to_order,converted,declined,cancelled,expired'],
+            'per_page' => ['sometimes', 'integer', 'between:1,100'],
+        ]);
+        return CustomerProductionRequestResource::collection(app(CustomerProductionRequestService::class)
+            ->portalList((int) $this->user($request)->customer_id, $filters));
+    }
+
+    public function storeProductionRequest(StoreCustomerProductionRequest $request): JsonResponse
+    {
+        $user = $this->user($request);
+        $result = app(CustomerProductionRequestService::class)->createForPortal(
+            (int) $user->customer_id, $user, $request->validated(),
+        );
+        return response()->json([
+            'data' => new CustomerProductionRequestResource($result['request']),
+            'message' => 'Production request submitted. It is not a Sales Order and the requested date is not yet promised.',
+        ], $result['replayed'] ? 200 : 201);
+    }
+
+    public function productionRequestShow(CustomerProductionRequest $customerProductionRequest, Request $request): CustomerProductionRequestResource
+    {
+        return new CustomerProductionRequestResource(app(CustomerProductionRequestService::class)
+            ->portalShow((int) $this->user($request)->customer_id, $customerProductionRequest));
+    }
+
+    public function productionRequestDecision(CustomerProductionRequest $customerProductionRequest, Request $request): CustomerProductionRequestResource
+    {
+        $data = $request->validate(['decision' => ['required', 'in:accept,decline,cancel'], 'reason' => ['nullable', 'string', 'max:500']]);
+        return new CustomerProductionRequestResource(app(CustomerProductionRequestService::class)->portalRespond(
+            (int) $this->user($request)->customer_id, $this->user($request), $customerProductionRequest,
+            $data['decision'], $data['reason'] ?? null,
+        ));
     }
 
     public function updateOrder(UpdatePortalOrderRequest $request, SalesOrder $salesOrder): SalesOrderResource

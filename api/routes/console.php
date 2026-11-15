@@ -27,6 +27,11 @@ Schedule::command('production:notify-upcoming-work-orders')
     ->withoutOverlapping(5)
     ->onOneServer();
 
+Schedule::command('customer-production-requests:expire-holds --limit=200')
+    ->everyMinute()
+    ->withoutOverlapping(5)
+    ->onOneServer();
+
 Schedule::command('purchasing:close-due-rfqs')
     ->everyMinute()
     ->withoutOverlapping(5)
