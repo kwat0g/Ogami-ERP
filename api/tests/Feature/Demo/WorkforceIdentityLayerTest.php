@@ -55,12 +55,12 @@ class WorkforceIdentityLayerTest extends TestCase
         $runner = app(DemoSeedRunner::class);
         $runner->run($options);
 
-        $this->assertSame(20, Employee::query()->count());
-        $this->assertSame(20, User::query()->count());
-        $this->assertSame(20, EmploymentHistory::query()->count());
-        $this->assertSame(20, EmployeeOnboarding::query()->count());
-        $this->assertSame(20, EmployeeOnboarding::query()->whereNotNull('account_provisioned_at')->count());
-        $this->assertSame(20, DB::table('event_outbox')->where('event_type', 'App\\Modules\\HR\\Events\\EmployeeCreated')->count());
+        $this->assertSame(21, Employee::query()->count());
+        $this->assertSame(21, User::query()->count());
+        $this->assertSame(21, EmploymentHistory::query()->count());
+        $this->assertSame(21, EmployeeOnboarding::query()->count());
+        $this->assertSame(21, EmployeeOnboarding::query()->whereNotNull('account_provisioned_at')->count());
+        $this->assertSame(21, DB::table('event_outbox')->where('event_type', 'App\\Modules\\HR\\Events\\EmployeeCreated')->count());
         $this->assertSame(17, Role::query()->count());
 
         foreach (Employee::query()->with('user.role')->get() as $employee) {
@@ -84,11 +84,11 @@ class WorkforceIdentityLayerTest extends TestCase
 
         $runner->run($options);
 
-        $this->assertSame(20, Employee::query()->count());
-        $this->assertSame(20, User::query()->count());
-        $this->assertSame(20, EmploymentHistory::query()->count());
-        $this->assertSame(20, EmployeeOnboarding::query()->count());
-        $this->assertSame(20, DB::table('event_outbox')->where('event_type', 'App\\Modules\\HR\\Events\\EmployeeCreated')->count());
+        $this->assertSame(21, Employee::query()->count());
+        $this->assertSame(21, User::query()->count());
+        $this->assertSame(21, EmploymentHistory::query()->count());
+        $this->assertSame(21, EmployeeOnboarding::query()->count());
+        $this->assertSame(21, DB::table('event_outbox')->where('event_type', 'App\\Modules\\HR\\Events\\EmployeeCreated')->count());
         $this->assertSame($employeeNumbers, Employee::query()->orderBy('employee_no')->pluck('employee_no')->all());
         $this->assertSame($userEmails, User::query()->orderBy('email')->pluck('email')->all());
         $this->assertSame($shiftAssignments, DB::table('employee_shift_assignments')->count());
@@ -99,7 +99,7 @@ class WorkforceIdentityLayerTest extends TestCase
     {
         $layer = app(WorkforceIdentityLayer::class);
 
-        foreach (['small' => 20, 'demo' => 200, 'full' => 240] as $scale => $expectedCount) {
+        foreach (['small' => 21, 'demo' => 201, 'full' => 241] as $scale => $expectedCount) {
             $profiles = $layer->plannedProfiles(new DemoSeedContext($this->seedOptions($scale)));
 
             $this->assertCount($expectedCount, $profiles, "{$scale} scale must match the approved headcount.");
