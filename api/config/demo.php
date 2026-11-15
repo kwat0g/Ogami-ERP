@@ -6,6 +6,7 @@ use Database\Seeders\Demo\BomRoutingCatalogLayer;
 use Database\Seeders\Demo\BusinessPartnerCatalogLayer;
 use Database\Seeders\Demo\FinishedProductCatalogLayer;
 use Database\Seeders\Demo\InventoryCatalogLayer;
+use Database\Seeders\Demo\MaintenanceMasterDataLayer;
 use Database\Seeders\Demo\OrganizationReferenceDataLayer;
 use Database\Seeders\Demo\ProductionAssetsLayer;
 use Database\Seeders\Demo\QualityPlanLayer;
@@ -46,6 +47,7 @@ return [
         BusinessPartnerCatalogLayer::class,
         WorkforceIdentityLayer::class,
         QualityPlanLayer::class,
+        MaintenanceMasterDataLayer::class,
         SupplierListingLayer::class,
     ],
 ];
