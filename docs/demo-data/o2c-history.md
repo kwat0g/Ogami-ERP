@@ -1,5 +1,7 @@
 # Order-to-Cash history slice
 
+Implementation is in draft [PR #545](https://github.com/kwat0g/kwatog/pull/545), stacked on production execution history.
+
 ## What this layer creates
 
 `order-to-cash-history` depends on `crm-pricing`, which supplies fictional customers, active products, accepted price agreements, and the Sales demo account. It creates one internal Sales order through `SalesOrderService::quoteOrder()` and `SalesOrderService::create()`:
