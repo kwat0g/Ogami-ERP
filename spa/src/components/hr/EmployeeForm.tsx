@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
+import { subYears } from 'date-fns';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
@@ -69,7 +70,9 @@ export const employeeSchema = z
       .max(100)
       .regex(namePattern, "Letters, spaces, ., ', - only"),
     suffix: optString(20),
-    birth_date: z.string().min(1, 'Required'),
+    birth_date: z.string().min(1, 'Required')
+      .refine((value) => !value || value <= manilaIsoDate(), 'Birth date cannot be in the future.')
+      .refine((value) => !value || value <= manilaIsoDate(subYears(new Date(), 21)), 'Employee must be at least 21 years old.'),
     gender: z.string().min(1, 'Gender is required'),
     civil_status: z.string().min(1, 'Civil status is required'),
     nationality: optString(50),
@@ -371,7 +374,7 @@ export function EmployeeForm({
       : isEditing && initialShift?.shift_id && initialShift.working_days === null
         ? 'No custom schedule is set, so Monday to Saturday is assumed.'
         : null;
-  const minBirthStr = localIsoDate(new Date(Date.now() - 1000 * 60 * 60 * 24 * 365.25 * 15));
+  const minBirthStr = manilaIsoDate(subYears(new Date(), 21));
 
   if (loadingOptions) {
     return (
@@ -424,6 +427,7 @@ export function EmployeeForm({
             required
             max={minBirthStr}
             min="1900-01-01"
+            helper="Employees must be at least 21 years old; birth dates cannot be in the future."
             {...register('birth_date')}
             error={errors.birth_date?.message}
           />

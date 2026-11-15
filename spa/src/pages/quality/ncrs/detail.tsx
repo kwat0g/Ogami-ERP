@@ -88,7 +88,7 @@ export default function NcrDetailPage() {
     Array<{ defect_type_id: string; count: string }>
   >([]);
   const [sortingQuantity, setSortingQuantity] = useState('');
-  const [sortingReference, setSortingReference] = useState('');
+  const [sortingReference, setSortingReference] = useState<string | null>(null);
   const [concessionReference, setConcessionReference] = useState('');
   const [enteredSortingPerformer, setSortingPerformer] = useState<string | null>(null);
   const [recoveryPassed, setRecoveryPassed] = useState(false);
@@ -173,7 +173,13 @@ export default function NcrDetailPage() {
   // Once the MRB decision settled the receipt, the disposition is fixed; only
   // root cause / corrective action remain editable (the API enforces this).
   const mrbLocked = Boolean(data?.mrb_decided_at);
-  const effectiveDisposition = mrbLocked ? (data?.disposition ?? '') : disposition;
+  const effectiveDisposition = mrbLocked
+    ? (data?.disposition ?? '')
+    : data?.is_incoming_mrb
+      ? 'return_to_supplier'
+      : disposition;
+  const supplierReturnNcr =
+    data?.inspection?.stage === 'incoming' && effectiveDisposition === 'return_to_supplier';
   const fullBatch = Boolean(data?.full_piece_inspection && data.inspection?.stage === 'outgoing');
   const reportedDefects = data?.inspection?.sample_defect_count;
   const conformingQuantity = fullBatch && reportedDefects != null
@@ -190,14 +196,40 @@ export default function NcrDetailPage() {
       data?.affected_quantity ??
       0,
   );
+  const recordedIncomingDefects = data?.inspection?.defective_quantity ?? data?.inspection?.sample_defect_count;
+  const calculatedIncomingGoodQuantity =
+    data?.is_incoming_mrb && recordedIncomingDefects != null && Number.isFinite(Number(recordedIncomingDefects))
+      ? Math.max(0, recoveryQuantity - Number(recordedIncomingDefects))
+      : null;
+  const autoIncomingGoodQuantity =
+    calculatedIncomingGoodQuantity !== null &&
+    calculatedIncomingGoodQuantity > 0 &&
+    calculatedIncomingGoodQuantity < recoveryQuantity
+      ? String(Number(calculatedIncomingGoodQuantity.toFixed(3)))
+      : '';
   const mrbAcceptedQuantity = fixedQcGoodQuantity
     ? conformingQuantity !== null ? String(Math.min(conformingQuantity, recoveryQuantity)) : ''
     : enteredAcceptedQuantity ??
-      (fullBatch && conformingQuantity !== null ? String(Math.min(conformingQuantity, recoveryQuantity)) : '');
+      (autoIncomingGoodQuantity ||
+        (fullBatch && conformingQuantity !== null ? String(Math.min(conformingQuantity, recoveryQuantity)) : ''));
   const systemSeparationReference = data?.ncr_number ? `${data.ncr_number}-SEP` : '';
-  const effectiveSortingReference = fixedQcGoodQuantity ? systemSeparationReference : sortingReference;
+  const effectiveSortingReference = fixedQcGoodQuantity
+    ? systemSeparationReference
+    : supplierReturnNcr
+      ? sortingReference ?? data?.sorting_evidence_reference?.trim() ?? systemSeparationReference
+      : sortingReference ?? '';
+  const defectRecorder = data?.inspection?.defect_recorder ?? data?.inspection?.inspector;
+  const defaultSortingPerformer = supplierReturnNcr
+    ? defectRecorder
+    : data?.inspection?.inspector;
   const sortingPerformer = enteredSortingPerformer ??
-    (fullBatch ? assignees.find((person) => person.id === data?.inspection?.inspector?.id)?.id ?? '' : '');
+    (fullBatch || supplierReturnNcr
+      ? defaultSortingPerformer?.id ?? ''
+      : '');
+  const sortingAssignees =
+    defaultSortingPerformer && !assignees.some((person) => person.id === defaultSortingPerformer.id)
+      ? [defaultSortingPerformer, ...assignees]
+      : assignees;
   const countable = Boolean(
     data?.startup_trial ||
     data?.historical_held ||
@@ -212,7 +244,7 @@ export default function NcrDetailPage() {
       ((data?.is_outgoing_recovery || data?.is_process_recovery) &&
         effectiveDisposition === 'rework'));
   const positiveGood = canKeepGood && Number(mrbAcceptedQuantity) > 0;
-  const coveredQuantity = fullBatch ? String(recoveryQuantity) : sortingQuantity;
+  const coveredQuantity = fullBatch || supplierReturnNcr ? String(recoveryQuantity) : sortingQuantity;
   const needsSortingEvidence =
     !mrbLocked &&
     Boolean(data?.is_incoming_mrb || data?.is_outgoing_recovery || data?.is_process_recovery) &&
@@ -252,7 +284,8 @@ export default function NcrDetailPage() {
   const needsConcession = needsSortingEvidence && effectiveDisposition === 'use_as_is';
   const concessionValid =
     !needsConcession ||
-    (Boolean(concessionReference.trim()) && concessionReference.trim() !== sortingReference.trim());
+    (Boolean(concessionReference.trim()) &&
+      concessionReference.trim() !== effectiveSortingReference.trim());
   const criticalConcession = data?.severity === 'critical' && effectiveDisposition === 'use_as_is';
 
   const setDispositionMut = useMutation({
@@ -454,6 +487,74 @@ export default function NcrDetailPage() {
   }));
   const capaActions = (data.actions ?? []).filter(
     (action) => action.action_type === 'corrective' || action.action_type === 'preventive',
+  );
+  const actionFormContent = (
+    <div className="space-y-3">
+      <p className="text-xs text-muted">
+        Record containment, corrective, or preventive work. Each action stays in the NCR history.
+      </p>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <Select
+          label="Type"
+          value={actionType}
+          onChange={(e) => setActionType(e.target.value as NcrActionType)}
+        >
+          {(options?.actions ?? []).map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </Select>
+      </div>
+      <Textarea
+        label="Description"
+        required
+        maxLength={5000}
+        showCounter={false}
+        placeholder="Describe what was done or what needs to happen."
+        rows={3}
+        value={actionDesc}
+        onChange={(e) => setActionDesc(e.target.value)}
+      />
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Select
+          label="CAPA owner (optional)"
+          value={ownerId}
+          onChange={(e) => setOwnerId(e.target.value)}
+        >
+          <option value="">Actor (default)</option>
+          {assignees.map((assignee) => (
+            <option key={assignee.id} value={assignee.id}>
+              {assignee.name}
+            </option>
+          ))}
+        </Select>
+        <Input
+          label="Due date (optional)"
+          type="date"
+          value={dueDate}
+          onChange={(e) => setDueDate(e.target.value)}
+        />
+      </div>
+      <div className="flex justify-end pt-1">
+        <Button
+          variant="secondary"
+          size="sm"
+          icon={<LuPlus size={14} />}
+          disabled={!actionDesc.trim()}
+          loading={addAction.isPending}
+          onClick={() => addAction.mutate()}
+        >
+          Add action
+        </Button>
+      </div>
+      {addAction.isError && (
+        <p role="alert" className="text-sm text-danger-fg">
+          {(addAction.error as AxiosError<{ message?: string }>).response?.data
+            ?.message ?? 'Could not add action. Your entries are still here.'}
+        </p>
+      )}
+    </div>
   );
 
   return (
@@ -719,16 +820,22 @@ export default function NcrDetailPage() {
                       : 'Choose a disposition for the remaining defects. Release verified good pieces only after full-batch sorting and reinspection.'}
                   </p>
                 )}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                <div
+                  className={`grid grid-cols-1 gap-3 ${
+                    data.is_incoming_mrb ? 'sm:grid-cols-2' : 'sm:grid-cols-2 lg:grid-cols-3'
+                  }`}
+                >
                   <Select
                     label="Disposition"
                     aria-label="Disposition"
                     required={!mrbLocked}
                     value={effectiveDisposition}
-                    disabled={mrbLocked || setDispositionMut.isPending}
+                    disabled={mrbLocked || data.is_incoming_mrb || setDispositionMut.isPending}
                     helper={
                       mrbLocked
                         ? 'Fixed by the MRB decision — the receipt was settled against it.'
+                        : data.is_incoming_mrb
+                          ? 'Automatically set to return to supplier for a failed incoming receipt.'
                         : fullBatch && effectiveDisposition === 'scrap'
                           ? 'Discard the separated defective pieces and release the good quantity below. For stock orders, closing this NCR creates a replacement work order for the shortfall; sales-order shortages are replanned by production planning.'
                         : fullBatch && !repairBatch
@@ -758,41 +865,50 @@ export default function NcrDetailPage() {
                         </option>
                       ))}
                   </Select>
+                  {canKeepGood && !mrbLocked && (
+                    <Input
+                      label={
+                        fixedQcGoodQuantity
+                          ? 'Good pieces to release'
+                          : 'Verified good quantity after sorting'
+                      }
+                      required={fixedQcGoodQuantity}
+                      helper={
+                        fixedQcGoodQuantity
+                          ? 'Calculated from final QC results and fixed for this disposition.'
+                          : supplierReturnNcr
+                            ? recordedIncomingDefects != null
+                              ? `Auto-calculated from ${formatQuantity(recoveryQuantity)} received minus ${formatQuantity(Number(recordedIncomingDefects))} recorded defective. Update only if sorting finds a different verified good count; leave blank to return the whole lot.`
+                              : 'Enter the verified good quantity after sorting. Leave blank to return the whole lot.'
+                            : fullBatch
+                              ? `Enter physically separated conforming pieces${conformingQuantity !== null ? `, up to ${conformingQuantity}` : ''}. Enter 0 if none can release.`
+                              : trialRecovery
+                                ? 'Enter actual trial pieces kept good, including 0. Good plus scrap must equal the affected batch.'
+                                : data.is_outgoing_recovery && effectiveDisposition === 'rework'
+                                  ? 'Enter verified good pieces, including 0 if all need repair. A repair work order covers the remainder.'
+                                  : 'Leave blank to hold or dispose of the whole lot. Enter only segregated, reinspected good material; must be less than the held quantity.'
+                      }
+                      type="number"
+                      step={countable ? '1' : '0.001'}
+                      min="0"
+                      max={conformingQuantity ?? recoveryQuantity}
+                      inputMode={countable ? 'numeric' : 'decimal'}
+                      value={mrbAcceptedQuantity}
+                      readOnly={fixedQcGoodQuantity}
+                      disabled={setDispositionMut.isPending}
+                      error={
+                        !goodQuantityValid && mrbAcceptedQuantity !== ''
+                          ? fullBatch && conformingQuantity !== null
+                            ? `Enter a whole number from 0 to ${conformingQuantity}.`
+                            : data.is_outgoing_recovery && effectiveDisposition === 'rework'
+                              ? 'Enter a whole number no greater than the held batch.'
+                              : 'Enter a valid quantity smaller than the held quantity.'
+                          : undefined
+                      }
+                      onChange={(e) => setMrbAcceptedQuantity(e.target.value)}
+                    />
+                  )}
                 </div>
-                {canKeepGood && !mrbLocked && (
-                  <Input
-                    label={fixedQcGoodQuantity ? 'Good pieces to release' : 'Verified good quantity after sorting'}
-                    required={fixedQcGoodQuantity}
-                    helper={
-                      fixedQcGoodQuantity ? 'Calculated from final QC results and fixed for this disposition.' : fullBatch
-                        ? `Enter physically separated conforming pieces${conformingQuantity !== null ? `, up to ${conformingQuantity}` : ''}. Enter 0 if none can release.`
-                        : trialRecovery
-                          ? 'Enter actual trial pieces kept good, including 0. Good plus scrap must equal the affected batch.'
-                          : data.is_outgoing_recovery && effectiveDisposition === 'rework'
-                            ? 'Enter verified good pieces, including 0 if all need repair. A repair work order covers the remainder.'
-                            : 'Leave blank to hold or dispose of the whole lot. Enter only segregated, reinspected good material; must be less than the held quantity.'
-                    }
-                    type="number"
-                    step={countable ? '1' : '0.001'}
-                    min="0"
-                    max={conformingQuantity ?? recoveryQuantity}
-                    containerClassName="sm:max-w-sm"
-                    inputMode={countable ? 'numeric' : 'decimal'}
-                    value={mrbAcceptedQuantity}
-                    readOnly={fixedQcGoodQuantity}
-                    disabled={setDispositionMut.isPending}
-                    error={
-                      !goodQuantityValid && mrbAcceptedQuantity !== ''
-                        ? fullBatch && conformingQuantity !== null
-                          ? `Enter a whole number from 0 to ${conformingQuantity}.`
-                          : data.is_outgoing_recovery && effectiveDisposition === 'rework'
-                            ? 'Enter a whole number no greater than the held batch.'
-                            : 'Enter a valid quantity smaller than the held quantity.'
-                        : undefined
-                    }
-                    onChange={(e) => setMrbAcceptedQuantity(e.target.value)}
-                  />
-                )}
                 {trialRecovery && !mrbLocked && canKeepGood && (
                   <div className="mt-3 space-y-3">
                     <p className="text-sm text-muted">
@@ -921,10 +1037,12 @@ export default function NcrDetailPage() {
                         min={countable ? '1' : '0.001'}
                         step={countable ? '1' : '0.001'}
                         value={coveredQuantity}
-                        readOnly={fullBatch}
+                        readOnly={fullBatch || supplierReturnNcr}
                         disabled={setDispositionMut.isPending}
                         helper={
-                          repairBatch ? undefined : fullBatch
+                          repairBatch ? undefined : supplierReturnNcr
+                            ? 'Automatically set to the full received quantity for sorting and reinspection.'
+                            : fullBatch
                             ? 'From the completed final inspection.'
                             : data.is_process_recovery
                               ? 'Must equal the required process sample.'
@@ -951,7 +1069,9 @@ export default function NcrDetailPage() {
                             : 'Sorting and reinspection performed by'
                         }
                         helper={
-                          repairBatch ? 'Defaults to QC inspector; change if someone else separated defects.' : fullBatch
+                          repairBatch ? 'Defaults to QC inspector; change if someone else separated defects.' : supplierReturnNcr
+                          ? 'Defaults to the person who recorded the defective quantity. Change it if someone else performed sorting.'
+                            : fullBatch
                             ? 'Select the person who physically separated the pieces.'
                             : 'Select the QC performer. A different authorized user must approve.'
                         }
@@ -961,7 +1081,7 @@ export default function NcrDetailPage() {
                         onChange={(event) => setSortingPerformer(event.target.value)}
                       >
                         <option value="">Choose performer</option>
-                        {assignees.map((assignee) => (
+                        {sortingAssignees.map((assignee) => (
                           <option key={assignee.id} value={assignee.id}>
                             {assignee.name}
                           </option>
@@ -981,6 +1101,8 @@ export default function NcrDetailPage() {
                       helper={
                         fixedQcGoodQuantity
                           ? 'Generated from this NCR and saved with its disposition. Use this same ID on a hold-lot tag if you label the separated defects.'
+                          : supplierReturnNcr
+                            ? 'System-generated for this NCR. Replace it with the sorting log or segregated good-lot label reference if available.'
                           : data.full_piece_inspection
                           ? 'Reference the segregation record or held-lot label.'
                           : 'Reference the external sorting and reinspection document and segregated good-lot label.'
@@ -1141,74 +1263,20 @@ export default function NcrDetailPage() {
           )}
 
           {!fullBatch && !isTerminal && can('quality.ncr.manage') && (
-            <Panel title="Add action">
-              <div className="space-y-3">
-                <p className="text-xs text-muted">
-                  Record containment, corrective, or preventive work. Each action stays in the NCR
-                  history.
-                </p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  <Select
-                    label="Type"
-                    value={actionType}
-                    onChange={(e) => setActionType(e.target.value as NcrActionType)}
-                  >
-                    {(options?.actions ?? []).map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-                <Textarea
-                  label="Description"
-                  required
-                  maxLength={5000}
-                  showCounter={false}
-                  placeholder="Describe what was done or what needs to happen."
-                  rows={3}
-                  value={actionDesc}
-                  onChange={(e) => setActionDesc(e.target.value)}
-                />
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <Select
-                    label="CAPA owner (optional)"
-                    value={ownerId}
-                    onChange={(e) => setOwnerId(e.target.value)}
-                  >
-                    <option value="">Actor (default)</option>
-                    {assignees.map((assignee) => (
-                      <option key={assignee.id} value={assignee.id}>
-                        {assignee.name}
-                      </option>
-                    ))}
-                  </Select>
-                  <Input
-                    label="Due date (optional)"
-                    type="date"
-                    value={dueDate}
-                    onChange={(e) => setDueDate(e.target.value)}
-                  />
-                </div>
-                <div className="flex justify-end mt-3">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    icon={<LuPlus size={14} />}
-                    disabled={!actionDesc.trim()}
-                    loading={addAction.isPending}
-                    onClick={() => addAction.mutate()}
-                  >
-                    Add action
-                  </Button>
-                </div>
-                {addAction.isError && (
-                  <p role="alert" className="text-sm text-danger-fg">
-                    {(addAction.error as AxiosError<{ message?: string }>).response?.data
-                      ?.message ?? 'Could not add action. Your entries are still here.'}
+            <Panel title={supplierReturnNcr ? 'CAPA actions' : 'Add action'}>
+              {supplierReturnNcr ? (
+                <div className="space-y-3">
+                  <p className="text-sm text-muted">
+                    Corrective and preventive actions are required before this NCR can be closed.
                   </p>
-                )}
-              </div>
+                  <details className="border-t border-default pt-3">
+                    <summary className="cursor-pointer text-sm font-medium focus-visible:outline-accent">
+                      Add or update an NCR action
+                    </summary>
+                    <div className="mt-3">{actionFormContent}</div>
+                  </details>
+                </div>
+              ) : actionFormContent}
             </Panel>
           )}
           {data.status === 'closed' &&

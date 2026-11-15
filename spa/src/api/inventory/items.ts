@@ -13,6 +13,7 @@ import type {
 
 export interface ItemListParams extends ListParams {
   item_type?: string;
+  exclude_item_type?: string;
   category_id?: string;
   is_active?: boolean | string;
   is_critical?: boolean | string;

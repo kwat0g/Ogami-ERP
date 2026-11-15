@@ -22,9 +22,12 @@ class WarehouseZone extends Model
         return \Database\Factories\WarehouseZoneFactory::new();
     }
 
-    protected $fillable = ['warehouse_id', 'name', 'code', 'zone_type'];
+    protected $fillable = ['warehouse_id', 'name', 'code', 'zone_type', 'capacity_kg', 'capacity_status'];
 
-    protected $casts = ['zone_type' => WarehouseZoneType::class];
+    protected $casts = [
+        'zone_type' => WarehouseZoneType::class,
+        'capacity_kg' => 'decimal:2',
+    ];
 
     public function warehouse(): BelongsTo
     {

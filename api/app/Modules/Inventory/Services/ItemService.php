@@ -50,6 +50,9 @@ class ItemService
         if (! empty($filters['item_type'])) {
             $q->where('item_type', $filters['item_type']);
         }
+        if (! empty($filters['exclude_item_type'])) {
+            $q->where('item_type', '<>', $filters['exclude_item_type']);
+        }
         if (! empty($filters['category_id'])) {
             $catId = HashIdFilter::decode($filters['category_id'], ItemCategory::class);
             if ($catId) {

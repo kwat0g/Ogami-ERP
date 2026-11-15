@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace App\Modules\Payroll\Controllers;
 
-use App\Modules\Payroll\Models\PayrollAdjustment;
-use App\Modules\Payroll\Enums\PayrollAdjustmentType;
 use App\Modules\Payroll\Enums\PayrollAdjustmentStatus;
+use App\Modules\Payroll\Enums\PayrollAdjustmentType;
+use App\Modules\Payroll\Models\PayrollAdjustment;
 use App\Modules\Payroll\Requests\CreatePayrollAdjustmentRequest;
 use App\Modules\Payroll\Requests\RejectPayrollAdjustmentRequest;
 use App\Modules\Payroll\Resources\PayrollAdjustmentResource;
@@ -38,17 +38,31 @@ class PayrollAdjustmentController
         ]]);
     }
 
+    public function unpaidAbsenceOptions(Request $request): JsonResponse
+    {
+        $filters = $request->validate([
+            'original_payroll_id' => ['required', 'string'],
+            'leave_request_id' => ['nullable', 'string'],
+        ]);
+
+        return response()->json(['data' => $this->service->unpaidAbsenceOptions($filters, $request->user())]);
+    }
+
     public function show(PayrollAdjustment $adjustment): PayrollAdjustmentResource
     {
         return new PayrollAdjustmentResource(
-            $adjustment->load(['period', 'employee.department', 'originalPayroll', 'approver']),
+            $adjustment->load([
+                'period', 'employee.department', 'originalPayroll', 'approver',
+                'sourceLeaveRequest', 'targetPeriod',
+            ]),
         );
     }
 
     public function store(CreatePayrollAdjustmentRequest $request): JsonResponse
     {
         $adj = $this->service->create($request->validatedData(), $request->user());
-        return (new PayrollAdjustmentResource($adj->load(['period', 'employee'])))
+
+        return (new PayrollAdjustmentResource($adj->load(['period', 'employee', 'sourceLeaveRequest.leaveType', 'targetPeriod'])))
             ->response()
             ->setStatusCode(201);
     }
@@ -56,14 +70,18 @@ class PayrollAdjustmentController
     public function approve(PayrollAdjustment $adjustment, Request $request): PayrollAdjustmentResource
     {
         return new PayrollAdjustmentResource(
-            $this->service->approve($adjustment, $request->user())->load(['period', 'employee', 'approver']),
+            $this->service->approve($adjustment, $request->user())->load([
+                'period', 'employee', 'approver', 'sourceLeaveRequest', 'targetPeriod',
+            ]),
         );
     }
 
     public function reject(PayrollAdjustment $adjustment, RejectPayrollAdjustmentRequest $request): PayrollAdjustmentResource
     {
         return new PayrollAdjustmentResource(
-            $this->service->reject($adjustment, $request->user(), $request->validated('remarks'))->load(['period', 'employee', 'approver']),
+            $this->service->reject($adjustment, $request->user(), $request->validated('remarks'))->load([
+                'period', 'employee', 'approver', 'sourceLeaveRequest', 'targetPeriod',
+            ]),
         );
     }
 }

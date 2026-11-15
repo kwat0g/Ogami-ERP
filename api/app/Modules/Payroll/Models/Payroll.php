@@ -32,7 +32,7 @@ class Payroll extends Model
         'basic_pay', 'overtime_pay', 'night_diff_pay', 'holiday_pay', 'gross_pay',
         'leave_pay',
         'tardiness_deduction', 'undertime_deduction',
-        'sss_ee', 'sss_er',
+        'sss_ee', 'sss_er', 'sss_ec',
         'philhealth_ee', 'philhealth_er',
         'pagibig_ee', 'pagibig_er',
         'withholding_tax',
@@ -57,6 +57,7 @@ class Payroll extends Model
         'gross_pay'         => 'decimal:2',
         'sss_ee'            => 'decimal:2',
         'sss_er'            => 'decimal:2',
+        'sss_ec'            => 'decimal:2',
         'philhealth_ee'     => 'decimal:2',
         'philhealth_er'     => 'decimal:2',
         'pagibig_ee'        => 'decimal:2',
@@ -88,6 +89,11 @@ class Payroll extends Model
     public function deductionDetails(): HasMany
     {
         return $this->hasMany(PayrollDeductionDetail::class);
+    }
+
+    public function loanRecoveryAllocations(): HasMany
+    {
+        return $this->hasMany(PayrollLoanRecoveryAllocation::class);
     }
 
     public function hasError(): bool

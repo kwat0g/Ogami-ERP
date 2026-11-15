@@ -16,10 +16,14 @@ use App\Modules\HR\Enums\Gender;
 use App\Modules\HR\Enums\PayType;
 use App\Modules\HR\Models\Department;
 use App\Modules\HR\Models\Employee;
+use App\Modules\HR\Models\ProfileUpdateRequest;
 use App\Modules\HR\Models\Position;
+use App\Modules\HR\Models\SalaryAdjustment;
 use App\Modules\HR\Services\DepartmentService;
 use App\Modules\HR\Services\EmployeeService;
 use App\Modules\HR\Services\OnboardingService;
+use App\Modules\HR\Services\ProfileUpdateRequestService;
+use App\Modules\HR\Services\SalaryAdjustmentService;
 use Carbon\CarbonImmutable;
 use Closure;
 use Faker\Factory as FakerFactory;
@@ -27,40 +31,54 @@ use Faker\Generator;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 use RuntimeException;
 
 /**
  * Creates the employee-linked actors required by approval workflows and the
  * reference workforce used by later attendance/payroll layers.
  *
- * Compensation, government identifiers and bank details are intentionally
- * blank: Phase 1 leaves their authoritative values unresolved.
+ * Demo compensation uses the explicitly documented regional wage floor and
+ * synthetic position tiers. Government IDs and bank accounts use deterministic
+ * synthetic values; bank updates go through the HR/Finance flow.
  */
 final class WorkforceIdentityLayer extends DemoSeeder
 {
+    /** @var list<string> */
+    private const SYNTHETIC_BANK_NAMES = [
+        'BDO Unibank',
+        'Bank of the Philippine Islands',
+        'Metrobank',
+        'Land Bank of the Philippines',
+        'Security Bank',
+        'UnionBank of the Philippines',
+        'Rizal Commercial Banking Corporation',
+        'Philippine National Bank',
+    ];
+
     /** @var list<array{key:string,role:string,email:string,department:string,position:string,first:string,middle:string,last:string,nationality?:string,payroll_persona?:string,pay_type?:string}> */
     private const ROLE_ACTORS = [
-        ['key' => 'actor.system-admin', 'role' => 'system_admin', 'email' => 'system.admin@accounts.ogami-demo.test', 'department' => 'IT', 'position' => 'System Administrator', 'first' => 'Noel', 'middle' => 'Andres', 'last' => 'Villanueva'],
-        ['key' => 'actor.hr-officer', 'role' => 'hr_officer', 'email' => 'hr.officer@accounts.ogami-demo.test', 'department' => 'HR', 'position' => 'HR Manager', 'first' => 'Bianca', 'middle' => 'Reyes', 'last' => 'Mercado', 'payroll_persona' => 'PAY-24'],
-        ['key' => 'actor.finance-officer', 'role' => 'finance_officer', 'email' => 'finance.officer@accounts.ogami-demo.test', 'department' => 'FIN', 'position' => 'Accounting Officer', 'first' => 'Victor', 'middle' => 'Lim', 'last' => 'Tan', 'payroll_persona' => 'PAY-21', 'pay_type' => 'monthly'],
-        ['key' => 'actor.vice-president', 'role' => 'vice_president', 'email' => 'vice.president@accounts.ogami-demo.test', 'department' => 'EXEC', 'position' => 'Vice President', 'first' => 'Kenji', 'middle' => 'Hiroshi', 'last' => 'Saito', 'nationality' => 'Japanese', 'payroll_persona' => 'PAY-25'],
-        ['key' => 'actor.customer-service', 'role' => 'customer_service_officer', 'email' => 'customer.service@accounts.ogami-demo.test', 'department' => 'CS', 'position' => 'Customer Service Officer', 'first' => 'Marites', 'middle' => 'Joy', 'last' => 'Garcia'],
-        ['key' => 'actor.sales-officer', 'role' => 'sales_officer', 'email' => 'sales.officer@accounts.ogami-demo.test', 'department' => 'SALES', 'position' => 'Sales Officer', 'first' => 'Arvin', 'middle' => 'Jose', 'last' => 'Santos'],
-        ['key' => 'actor.production-manager', 'role' => 'production_manager', 'email' => 'production.manager@accounts.ogami-demo.test', 'department' => 'PROD', 'position' => 'Production Manager', 'first' => 'Ramon', 'middle' => 'Dela Cruz', 'last' => 'Cruz'],
-        ['key' => 'actor.ppc-head', 'role' => 'ppc_head', 'email' => 'ppc.head@accounts.ogami-demo.test', 'department' => 'PPC', 'position' => 'PPC Head', 'first' => 'Gemma', 'middle' => 'Bautista', 'last' => 'Navarro'],
-        ['key' => 'actor.purchasing-officer', 'role' => 'purchasing_officer', 'email' => 'purchasing.officer@accounts.ogami-demo.test', 'department' => 'PUR', 'position' => 'Purchasing Officer', 'first' => 'Isabel', 'middle' => 'Mae', 'last' => 'Ramos'],
-        ['key' => 'actor.warehouse-staff', 'role' => 'warehouse_staff', 'email' => 'warehouse.staff@accounts.ogami-demo.test', 'department' => 'WH', 'position' => 'Warehouse Staff', 'first' => 'Joel', 'middle' => 'Antonio', 'last' => 'Mendoza'],
-        ['key' => 'actor.warehouse-supervisor', 'role' => 'warehouse_staff', 'email' => 'warehouse.supervisor@accounts.ogami-demo.test', 'department' => 'WH', 'position' => 'Warehouse Head', 'first' => 'Rogelio', 'middle' => 'Luis', 'last' => 'Bautista'],
-        ['key' => 'actor.qc-inspector', 'role' => 'qc_inspector', 'email' => 'qc.inspector@accounts.ogami-demo.test', 'department' => 'QC', 'position' => 'QC Inspector', 'first' => 'Lorna', 'middle' => 'Mae', 'last' => 'Bautista'],
-        ['key' => 'actor.maintenance-tech-1', 'role' => 'maintenance_tech', 'email' => 'maintenance.tech.one@accounts.ogami-demo.test', 'department' => 'MAINT', 'position' => 'Maintenance Technician', 'first' => 'Carlo', 'middle' => 'Miguel', 'last' => 'Dizon'],
-        ['key' => 'actor.maintenance-supervisor', 'role' => 'maintenance_supervisor', 'email' => 'maintenance.supervisor@accounts.ogami-demo.test', 'department' => 'MAINT', 'position' => 'Maintenance Head', 'first' => 'Teresita', 'middle' => 'Lopez', 'last' => 'Flores'],
-        ['key' => 'actor.impex-officer', 'role' => 'impex_officer', 'email' => 'impex.officer@accounts.ogami-demo.test', 'department' => 'IMPEX', 'position' => 'ImpEx Officer', 'first' => 'Paolo', 'middle' => 'Garcia', 'last' => 'Reyes'],
-        ['key' => 'actor.department-head', 'role' => 'department_head', 'email' => 'department.head@accounts.ogami-demo.test', 'department' => 'PROD', 'position' => 'Production Head', 'first' => 'Mila', 'middle' => 'Corazon', 'last' => 'Manalo'],
-        ['key' => 'actor.employee', 'role' => 'employee', 'email' => 'employee@accounts.ogami-demo.test', 'department' => 'PROD', 'position' => 'Production Operator', 'first' => 'Ana', 'middle' => 'Mae', 'last' => 'Villanueva', 'payroll_persona' => 'PAY-01', 'pay_type' => 'semi_monthly'],
-        ['key' => 'actor.driver', 'role' => 'driver', 'email' => 'driver@accounts.ogami-demo.test', 'department' => 'WH', 'position' => 'Driver', 'first' => 'Renato', 'middle' => 'Santos', 'last' => 'Aquino'],
-        ['key' => 'actor.finance-reviewer', 'role' => 'finance_officer', 'email' => 'finance.reviewer@accounts.ogami-demo.test', 'department' => 'FIN', 'position' => 'Accounting Staff', 'first' => 'Alyssa', 'middle' => 'Mae', 'last' => 'Dizon'],
-        ['key' => 'actor.purchasing-reviewer', 'role' => 'purchasing_officer', 'email' => 'purchasing.reviewer@accounts.ogami-demo.test', 'department' => 'PUR', 'position' => 'Purchasing Staff', 'first' => 'Mark', 'middle' => 'Anthony', 'last' => 'Ramos'],
-        ['key' => 'actor.maintenance-tech-2', 'role' => 'maintenance_tech', 'email' => 'maintenance.tech.two@accounts.ogami-demo.test', 'department' => 'MAINT', 'position' => 'Maintenance Technician', 'first' => 'Joseph', 'middle' => 'Miguel', 'last' => 'Castro'],
+        ['key' => 'actor.system-admin', 'role' => 'system_admin', 'email' => 'villanueva.noel@gmail.com', 'department' => 'IT', 'position' => 'System Administrator', 'first' => 'Noel', 'middle' => 'Andres', 'last' => 'Villanueva'],
+        ['key' => 'actor.hr-officer', 'role' => 'hr_officer', 'email' => 'mercado.bianca@gmail.com', 'department' => 'HR', 'position' => 'HR Manager', 'first' => 'Bianca', 'middle' => 'Reyes', 'last' => 'Mercado', 'payroll_persona' => 'PAY-24'],
+        ['key' => 'actor.finance-officer', 'role' => 'finance_officer', 'email' => 'tan.victor@gmail.com', 'department' => 'FIN', 'position' => 'Accounting Officer', 'first' => 'Victor', 'middle' => 'Lim', 'last' => 'Tan', 'payroll_persona' => 'PAY-21', 'pay_type' => 'monthly'],
+        ['key' => 'actor.vice-president', 'role' => 'vice_president', 'email' => 'saito.kenji@gmail.com', 'department' => 'EXEC', 'position' => 'Vice President', 'first' => 'Kenji', 'middle' => 'Hiroshi', 'last' => 'Saito', 'nationality' => 'Japanese', 'payroll_persona' => 'PAY-25'],
+        ['key' => 'actor.customer-service', 'role' => 'customer_service_officer', 'email' => 'garcia.marites@gmail.com', 'department' => 'CS', 'position' => 'Customer Service Officer', 'first' => 'Marites', 'middle' => 'Joy', 'last' => 'Garcia'],
+        ['key' => 'actor.sales-officer', 'role' => 'sales_officer', 'email' => 'santos.arvin@gmail.com', 'department' => 'SALES', 'position' => 'Sales Officer', 'first' => 'Arvin', 'middle' => 'Jose', 'last' => 'Santos'],
+        ['key' => 'actor.production-manager', 'role' => 'production_manager', 'email' => 'cruz.ramon@gmail.com', 'department' => 'PROD', 'position' => 'Production Manager', 'first' => 'Ramon', 'middle' => 'Dela Cruz', 'last' => 'Cruz'],
+        ['key' => 'actor.ppc-head', 'role' => 'ppc_head', 'email' => 'navarro.gemma@gmail.com', 'department' => 'PPC', 'position' => 'PPC Head', 'first' => 'Gemma', 'middle' => 'Bautista', 'last' => 'Navarro'],
+        ['key' => 'actor.purchasing-officer', 'role' => 'purchasing_officer', 'email' => 'ramos.isabel@gmail.com', 'department' => 'PUR', 'position' => 'Purchasing Officer', 'first' => 'Isabel', 'middle' => 'Mae', 'last' => 'Ramos'],
+        ['key' => 'actor.warehouse-staff', 'role' => 'warehouse_staff', 'email' => 'mendoza.joel@gmail.com', 'department' => 'WH', 'position' => 'Warehouse Staff', 'first' => 'Joel', 'middle' => 'Antonio', 'last' => 'Mendoza'],
+        ['key' => 'actor.warehouse-supervisor', 'role' => 'warehouse_staff', 'email' => 'bautista.rogelio@gmail.com', 'department' => 'WH', 'position' => 'Warehouse Head', 'first' => 'Rogelio', 'middle' => 'Luis', 'last' => 'Bautista'],
+        ['key' => 'actor.qc-inspector', 'role' => 'qc_inspector', 'email' => 'bautista.lorna@gmail.com', 'department' => 'QC', 'position' => 'QC Inspector', 'first' => 'Lorna', 'middle' => 'Mae', 'last' => 'Bautista'],
+        ['key' => 'actor.maintenance-tech-1', 'role' => 'maintenance_tech', 'email' => 'dizon.carlo@gmail.com', 'department' => 'MAINT', 'position' => 'Maintenance Technician', 'first' => 'Carlo', 'middle' => 'Miguel', 'last' => 'Dizon'],
+        ['key' => 'actor.maintenance-supervisor', 'role' => 'maintenance_supervisor', 'email' => 'flores.teresita@gmail.com', 'department' => 'MAINT', 'position' => 'Maintenance Head', 'first' => 'Teresita', 'middle' => 'Lopez', 'last' => 'Flores'],
+        ['key' => 'actor.impex-officer', 'role' => 'impex_officer', 'email' => 'reyes.paolo@gmail.com', 'department' => 'IMPEX', 'position' => 'ImpEx Officer', 'first' => 'Paolo', 'middle' => 'Garcia', 'last' => 'Reyes'],
+        ['key' => 'actor.department-head', 'role' => 'department_head', 'email' => 'manalo.mila@gmail.com', 'department' => 'PROD', 'position' => 'Production Head', 'first' => 'Mila', 'middle' => 'Corazon', 'last' => 'Manalo'],
+        ['key' => 'actor.employee', 'role' => 'employee', 'email' => 'villanueva.ana@gmail.com', 'department' => 'PROD', 'position' => 'Production Operator', 'first' => 'Ana', 'middle' => 'Mae', 'last' => 'Villanueva', 'payroll_persona' => 'PAY-01', 'pay_type' => 'semi_monthly'],
+        ['key' => 'actor.driver', 'role' => 'driver', 'email' => 'aquino.renato@gmail.com', 'department' => 'WH', 'position' => 'Driver', 'first' => 'Renato', 'middle' => 'Santos', 'last' => 'Aquino'],
+        ['key' => 'actor.finance-reviewer', 'role' => 'finance_officer', 'email' => 'dizon.alyssa@gmail.com', 'department' => 'FIN', 'position' => 'Accounting Staff', 'first' => 'Alyssa', 'middle' => 'Mae', 'last' => 'Dizon'],
+        ['key' => 'actor.purchasing-reviewer', 'role' => 'purchasing_officer', 'email' => 'ramos.mark@gmail.com', 'department' => 'PUR', 'position' => 'Purchasing Staff', 'first' => 'Mark', 'middle' => 'Anthony', 'last' => 'Ramos'],
+        ['key' => 'actor.maintenance-tech-2', 'role' => 'maintenance_tech', 'email' => 'castro.joseph@gmail.com', 'department' => 'MAINT', 'position' => 'Maintenance Technician', 'first' => 'Joseph', 'middle' => 'Miguel', 'last' => 'Castro'],
     ];
 
     /** @var array<string, string> */
@@ -112,6 +130,13 @@ final class WorkforceIdentityLayer extends DemoSeeder
         'full' => ['EXEC' => 5, 'HR' => 6, 'FIN' => 6, 'PROD' => 115, 'QC' => 19, 'WH' => 20, 'PUR' => 8, 'PPC' => 10, 'MAINT' => 21, 'MOLD' => 7, 'IMPEX' => 3, 'SALES' => 5, 'CS' => 6, 'ADMIN' => 5, 'IT' => 5],
     ];
 
+    /** @var array<string, int> */
+    private const DEMO_EXTRA_HEADCOUNTS = [
+        'EXEC' => 1, 'HR' => 1, 'FIN' => 2, 'PROD' => 15, 'QC' => 3,
+        'WH' => 4, 'PUR' => 1, 'PPC' => 2, 'MAINT' => 4, 'MOLD' => 1,
+        'IMPEX' => 1, 'SALES' => 1, 'CS' => 2, 'ADMIN' => 1, 'IT' => 1,
+    ];
+
     /** @var array<string, list<string>> */
     private const FILLER_POSITIONS = [
         'EXEC' => ['Chairman', 'President', 'Vice President'],
@@ -153,6 +178,8 @@ final class WorkforceIdentityLayer extends DemoSeeder
     public function __construct(
         private readonly EmployeeService $employees,
         private readonly DepartmentService $departments,
+        private readonly ProfileUpdateRequestService $profileUpdates,
+        private readonly SalaryAdjustmentService $salaryAdjustments,
     ) {}
 
     public function key(): string
@@ -175,19 +202,323 @@ final class WorkforceIdentityLayer extends DemoSeeder
     protected function seedDemoData(DemoSeedContext $context): void
     {
         $password = trim((string) config('demo.credentials.password'));
-        if (strlen($password) < 16) {
-            throw new RuntimeException('Set DEMO_ACCOUNT_PASSWORD to a shared demo-only password of at least 16 characters.');
+        if (strlen($password) < 12) {
+            throw new RuntimeException('Set DEMO_ACCOUNT_PASSWORD to a shared demo-only password of at least 12 characters.');
         }
 
         $profiles = $this->plannedProfiles($context);
-        $expectedCount = array_sum(self::HEADCOUNTS[$context->options->scale]);
+        $expectedCount = array_sum(self::HEADCOUNTS[$context->options->scale])
+            + ($context->options->scale === 'demo' ? array_sum(self::DEMO_EXTRA_HEADCOUNTS) : 0);
         if (count($profiles) !== $expectedCount) {
             throw new RuntimeException("The {$context->options->scale} workforce catalog resolved to ".count($profiles)." employees; expected {$expectedCount}.");
         }
 
         $employeesByKey = $this->seedEmployees($context, $profiles);
         $this->seedRoleAccounts($context, $profiles, $employeesByKey, $password);
+        $this->seedSensitiveProfileDetails($context, $profiles, $employeesByKey);
+        $this->seedMissingCompensation($context, $profiles, $employeesByKey);
+        $this->archiveNonRosterEmployees($context, $employeesByKey);
         $this->assignDepartmentHeads($context, $employeesByKey);
+    }
+
+    /** @param list<array<string, mixed>> $profiles
+     * @param array<string, Employee> $employeesByKey
+     */
+    private function seedSensitiveProfileDetails(DemoSeedContext $context, array $profiles, array $employeesByKey): void
+    {
+        $hrReviewerId = $context->records()->id('workforce.user.role.hr_officer');
+        $financeReviewerId = $context->records()->id('workforce.user.role.finance_officer');
+        $systemAdminId = $context->records()->id('workforce.user.role.system_admin');
+        $hrReviewer = User::query()->find((int) $hrReviewerId);
+        $financeReviewer = User::query()->find((int) $financeReviewerId);
+        $systemAdmin = User::query()->find((int) $systemAdminId);
+        if (! $hrReviewer instanceof User || ! $financeReviewer instanceof User || ! $systemAdmin instanceof User) {
+            throw new RuntimeException('Demo HR, Finance and System Administrator actors are required to seed sensitive workforce placeholders.');
+        }
+
+        $asOf = $context->options->asOf->setTimezone('Asia/Manila');
+        $context->withoutNotifications(function () use ($context, $profiles, $employeesByKey, $hrReviewer, $financeReviewer, $systemAdmin, $asOf): void {
+            foreach ($profiles as $profile) {
+                $employee = $employeesByKey[$profile['key']];
+                $employee->refresh();
+
+                $governmentIds = $this->syntheticGovernmentIds($employee);
+                $governmentChanges = [];
+                foreach ($governmentIds as $field => $placeholder) {
+                    if ($employee->getAttribute($field) === null || trim((string) $employee->getAttribute($field)) === '') {
+                        $governmentChanges[$field] = $placeholder;
+                    }
+                }
+                if ($governmentChanges !== []) {
+                    $context->at($asOf, fn () => $context->asUser($hrReviewer, fn () => $this->employees->update($employee, $governmentChanges)));
+                }
+
+                $employee->refresh();
+                $plannedBank = $this->plannedBankDetails($employee);
+                $bankChanges = [];
+                foreach ($plannedBank as $field => $placeholder) {
+                    $current = trim((string) ($employee->getAttribute($field) ?? ''));
+                    $isLegacyPlaceholder = $field === 'bank_name'
+                        ? $current === 'DEMO BANK - NOT FOR PAYMENT'
+                        : preg_match('/\ADEMO-ACCT-[0-9]{8}\z/', $current) === 1;
+                    if ($current === '' || $isLegacyPlaceholder) {
+                        $bankChanges[$field] = $placeholder;
+                    }
+                }
+
+                $legacyMarker = 'DEMO-WORKFORCE-BANK:'.$employee->getKey();
+                $readableNote = 'Bank details update for employee '.$employee->employee_no;
+                $request = ProfileUpdateRequest::query()
+                    ->where('employee_id', $employee->getKey())
+                    ->whereIn('note', [$legacyMarker, $readableNote])
+                    ->latest('id')
+                    ->get()
+                    ->first(function (ProfileUpdateRequest $candidate) use ($plannedBank): bool {
+                        $changes = (array) $candidate->changes;
+                        if ($changes === []) {
+                            return false;
+                        }
+
+                        foreach ($changes as $field => $value) {
+                            if (! array_key_exists($field, $plannedBank) || $value !== $plannedBank[$field]) {
+                                return false;
+                            }
+                        }
+
+                        return true;
+                    });
+                if ($request === null && $bankChanges !== []) {
+                    $requester = $employee->user;
+                    if (! $requester instanceof User || in_array((int) $requester->id, [(int) $hrReviewer->id, (int) $financeReviewer->id], true)) {
+                        $requester = $systemAdmin;
+                    }
+                    $submittedAt = $this->bankRequestSubmittedAt($employee, $asOf);
+                    $request = $context->at($submittedAt, fn () => $context->asUser($requester, fn () => $this->profileUpdates->submit(
+                        $employee,
+                        $requester,
+                        $bankChanges,
+                        $readableNote,
+                    )));
+                }
+
+                if ($request instanceof ProfileUpdateRequest) {
+                    $requestChanges = (array) $request->changes;
+                    foreach ($requestChanges as $field => $value) {
+                        if (! array_key_exists($field, $plannedBank) || $value !== $plannedBank[$field]) {
+                            throw new RuntimeException("Seed-owned bank profile request for {$employee->email} differs from its planned synthetic bank values.");
+                        }
+                    }
+                    if ($request->status === 'pending') {
+                        $hrReviewedAt = $this->bankRequestSubmittedAt($employee, $asOf)->addDay();
+                        $request = $context->at(min($hrReviewedAt, $asOf), fn () => $context->asUser($hrReviewer, fn () => $this->profileUpdates->approve(
+                            $request,
+                            $hrReviewer,
+                            'Approved synthetic payroll bank details.',
+                        )));
+                    }
+                    if ($request->status === 'pending_finance') {
+                        $financeReviewedAt = $this->bankRequestSubmittedAt($employee, $asOf)->addDays(2);
+                        $request = $context->at(min($financeReviewedAt, $asOf), fn () => $context->asUser($financeReviewer, fn () => $this->profileUpdates->financeApprove(
+                            $request,
+                            $financeReviewer,
+                            'Approved synthetic payroll bank details.',
+                        )));
+                    }
+                    if ($request->status !== 'approved') {
+                        throw new RuntimeException("Seed-owned bank profile request for {$employee->email} did not reach approved status.");
+                    }
+                    $context->records()->remember('workforce.profile-update.bank.'.$employee->getKey(), $request);
+                }
+
+                $employee->refresh();
+                foreach ($plannedBank as $field => $placeholder) {
+                    if ($employee->getAttribute($field) === null && ! isset($bankChanges[$field])) {
+                        throw new RuntimeException("Seed-owned employee {$employee->email} has an unresolved {$field} value after profile approval.");
+                    }
+                    if (isset($bankChanges[$field]) && $employee->getAttribute($field) !== $placeholder) {
+                        throw new RuntimeException("Seed-owned employee {$employee->email} has an unapplied synthetic {$field} value.");
+                    }
+                }
+                $context->at($asOf, fn () => app(OnboardingService::class)->recompute($employee));
+            }
+        });
+    }
+
+    /** @return array{sss_no:string,philhealth_no:string,pagibig_no:string,tin:string} */
+    private function syntheticGovernmentIds(Employee $employee): array
+    {
+        $id = (int) $employee->getKey();
+        if ($id < 1 || $id > 9_999_999) {
+            throw new RuntimeException("Employee {$employee->email} has an unsupported ID for synthetic DEMO government placeholders.");
+        }
+        $sevenDigits = sprintf('%07d', $id);
+        $nineDigits = sprintf('%09d', $id);
+
+        return [
+            'sss_no' => '999'.$sevenDigits,
+            'philhealth_no' => '999'.$nineDigits,
+            'pagibig_no' => '998'.$nineDigits,
+            'tin' => '997'.$nineDigits,
+        ];
+    }
+
+    private function bankRequestSubmittedAt(Employee $employee, CarbonImmutable $asOf): CarbonImmutable
+    {
+        $hireDate = $employee->date_hired instanceof \DateTimeInterface
+            ? CarbonImmutable::instance($employee->date_hired)->setTimezone('Asia/Manila')->startOfDay()
+            : CarbonImmutable::parse((string) $employee->date_hired, 'Asia/Manila')->startOfDay();
+        $latestSubmission = $asOf->subDays(2);
+        if ($hireDate->greaterThan($latestSubmission)) {
+            throw new RuntimeException("Employee {$employee->email} was hired too recently to record both required bank approvals before the demo as-of date.");
+        }
+
+        return $latestSubmission;
+    }
+
+    /** @param list<array<string, mixed>> $profiles
+     * @param array<string, Employee> $employeesByKey
+     */
+    private function seedMissingCompensation(DemoSeedContext $context, array $profiles, array $employeesByKey): void
+    {
+        $requester = User::query()->find((int) $context->records()->id('workforce.user.role.hr_officer'));
+        if (! $requester instanceof User) {
+            throw new RuntimeException('Demo HR actor is required to request compensation for seed-owned employees with missing pay.');
+        }
+
+        $asOf = $context->options->asOf->setTimezone('Asia/Manila');
+        $submittedAt = $asOf->subDays(2);
+        $context->withoutNotifications(function () use ($context, $profiles, $employeesByKey, $requester, $asOf, $submittedAt): void {
+            foreach ($profiles as $profile) {
+                $employee = $employeesByKey[$profile['key']]->fresh();
+                $current = $employee->monthlyEquivalentSalary();
+                if ($current !== null && bccomp((string) $current, '0.00', 2) > 0) {
+                    continue;
+                }
+
+                $reason = 'DEMO-WORKFORCE-COMPENSATION:'.$employee->getKey();
+                $compensation = $this->plannedDemoCompensation($profile);
+                $effectiveDate = $employee->date_hired instanceof \DateTimeInterface
+                    ? CarbonImmutable::instance($employee->date_hired)->toDateString()
+                    : (string) $employee->date_hired;
+                $adjustment = SalaryAdjustment::query()
+                    ->where('employee_id', $employee->getKey())
+                    ->where('reason', $reason)
+                    ->first();
+
+                if ($adjustment === null) {
+                    if (SalaryAdjustment::query()
+                        ->where('employee_id', $employee->getKey())
+                        ->where('status', 'pending')
+                        ->exists()) {
+                        throw new RuntimeException("Employee {$employee->email} has an unrelated pending salary adjustment; demo compensation will not override it.");
+                    }
+
+                    $adjustment = $context->at($submittedAt, fn () => $context->asUser($requester, fn () => $this->salaryAdjustments->request(
+                        $employee,
+                        [
+                            ...$compensation,
+                            'effective_date' => $effectiveDate,
+                            'reason' => $reason,
+                        ],
+                        $requester,
+                    )));
+                } elseif ($adjustment->to_basic_monthly_salary !== ($compensation['to_basic_monthly_salary'] ?? null)
+                    || $adjustment->to_semi_monthly_rate !== ($compensation['to_semi_monthly_rate'] ?? null)
+                    || $adjustment->effective_date?->toDateString() !== $effectiveDate) {
+                    throw new RuntimeException("Seed-owned compensation request for {$employee->email} differs from its planned demo rate.");
+                }
+
+                if ($adjustment->status?->value === 'rejected') {
+                    throw new RuntimeException("Seed-owned compensation request for {$employee->email} was rejected and must be resolved before reseeding.");
+                }
+
+                while (($nextApproval = $adjustment->approvalRecords()->where('action', 'pending')->orderBy('step_order')->first()) !== null) {
+                    $roleSlug = (string) $nextApproval->role_slug;
+                    $reviewerId = $context->records()->id('workforce.user.role.'.$roleSlug);
+                    $reviewer = $reviewerId === null ? null : User::query()->find((int) $reviewerId);
+                    if (! $reviewer instanceof User) {
+                        throw new RuntimeException("Salary approval role {$roleSlug} has no demo account to complete {$employee->email}'s compensation request.");
+                    }
+
+                    $reviewedAt = $submittedAt->addDays((int) $nextApproval->step_order);
+                    if ($reviewedAt->greaterThan($asOf)) {
+                        $reviewedAt = $asOf;
+                    }
+                    $adjustment = $context->at($reviewedAt, fn () => $context->asUser($reviewer, fn () => $this->salaryAdjustments->approve(
+                        $adjustment,
+                        $reviewer,
+                        'Approved the synthetic demo pay band for payroll coverage.',
+                    )));
+                }
+
+                $employee->refresh();
+                if ($adjustment->status?->value !== 'approved' || $adjustment->applied_at === null
+                    || $employee->monthlyEquivalentSalary() === null
+                    || bccomp((string) $employee->monthlyEquivalentSalary(), '0.00', 2) <= 0) {
+                    throw new RuntimeException("Salary approval did not apply a positive planned demo rate for {$employee->email}.");
+                }
+            }
+        });
+    }
+
+    /** @param array<string, mixed> $profile
+     * @return array{to_basic_monthly_salary?:string,to_semi_monthly_rate?:string}
+     */
+    private function plannedDemoCompensation(array $profile): array
+    {
+        $monthlyEquivalent = $this->plannedDemoMonthlyEquivalent($profile);
+        if ($profile['pay_type'] === PayType::Monthly->value) {
+            return ['to_basic_monthly_salary' => $monthlyEquivalent];
+        }
+        if ($profile['pay_type'] === PayType::SemiMonthly->value) {
+            return ['to_semi_monthly_rate' => bcdiv($monthlyEquivalent, '2.00', 2)];
+        }
+
+        throw new RuntimeException("Employee {$profile['email_address']} has an unsupported pay type for demo compensation.");
+    }
+
+    /** @param array<string, mixed> $profile */
+    private function plannedDemoMonthlyEquivalent(array $profile): string
+    {
+        $position = mb_strtolower((string) $profile['position']);
+        $department = (string) $profile['department'];
+        $persona = (string) ($profile['payroll_persona'] ?? '');
+
+        if ($persona === 'PAY-01') {
+            $amount = 16824;
+        } elseif (preg_match('/chairman|president|vice president/', $position) === 1) {
+            $amount = $profile['nationality'] === 'Japanese' ? 120000 : 95000;
+        } elseif (str_contains($position, 'manager')) {
+            $amount = 60000;
+        } elseif (preg_match('/head|supervisor/', $position) === 1) {
+            $amount = 42000;
+        } elseif (in_array($department, ['QC', 'MAINT', 'MOLD', 'IT'], true)
+            || preg_match('/technician|inspector/', $position) === 1) {
+            $amount = 24000;
+        } elseif (in_array($department, ['WH', 'ADMIN'], true)
+            || preg_match('/operator|driver|admin staff/', $position) === 1) {
+            $amount = 18000;
+        } else {
+            $amount = 28000;
+        }
+
+        return number_format($amount, 2, '.', '');
+    }
+
+    /** @param array<string, mixed> $profile
+     * @return array{basic_monthly_salary?:string,semi_monthly_rate?:string}
+     */
+    private function plannedDemoCompensationForCreate(array $profile): array
+    {
+        $monthlyEquivalent = $this->plannedDemoMonthlyEquivalent($profile);
+        if ($profile['pay_type'] === PayType::Monthly->value) {
+            return ['basic_monthly_salary' => $monthlyEquivalent];
+        }
+        if ($profile['pay_type'] === PayType::SemiMonthly->value) {
+            return ['semi_monthly_rate' => bcdiv($monthlyEquivalent, '2.00', 2)];
+        }
+
+        throw new RuntimeException("Employee {$profile['email_address']} has an unsupported pay type for demo compensation.");
     }
 
     /** @return list<array<string, mixed>> */
@@ -268,6 +599,28 @@ final class WorkforceIdentityLayer extends DemoSeeder
             }
         }
 
+        if ($context->options->scale === 'demo') {
+            foreach (self::DEMO_EXTRA_HEADCOUNTS as $departmentCode => $count) {
+                $positionTitles = self::FILLER_POSITIONS[$departmentCode] ?? null;
+                if ($positionTitles === null) {
+                    throw new RuntimeException("No employee position catalog is defined for department {$departmentCode}.");
+                }
+
+                for ($ordinal = 1; $ordinal <= $count; $ordinal++) {
+                    $key = sprintf('staff.demo-extra.%s.%04d', strtolower($departmentCode), $ordinal);
+                    $profiles[] = $this->profile($context, $key, [
+                        'department' => $departmentCode,
+                        'position' => $positionTitles[($ordinal - 1) % count($positionTitles)],
+                        'nationality' => 'Filipino',
+                        'email' => sprintf('demo-extra-%s-%04d@people.ogami-demo.test', strtolower($departmentCode), $ordinal),
+                        'pay_type' => null,
+                    ]);
+                }
+            }
+        }
+
+        $profiles = $this->applyRosterNames($profiles);
+
         usort($profiles, static fn (array $left, array $right): int => [$left['date_hired'], $left['key']] <=> [$right['date_hired'], $right['key']]);
 
         return $profiles;
@@ -337,15 +690,101 @@ final class WorkforceIdentityLayer extends DemoSeeder
             'city' => $home['city'],
             'province' => $home['province'],
             'zip_code' => $home['zip'],
-            'mobile_number' => sprintf('+63 000 555 %04d', 1000 + ($stableIndex % 8000)),
             'email_address' => (string) $attributes['email'],
             'emergency_contact_name' => $faker->name(),
             'emergency_contact_relation' => $faker->randomElement(['Parent', 'Spouse', 'Sibling']),
-            'emergency_contact_phone' => sprintf('+63 000 555 %04d', 9000 + ($stableIndex % 900)),
             'role_slug' => $attributes['role_slug'] ?? null,
             'role_email' => $attributes['role_email'] ?? null,
             'actor_key' => $attributes['actor_key'] ?? null,
             'payroll_persona' => $attributes['payroll_persona'] ?? null,
+        ];
+    }
+
+    /** @param list<array<string, mixed>> $profiles
+     * @return list<array<string, mixed>>
+     */
+    private function applyRosterNames(array $profiles): array
+    {
+        $names = EmployeeRosterNames::all();
+        if (count($profiles) > count($names)) {
+            throw new RuntimeException('The employee name catalog does not cover the planned workforce size.');
+        }
+
+        $usedEmails = [];
+        foreach ($profiles as $index => &$profile) {
+            $profile['legacy_email'] = (string) $profile['email_address'];
+            [$first, $middle, $last, $suffix] = $this->parseRosterName($names[$index]);
+            $base = Str::slug(Str::ascii($last), '.').'.'.Str::slug(Str::ascii($first), '.');
+            $emailLocal = $base;
+            $duplicate = 1;
+            while (isset($usedEmails[$emailLocal.'@gmail.com'])) {
+                $duplicate++;
+                $emailLocal = $base.'.'.$duplicate;
+            }
+            $email = strtolower($emailLocal.'@gmail.com');
+            $usedEmails[$email] = true;
+
+            $profile['first_name'] = $first;
+            $profile['middle_name'] = $middle;
+            $profile['last_name'] = $last;
+            $profile['suffix'] = $suffix;
+            $profile['email'] = $email;
+            $profile['email_address'] = $email;
+            $profile['mobile_number'] = sprintf('09000000%03d', $index + 1);
+            $profile['emergency_contact_phone'] = sprintf('09000001%03d', $index + 1);
+            if (is_string($profile['role_slug'])) {
+                $profile['role_email'] = $email;
+            }
+        }
+        unset($profile);
+
+        return $profiles;
+    }
+
+    /** @return array{string,string,string,?string} */
+    private function parseRosterName(string $source): array
+    {
+        $suffix = null;
+        if (str_contains($source, ',')) {
+            [$surname, $given] = array_map('trim', explode(',', $source, 2));
+            $surnameParts = preg_split('/\s+/', $surname) ?: [];
+            if (strtoupper((string) end($surnameParts)) === 'JR') {
+                array_pop($surnameParts);
+                $suffix = 'Jr.';
+            }
+            $givenParts = preg_split('/\s+/', $given) ?: [];
+            if (in_array(strtoupper((string) end($givenParts)), ['JR.', 'SR.', 'II', 'III'], true)) {
+                $suffix = ucfirst(strtolower((string) array_pop($givenParts)));
+            }
+            $last = implode(' ', $surnameParts);
+        } else {
+            $parts = preg_split('/\s+/', trim($source)) ?: [];
+            if (in_array(strtoupper((string) end($parts)), ['JR.', 'SR.', 'II', 'III'], true)) {
+                $suffix = ucfirst(strtolower((string) array_pop($parts)));
+            }
+            $compoundSurnames = ['DELA CRUZ', 'DE LA CRUZ', 'DE JESUS', 'DE MESA', 'DELOS REYES', 'DELOS SANTOS', 'STO NINO'];
+            $last = (string) array_pop($parts);
+            if (count($parts) >= 1) {
+                $candidate = strtoupper((string) end($parts).' '.$last);
+                if (in_array($candidate, $compoundSurnames, true)) {
+                    $last = array_pop($parts).' '.$last;
+                }
+            }
+            $givenParts = $parts;
+        }
+
+        if (! isset($givenParts) || $givenParts === [] || trim($last) === '') {
+            throw new RuntimeException("Could not parse supplied employee name [{$source}].");
+        }
+
+        $first = array_shift($givenParts);
+        $middle = implode(' ', $givenParts);
+
+        return [
+            Str::title(mb_strtolower((string) $first)),
+            $middle !== '' ? Str::title(mb_strtolower($middle)) : '',
+            Str::title(mb_strtolower($last)),
+            $suffix,
         ];
     }
 
@@ -380,14 +819,18 @@ final class WorkforceIdentityLayer extends DemoSeeder
                                 }
 
                                 $existing = Employee::withTrashed()->where('email', $profile['email_address'])->first();
+                                if ($existing === null && $profile['legacy_email'] !== $profile['email_address']) {
+                                    $existing = Employee::withTrashed()->where('email', $profile['legacy_email'])->first();
+                                }
                                 if ($existing?->trashed()) {
                                     throw new RuntimeException("Seed-owned employee {$profile['email_address']} is archived; restore it through the employee lifecycle before reseeding.");
                                 }
 
-                                $employee = $existing ?? $context->at($profile['date_hired'], fn (): Employee => $this->employees->create([
+                                $attributes = [
                                     'first_name' => $profile['first_name'],
                                     'middle_name' => $profile['middle_name'],
                                     'last_name' => $profile['last_name'],
+                                    'suffix' => $profile['suffix'],
                                     'birth_date' => $profile['birth_date'],
                                     'gender' => $profile['gender'],
                                     'civil_status' => $profile['civil_status'],
@@ -408,8 +851,28 @@ final class WorkforceIdentityLayer extends DemoSeeder
                                     'pay_type' => $profile['pay_type'],
                                     'date_hired' => $profile['date_hired'],
                                     'date_regularized' => $profile['date_regularized'],
-                                    'shift_id' => $this->shiftFor($profile, $shiftIds),
-                                ]));
+                                ];
+                                if ($existing === null) {
+                                    $employee = $context->at($profile['date_hired'], fn (): Employee => $this->employees->create([
+                                        ...$attributes,
+                                        ...$this->plannedDemoCompensationForCreate($profile),
+                                        'shift_id' => $this->shiftFor($profile, $shiftIds),
+                                    ]));
+                                } else {
+                                    $changes = array_filter($attributes, static function (mixed $value, string $field) use ($existing): bool {
+                                        $actual = $existing->getAttribute($field);
+                                        if ($actual instanceof \BackedEnum) {
+                                            $actual = $actual->value;
+                                        } elseif ($actual instanceof \DateTimeInterface) {
+                                            $actual = $actual->format('Y-m-d');
+                                        }
+
+                                        return (string) ($actual ?? '') !== (string) ($value ?? '');
+                                    }, ARRAY_FILTER_USE_BOTH);
+                                    $employee = $changes === []
+                                        ? $existing
+                                        : $context->at($context->options->asOf, fn (): Employee => $this->employees->update($existing, $changes));
+                                }
 
                                 $this->assertEmployeeMatchesProfile($employee, $profile, (int) $department->id, (int) $position->id);
                                 $employee->setRelation('department', $department);
@@ -438,16 +901,13 @@ final class WorkforceIdentityLayer extends DemoSeeder
             $roleAccountNumber = [];
 
             foreach ($profiles as $profile) {
-                if (! is_string($profile['role_slug'])) {
-                    continue;
-                }
-
-                $role = Role::query()->where('slug', $profile['role_slug'])->first();
+                $roleSlug = is_string($profile['role_slug']) ? $profile['role_slug'] : 'employee';
+                $role = Role::query()->where('slug', $roleSlug)->first();
                 if (! $role) {
-                    throw new RuntimeException("Role {$profile['role_slug']} is missing; run RolePermissionSeeder before demo layers.");
+                    throw new RuntimeException("Role {$roleSlug} is missing; run RolePermissionSeeder before demo layers.");
                 }
                 $employee = $employeesByKey[$profile['key']];
-                $email = (string) $profile['role_email'];
+                $email = (string) $profile['email_address'];
                 $user = User::withTrashed()->where('employee_id', $employee->id)->first();
                 $emailOwner = User::withTrashed()->where('email', $email)->first();
                 if ($emailOwner && (int) $emailOwner->employee_id !== (int) $employee->id) {
@@ -486,10 +946,12 @@ final class WorkforceIdentityLayer extends DemoSeeder
                     }
                 }
 
-                $number = ($roleAccountNumber[$profile['role_slug']] ?? 0) + 1;
-                $roleAccountNumber[$profile['role_slug']] = $number;
-                $roleKey = 'workforce.user.role.'.$profile['role_slug'].($number === 1 ? '' : '.'.$number);
-                $context->records()->remember($roleKey, $user);
+                if (is_string($profile['role_slug'])) {
+                    $number = ($roleAccountNumber[$profile['role_slug']] ?? 0) + 1;
+                    $roleAccountNumber[$profile['role_slug']] = $number;
+                    $roleKey = 'workforce.user.role.'.$profile['role_slug'].($number === 1 ? '' : '.'.$number);
+                    $context->records()->remember($roleKey, $user);
+                }
                 $context->records()->remember('workforce.user.account.'.strtolower($email), $user);
                 $context->withoutNotifications(fn () => app(OnboardingService::class)->recompute($employee));
             }
@@ -526,6 +988,35 @@ final class WorkforceIdentityLayer extends DemoSeeder
                 'head_employee_id' => (int) $head->id,
             ]));
         }
+    }
+
+    /** @param array<string, Employee> $employeesByKey */
+    private function archiveNonRosterEmployees(DemoSeedContext $context, array $employeesByKey): void
+    {
+        if ($context->options->scale === 'small') {
+            return;
+        }
+
+        $rosterIds = array_values(array_unique(array_map(
+            static fn (Employee $employee): int => (int) $employee->id,
+            $employeesByKey,
+        )));
+        if ($rosterIds === []) {
+            throw new RuntimeException('Cannot archive employees because the planned roster resolved to no records.');
+        }
+
+        $context->withoutNotifications(function () use ($context, $rosterIds): void {
+            $context->at($context->options->asOf, function () use ($rosterIds): void {
+                Employee::query()
+                    ->whereNotIn('id', $rosterIds)
+                    ->orderBy('id')
+                    ->chunkById(50, function ($employees): void {
+                        foreach ($employees as $employee) {
+                            $this->employees->delete($employee);
+                        }
+                    });
+            });
+        });
     }
 
     /** @return array{day:int,night:int,office:int} */
@@ -594,13 +1085,38 @@ final class WorkforceIdentityLayer extends DemoSeeder
             ['city' => 'Muntinlupa', 'province' => 'Metro Manila', 'zip' => '1770'],
         ];
         $locality = $faker->randomElement($localities);
+        $barangays = [
+            'Dasmariñas' => ['Langkaan I', 'Paliparan III', 'Salawag', 'Sampaloc I', 'San Agustin I'],
+            'General Trias' => ['Buenavista I', 'Manggahan', 'Navarro', 'San Francisco', 'Santiago'],
+            'Imus' => ['Anabu I-A', 'Buhay na Tubig', 'Malagasang I-A', 'Medicion I-A', 'Tanzang Luma I'],
+            'Carmona' => ['Cabilang Baybay', 'Lantic', 'Mabuhay', 'Maduya', 'Milagrosa'],
+            'Biñan' => ['Canlalay', 'Malaban', 'San Antonio', 'Santo Tomas', 'Zapote'],
+            'Santa Rosa' => ['Balibago', 'Dita', 'Don Jose', 'Pulong Santa Cruz', 'Tagapo'],
+            'Calamba' => ['Bucal', 'Canlubang', 'Halang', 'Parian', 'Pansol'],
+            'Santo Tomas' => ['San Bartolome', 'San Miguel', 'San Roque', 'Santa Anastacia', 'Santiago'],
+            'Lipa' => ['Balintawak', 'Marawoy', 'Sabang', 'San Carlos', 'Tambo'],
+            'Muntinlupa' => ['Alabang', 'Bayanan', 'Cupang', 'Putatan', 'Tunasan'],
+        ];
 
         return [
             'street' => 'Block '.$faker->numberBetween(1, 28).', Sample Village, Illustrative Road',
-            'barangay' => 'Demo Barangay '.$faker->numberBetween(1, 8),
+            'barangay' => $faker->randomElement($barangays[$locality['city']]),
             'city' => $locality['city'],
             'province' => $locality['province'],
             'zip' => $locality['zip'],
+        ];
+    }
+
+    /** @return array{bank_name:string,bank_account_no:string} */
+    private function plannedBankDetails(Employee $employee): array
+    {
+        $employeeId = (int) $employee->getKey();
+        $bankIndex = ($employeeId - 1) % count(self::SYNTHETIC_BANK_NAMES);
+
+        return [
+            'bank_name' => self::SYNTHETIC_BANK_NAMES[$bankIndex],
+            // Numeric, deterministic synthetic value; not an issued account or government ID.
+            'bank_account_no' => sprintf('%012d', 700000000000 + $employeeId),
         ];
     }
 
@@ -611,6 +1127,8 @@ final class WorkforceIdentityLayer extends DemoSeeder
             'first_name' => $profile['first_name'],
             'middle_name' => $profile['middle_name'],
             'last_name' => $profile['last_name'],
+            'suffix' => $profile['suffix'],
+            'email' => $profile['email_address'],
             'department_id' => $departmentId,
             'position_id' => $positionId,
             'date_hired' => $profile['date_hired'],
@@ -627,11 +1145,6 @@ final class WorkforceIdentityLayer extends DemoSeeder
             }
             if ((string) ($actual ?? '') !== (string) ($value ?? '')) {
                 throw new RuntimeException("Seed-owned employee {$profile['email_address']} differs from its deterministic {$field} value.");
-            }
-        }
-        foreach (['basic_monthly_salary', 'semi_monthly_rate', 'sss_no', 'philhealth_no', 'pagibig_no', 'tin', 'bank_name', 'bank_account_no'] as $field) {
-            if ($employee->getAttribute($field) !== null) {
-                throw new RuntimeException("Seed-owned employee {$profile['email_address']} has an unresolved {$field} value; refusing to overwrite it.");
             }
         }
     }

@@ -36,7 +36,7 @@ class ActOnReturnCaseRequest extends FormRequest
             'is_public' => ['sometimes', 'boolean'],
             'assigned_to' => ['nullable', 'string', 'max:100'],
             'resolution' => ['nullable', Rule::in(['return_goods', 'redelivery', 'credit', 'no_action'])],
-            'expected_date' => ['nullable', 'date', 'after_or_equal:today'],
+            'expected_date' => ['required_if:action,agree', 'nullable', 'date', 'after_or_equal:today', 'before_or_equal:'.today()->addYear()->toDateString()],
             'lines' => ['sometimes', 'array', 'max:100'],
             'lines.*.id' => ['required', 'string', 'distinct'],
             'lines.*.verified_missing_quantity' => ['required', 'decimal:0,3', 'min:0', 'max:999999999.999'],

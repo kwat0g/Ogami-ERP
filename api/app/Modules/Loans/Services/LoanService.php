@@ -50,7 +50,7 @@ class LoanService
         private readonly JournalEntryService $journals,
     ) {}
 
-    /** @return array<int, array{value:string,label:string,interest_rate:string,interest_rate_percent:string,approval_steps:int,vp_approval_threshold:?string}> */
+    /** @return array<int, array{value:string,label:string,interest_rate:string,interest_rate_percent:string,approval_steps:int,approval_chain:array<int,string>,vp_approval_threshold:?string,principal_min:string,principal_max:string}> */
     public function types(): array
     {
         $workflows = WorkflowDefinition::query()
@@ -71,7 +71,13 @@ class LoanService
                     'interest_rate' => $rate,
                     'interest_rate_percent' => LoanRate::percent($rate),
                     'approval_steps' => count($workflow->steps ?? []),
+                    'approval_chain' => collect($workflow->steps ?? [])
+                        ->map(static fn (array $step): string => (string) ($step['label'] ?? $step['role']))
+                        ->values()
+                        ->all(),
                     'vp_approval_threshold' => collect($workflow->steps ?? [])->firstWhere('role', 'vice_president')['threshold'] ?? null,
+                    'principal_min' => $type->principalMinimum() ?? '0.00',
+                    'principal_max' => $type->principalMaximum() ?? '0.00',
                 ];
             })
             ->values()
@@ -121,7 +127,7 @@ class LoanService
         return $loan->load(['employee.user:id,employee_id', 'payments', 'approvalRecords.approver:id,name']);
     }
 
-    /** @return array{principal_max:string, has_active:bool, max_pay_periods:int} */
+    /** @return array{principal_min:string, principal_max:string, has_active:bool, max_pay_periods:int} */
     public function limitsFor(Employee $employee, LoanType $type): array
     {
         $this->assertSupportedType($type);
@@ -132,13 +138,20 @@ class LoanService
         if ($monthly === null || Money::lte($monthly, '0.00')) {
             throw new BusinessRuleException('An authoritative employee pay rate is required before loan limits can be calculated.');
         }
-        $max = Money::mul($monthly, $multiplier);
+        $salaryLimit = Money::mul($monthly, $multiplier);
+        $absoluteMaximum = $type->principalMaximum();
+        $minimum = $type->principalMinimum();
+        if ($absoluteMaximum === null || $minimum === null) {
+            throw new BusinessRuleException('Loan principal limits are not configured for this type.');
+        }
+        $max = bccomp($salaryLimit, $absoluteMaximum, 2) > 0 ? $absoluteMaximum : $salaryLimit;
         $hasActive = EmployeeLoan::query()
             ->where('employee_id', $employee->id)
             ->whereIn('status', [LoanStatus::Pending->value, LoanStatus::Active->value, LoanStatus::WriteOffPending->value])
             ->exists();
 
         return [
+            'principal_min' => $minimum,
             'principal_max' => Money::round2($max),
             'has_active' => $hasActive,
             'max_pay_periods' => $this->settings->requiredInt('loans.max_pay_periods', 1, 120),
@@ -161,9 +174,14 @@ class LoanService
                 throw new BusinessRuleException('This employee already has a pending or active loan or cash advance.');
             }
 
-            // Cap check.
+            if (bccomp($principal, $limits['principal_min'], 2) < 0) {
+                $minimum = app(CurrencyDisplayService::class)->format($limits['principal_min']);
+                throw new BusinessRuleException("Principal must be at least {$minimum} for {$type->label()}.");
+            }
+
+            // Salary limit and the absolute policy ceiling both apply.
             if (bccomp($principal, $limits['principal_max'], 2) > 0) {
-                throw new BusinessRuleException('Principal exceeds maximum of '.app(CurrencyDisplayService::class)->format($limits['principal_max'])." for {$type->value}.");
+                throw new BusinessRuleException('Principal exceeds maximum of '.app(CurrencyDisplayService::class)->format($limits['principal_max'])." for {$type->label()}.");
             }
 
             $sequenceKey = $type === LoanType::CashAdvance ? 'cash_advance' : 'loan';

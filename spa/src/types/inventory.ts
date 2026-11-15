@@ -50,6 +50,7 @@ export interface Item {
   item_type: ItemType;
   item_type_label: string;
   unit_of_measure: string;
+  weight_kg_per_unit?: string | null;
   standard_cost: string;
   reorder_method: ReorderMethod;
   reorder_point: string;
@@ -111,6 +112,7 @@ export interface CreateItemData {
   category_id: string;
   item_type?: ItemType;
   unit_of_measure: string;
+  weight_kg_per_unit?: string | null;
   standard_cost: string;
   reorder_method: ReorderMethod;
   reorder_point: string;
@@ -138,6 +140,8 @@ export interface WarehouseZone {
   code: string;
   zone_type: WarehouseZoneType;
   zone_type_label?: string;
+  capacity_kg?: string | null;
+  capacity_status?: 'unverified' | 'estimated' | 'derived' | 'rated';
   locations?: WarehouseLocation[];
 }
 
@@ -147,6 +151,8 @@ export interface WarehouseLocation {
   code: string;
   rack: string | null;
   bin: string | null;
+  capacity_kg?: string | null;
+  capacity_status?: 'unverified' | 'estimated' | 'rated';
   is_active: boolean;
   is_blocked: boolean;
   full_code: string;

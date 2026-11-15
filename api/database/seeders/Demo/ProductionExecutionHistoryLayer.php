@@ -69,14 +69,14 @@ final class ProductionExecutionHistoryLayer extends DemoSeeder
     protected function seedDemoData(DemoSeedContext $context): void
     {
         $asOf = $context->options->asOf->setTimezone('Asia/Manila')->startOfDay();
-        $planner = $this->account('ppc.head@accounts.ogami-demo.test', 'production.wo.create');
-        $manager = $this->account('production.manager@accounts.ogami-demo.test', 'production.work_orders.lifecycle');
+        $planner = $this->account('siang.ace@gmail.com', 'production.wo.create');
+        $manager = $this->account('arsolon.ace@gmail.com', 'production.work_orders.lifecycle');
         $managerNeedsOutputPermission = $manager->hasPermission('production.wo.record');
         if (! $managerNeedsOutputPermission) {
             throw new RuntimeException('Production execution history requires the production manager to hold production.wo.record.');
         }
-        $qc = $this->account('qc.inspector@accounts.ogami-demo.test', 'quality.inspections.manage');
-        $warehouse = $this->account('warehouse.staff@accounts.ogami-demo.test', 'inventory.issue.create');
+        $qc = $this->account('villar.airah@gmail.com', 'quality.inspections.manage');
+        $warehouse = $this->account('villanueva.aira@gmail.com', 'inventory.issue.create');
         $product = Product::query()->where('part_number', 'FC-001')->where('is_active', true)->first();
         if (! $product instanceof Product) {
             throw new RuntimeException('Production execution history requires the active FC-001 fuse-box cover product.');
@@ -171,7 +171,7 @@ final class ProductionExecutionHistoryLayer extends DemoSeeder
             'minimum_workers' => 1,
             'maximum_workers' => 2,
             'expected_crew_id' => null,
-            'reason' => 'Synthetic demo crew for the historical FC-001 production run.',
+            'reason' => 'Production crew assigned for the FC-001 production run.',
         ], $manager))));
     }
 

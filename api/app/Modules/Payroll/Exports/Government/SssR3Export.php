@@ -68,7 +68,7 @@ class SssR3Export implements SpreadsheetExport
         // details where available; falls back to flat SSS amount.
         $eeShare = (float) ($row->sss_ee ?? 0);
         $erShare = (float) ($row->sss_er ?? 0);
-        $ecShare = 0.0; // EC is not tracked separately on payrolls; report 0 until modelled.
+        $ecShare = (float) ($row->sss_ec ?? 0);
         $monthly = (float) ($row->basic_pay ?? $row->gross_pay ?? 0);
 
         return [

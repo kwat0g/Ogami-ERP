@@ -54,6 +54,7 @@ class VerifyDemoReadiness extends Command
             'failed_jobs' => $this->checkFailedJobs(),
             'accounting_periods' => $this->checkAccountingPeriods(),
             'leave_balances' => $this->checkLeaveBalances(),
+            'hr_payroll_history' => $this->checkHrPayrollHistory(),
             'coc_evidence' => $this->checkCocEvidence(),
             'hero_trace' => $this->checkHeroTrace(),
         ];
@@ -104,26 +105,40 @@ class VerifyDemoReadiness extends Command
     /** @return array{ok: bool, message: string} */
     private function checkDemoActors(): array
     {
-        // The internal admin lives in `users`; B2B portal accounts live in
-        // their OWN tables behind separate guards (auth:supplier_portal /
-        // auth:customer_portal providers), so each email is checked against
-        // the table its login actually authenticates against.
-        $checks = [
-            ['email' => 'admin@ogami.test',    'table' => 'users'],
-            ['email' => 'portal@supp.test',     'table' => 'supplier_portal_users'],
-            ['email' => 'portal@cust.test',     'table' => 'customer_portal_users'],
-        ];
-
+        $admin = Schema::hasTable('users') && Schema::hasTable('roles')
+            ? $this->demoAdminActor()
+            : null;
         $missing = [];
-        foreach ($checks as $c) {
-            if (! Schema::hasTable($c['table']) || ! DB::table($c['table'])->where('email', $c['email'])->exists()) {
-                $missing[] = $c['email'];
+        if (! $admin || ! str_ends_with(strtolower($admin->email), '@gmail.com')) {
+            $missing[] = 'active Gmail system_admin internal account';
+        }
+
+        foreach ([
+            'supplier_portal_users' => 'active Gmail supplier portal account',
+            'customer_portal_users' => 'active Gmail customer portal account',
+        ] as $table => $label) {
+            if (! Schema::hasTable($table)
+                || ! DB::table($table)
+                    ->where('is_active', true)
+                    ->whereNull('deleted_at')
+                    ->whereRaw('LOWER(email) LIKE ?', ['%@gmail.com'])
+                    ->exists()) {
+                $missing[] = $label;
             }
         }
 
         return $missing === []
-            ? ['ok' => true, 'message' => 'Demo actors present (admin@ogami.test in users; portal accounts in their portal tables).']
-            : ['ok' => false, 'message' => 'Missing demo accounts: '.implode(', ', $missing).'. Re-run GoldenPathDemoSeeder (portal accounts).'];
+            ? ['ok' => true, 'message' => 'An active system administrator and active Gmail supplier/customer portal accounts are present.']
+            : ['ok' => false, 'message' => 'Missing demo accounts: '.implode(', ', $missing).'. Run the current workforce and business-partner demo layers.'];
+    }
+
+    private function demoAdminActor(): ?User
+    {
+        return User::query()
+            ->where('is_active', true)
+            ->whereHas('role', static fn ($query) => $query->where('slug', 'system_admin'))
+            ->orderBy('id')
+            ->first();
     }
 
     /** @return array{ok: bool, message: string} */
@@ -211,6 +226,52 @@ class VerifyDemoReadiness extends Command
         return $balances > 0
             ? ['ok' => true, 'message' => "{$balances} leave balance row(s)."]
             : ['ok' => false, 'message' => 'Zero leave balances — every leave screen reads empty. Seed balances for employees with leave requests.'];
+    }
+
+    /** @return array{ok: bool, message: string} */
+    private function checkHrPayrollHistory(): array
+    {
+        $required = ['attendances', 'overtime_requests', 'employee_loans', 'loan_payments', 'payroll_periods'];
+        foreach ($required as $table) {
+            if (! Schema::hasTable($table)) {
+                return ['ok' => false, 'message' => "Required HR/payroll table {$table} is missing."];
+            }
+        }
+
+        $attendance = DB::table('attendances')->where('remarks', 'like', 'Payroll persona % sample for %')->count();
+        $overtimeStatuses = DB::table('overtime_requests')->distinct()->pluck('status')->map(static fn ($value): string => (string) $value)->all();
+        $loanStatuses = DB::table('employee_loans')->distinct()->pluck('status')->map(static fn ($value): string => (string) $value)->all();
+        $periods = DB::table('payroll_periods')->count();
+        $prematureDeductions = DB::table('loan_payments as lp')
+            ->join('employee_loans as loans', 'loans.id', '=', 'lp.loan_id')
+            ->whereNotNull('loans.start_date')
+            ->whereColumn('lp.payment_date', '<', 'loans.start_date')
+            ->count();
+
+        $missing = [];
+        if ($attendance === 0) {
+            $missing[] = 'payroll persona attendance';
+        }
+        foreach (['pending', 'approved', 'rejected'] as $status) {
+            if (! in_array($status, $overtimeStatuses, true)) {
+                $missing[] = "{$status} overtime request";
+            }
+        }
+        foreach (['active', 'pending', 'rejected'] as $status) {
+            if (! in_array($status, $loanStatuses, true)) {
+                $missing[] = "{$status} employee loan";
+            }
+        }
+        if ($periods === 0) {
+            $missing[] = 'payroll period';
+        }
+        if ($prematureDeductions > 0) {
+            $missing[] = "{$prematureDeductions} loan deduction(s) dated before loan start";
+        }
+
+        return $missing === []
+            ? ['ok' => true, 'message' => "Payroll demo data present: {$attendance} persona attendance rows, overtime states, loan states, and {$periods} payroll periods; no pre-start loan deductions."]
+            : ['ok' => false, 'message' => 'HR/payroll readiness issues: '.implode(', ', $missing).'.'];
     }
 
     /**
@@ -337,7 +398,7 @@ class VerifyDemoReadiness extends Command
             return ['ok' => true, 'message' => "Hero trace present: {$batchWos} batch WO(s), {$heroQc} passed outgoing QC, {$completePaths} complete SO/WO/QC/delivery/invoice path(s)."];
         }
 
-        return ['ok' => false, 'message' => "Incomplete order trace: batch WOs={$batchWos}, linked passed outgoing QC={$heroQc}, complete SO/WO/QC/delivery/invoice paths={$completePaths}. Drain MRP, run GoldenPathDemoSeeder, then AnalyticsDemoSeeder."];
+        return ['ok' => false, 'message' => "Incomplete order trace: batch WOs={$batchWos}, linked passed outgoing QC={$heroQc}, complete SO/WO/QC/delivery/invoice paths={$completePaths}. Complete production, outgoing QC, delivery, and invoice handoff through the current application workflows."];
     }
 
     /** Every analytics demo order must traverse each required source process. */
@@ -418,7 +479,10 @@ class VerifyDemoReadiness extends Command
                     ->where('m.item_result', 'passed')
                     ->whereNotNull('m.acceptance_criterion');
             })
-            ->where('g.grn_number', 'like', 'AN-GRN-%')
+            // DocumentSequenceService generates GRN-YYYYMM-NNNN. Keep the
+            // analytics coverage gate aligned with the application's actual
+            // document numbering rather than an obsolete fixture prefix.
+            ->where('g.grn_number', 'like', 'GRN-%')
             ->select('g.id', 'g.received_date')
             ->distinct()
             ->get();
@@ -435,7 +499,7 @@ class VerifyDemoReadiness extends Command
     /** Every registered rich widget must resolve its declared graph/table shape. */
     private function checkAnalyticsWidgets(): array
     {
-        $user = User::query()->where('email', 'admin@ogami.test')->first();
+        $user = $this->demoAdminActor();
         $widgets = DashboardWidget::query()->orderBy('key')->get();
         if (! $user || $widgets->isEmpty()) {
             return ['ok' => false, 'message' => 'Admin actor or dashboard widget catalog missing.'];

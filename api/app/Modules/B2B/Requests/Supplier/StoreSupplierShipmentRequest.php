@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\B2B\Requests\Supplier;
 
+use App\Modules\B2B\Support\SupplierShipmentDatePolicy;
 use Illuminate\Foundation\Http\FormRequest;
 
 class StoreSupplierShipmentRequest extends FormRequest
@@ -17,9 +18,18 @@ class StoreSupplierShipmentRequest extends FormRequest
     {
         return [
             'shipped_date' => ['required', 'date_format:Y-m-d', 'before_or_equal:today'],
-            'estimated_arrival' => ['required', 'date_format:Y-m-d', 'after_or_equal:today'],
+            'estimated_arrival' => [
+                'required',
+                'date_format:Y-m-d',
+                'after_or_equal:today',
+                'before_or_equal:'.SupplierShipmentDatePolicy::latestEstimatedArrivalDate(),
+            ],
             'carrier' => ['nullable', 'string', 'max:100'],
             'tracking_number' => ['nullable', 'string', 'max:100'],
+            'vehicle' => ['nullable', 'string', 'max:120'],
+            'driver_name' => ['nullable', 'string', 'max:120'],
+            'driver_phone' => ['nullable', 'string', 'max:40'],
+            'plate_number' => ['nullable', 'string', 'max:32'],
             'notes' => ['nullable', 'string', 'max:500'],
             'return_request_id' => ['nullable', 'string'],
             'dispatch_photo' => ['required', 'file', 'max:10240', 'mimes:jpg,jpeg,png,webp'],

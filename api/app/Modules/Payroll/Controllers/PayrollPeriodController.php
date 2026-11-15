@@ -145,11 +145,7 @@ class PayrollPeriodController
             ->setStatusCode(202);
     }
 
-    /**
-     * REC-04 — approve is the maker-checker gate. The service rejects an actor
-     * who computed this same run (unless they hold self_approve_override),
-     * surfaced here as a typed state conflict or business-rule response.
-     */
+    /** Approve a computed payroll when the actor has approval permission and all review gates pass. */
     public function approve(PayrollPeriod $period, Request $request): JsonResponse
     {
         try {

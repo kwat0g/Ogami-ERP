@@ -23,6 +23,7 @@ class PayslipPdfService
         private readonly PdfRenderService $renderer,
         private readonly DocumentVaultService $vault,
         private readonly PayrollPublicationPolicy $publication,
+        private readonly PayrollAttendanceSummaryService $attendanceSummary,
     ) {}
 
     /**
@@ -40,9 +41,10 @@ class PayslipPdfService
                 'employee' => $payroll->employee,
                 'period'   => $payroll->period,
                 'details'  => $payroll->deductionDetails,
+                'attendanceSummary' => $this->attendanceSummary->forPayroll($payroll),
             ],
             [
-                'paper'         => 'a5',
+                'paper'         => 'a4',
                 'orientation'   => 'portrait',
                 'confidential'  => true,
                 'generator'     => $generator,

@@ -16,7 +16,7 @@ import { PageHeader } from '@/components/layout/PageHeader';
 import { formatPeso } from '@/lib/formatNumber';
 import { fromCentavos, toCentavos } from '@/lib/money';
 import type { CustomerPortalUser, PortalCatalogItem } from '@/types/b2b';
-import { ProductPhotoButton, ProductPhotoViewer, type ProductPhotoDetails } from '@/components/crm/ProductPhoto';
+import { ProductPhotoButton, ProductPhotoGalleryViewer, type ProductPhotoDetails, type ProductPhotoGallery } from '@/components/crm/ProductPhoto';
 
 interface OrderLine {
   product: PortalCatalogItem & { unit_price: string };
@@ -29,6 +29,46 @@ const PAYMENT_METHODS = [
   { value: 'check', label: 'Check' },
   { value: 'bank_transfer', label: 'Bank transfer' },
 ] as const;
+
+function getProductPhotos(product: Pick<PortalCatalogItem, 'images' | 'image_url' | 'name' | 'part_number'>): ProductPhotoDetails[] {
+  const images = [...(product.images ?? [])].sort((left, right) =>
+    Number(right.is_primary) - Number(left.is_primary) || left.position - right.position,
+  );
+
+  if (images.length > 0) {
+    return images.map((image) => ({
+      url: image.url,
+      name: product.name,
+      partNumber: product.part_number,
+      altText: image.alt_text ?? undefined,
+    }));
+  }
+
+  return product.image_url ? [{ url: product.image_url, name: product.name, partNumber: product.part_number }] : [];
+}
+
+function OrderProductPhoto({
+  product,
+  className,
+  onView,
+}: {
+  product: Pick<PortalCatalogItem, 'images' | 'image_url' | 'name' | 'part_number'>;
+  className: string;
+  onView: (gallery: ProductPhotoGallery) => void;
+}) {
+  const photos = getProductPhotos(product);
+
+  if (photos.length === 0) {
+    return (
+      <div aria-hidden="true" className={`flex h-11 w-11 shrink-0 items-center justify-center rounded border border-default bg-canvas text-muted ${className}`}>
+        <LuPackage size={18} />
+      </div>
+    );
+  }
+
+  return <ProductPhotoButton photo={photos[0]} photoCount={photos.length} className={className}
+    onView={() => onView({ photos, initialIndex: 0 })} />;
+}
 
 export default function CustomerPlaceOrderPage() {
   const navigate = useNavigate();
@@ -58,7 +98,7 @@ export default function CustomerPlaceOrderPage() {
   }, []);
   const [deliveryDate, setDeliveryDate] = useState('');
   const [catalogOpen, setCatalogOpen] = useState(false);
-  const [photoPreview, setPhotoPreview] = useState<ProductPhotoDetails | null>(null);
+  const [photoGallery, setPhotoGallery] = useState<ProductPhotoGallery | null>(null);
   const [notes, setNotes] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'check' | 'bank_transfer' | ''>('');
   const [paymentTermsDays, setPaymentTermsDays] = useState('');
@@ -261,7 +301,7 @@ export default function CustomerPlaceOrderPage() {
 
   return (
     <div className="[color-scheme:light] dark:[color-scheme:dark]">
-      <ProductPhotoViewer photo={photoPreview} onClose={() => setPhotoPreview(null)} />
+      <ProductPhotoGalleryViewer gallery={photoGallery} onClose={() => setPhotoGallery(null)} />
       <PageHeader title={id ? `Edit ${existingOrder?.so_number ?? 'order'}` : isProductionRequestOrder ? 'Place your production request order' : 'Place an Order'} subtitle={id ? 'Changes are allowed until sales confirms this order.' : isProductionRequestOrder ? `Order the exact ${productionRequest?.requested_quantity ?? ''} pieces held for ${productionRequest?.product?.name ?? 'your production request'}.` : 'Select products and quantities. Prices reflect your delivery date and any customer agreement.'}
         backTo={id ? `/portal/customer/orders/${id}` : isProductionRequestOrder ? `/portal/customer/production-requests/${productionRequestId}` : '/portal/customer/orders'} backLabel={id ? 'Order' : isProductionRequestOrder ? 'Production request' : 'My orders'} />
       {isProductionRequestOrder && productionRequestQuery.isError && <div className="mx-4 mt-4 rounded-md border border-danger bg-danger-bg p-3 text-sm text-danger-fg">Unable to load this production request. Refresh the page or open it from Production requests.</div>}
@@ -331,22 +371,9 @@ export default function CustomerPlaceOrderPage() {
                     {catalog.map((product) => {
                       const added = lines.some((line) => line.product.id === product.id);
                       const outOfStock = product.availability_mode === 'stock_limited' && Number(product.available_quantity ?? 0) < 1;
-                      const productPhotos = product.images?.length
-                        ? product.images.map((image) => ({ url: image.url, name: product.name, partNumber: product.part_number, altText: image.alt_text ?? undefined }))
-                        : product.image_url ? [{ url: product.image_url, name: product.name, partNumber: product.part_number }] : [];
                       return <li key={product.id} className={`grid grid-cols-[44px_minmax(0,1fr)_80px] items-center gap-x-3 px-4 py-2 sm:grid-cols-[44px_minmax(0,1fr)_100px_80px] sm:px-5 ${added ? 'bg-surface' : 'hover:bg-surface'}`}>
-                        {productPhotos.length > 1 ? (
-                          <div aria-label={`Photos of ${product.name}`} className="col-start-1 row-span-2 row-start-1 grid max-h-11 w-11 grid-cols-2 gap-0.5 overflow-y-auto self-center">
-                            {productPhotos.map((photo, index) => <ProductPhotoButton key={`${product.id}-photo-${index}`} photo={photo}
-                              className="h-5 w-5" onView={setPhotoPreview} />)}
-                          </div>
-                        ) : productPhotos.length === 1 ? (
-                          <ProductPhotoButton photo={productPhotos[0]} className="col-start-1 row-span-2 row-start-1 h-11 w-11" onView={setPhotoPreview} />
-                        ) : (
-                          <div aria-hidden="true" className="col-start-1 row-span-2 row-start-1 flex h-11 w-11 items-center justify-center rounded border border-default bg-canvas text-muted">
-                            <LuPackage size={18} />
-                          </div>
-                        )}
+                        <OrderProductPhoto product={product} className="col-start-1 row-span-2 row-start-1 h-11 w-11"
+                          onView={setPhotoGallery} />
                         <div className="col-start-2 row-start-1 min-w-0"><p className="font-medium leading-snug break-words">{product.name}</p>
                           <p className="mt-0.5 font-mono text-xs text-muted">{product.part_number}</p></div>
                         <p className="col-start-2 row-start-2 text-xs text-muted sm:col-start-3 sm:row-start-1 sm:text-right">
@@ -400,13 +427,8 @@ export default function CustomerPlaceOrderPage() {
                       {lines.map((line, idx) => <tr key={line.product.id} className={trCls}>
                         <Td>
                           <div className="flex items-center gap-3">
-                            {line.product.image_url ? (
-                              <ProductPhotoButton photo={{ url: line.product.image_url, name: line.product.name, partNumber: line.product.part_number }} className="h-11 w-11" onView={setPhotoPreview} />
-                            ) : (
-                              <div aria-hidden="true" className="flex h-11 w-11 shrink-0 items-center justify-center rounded border border-default bg-surface text-muted">
-                                <LuPackage size={16} />
-                              </div>
-                            )}
+                            <OrderProductPhoto product={line.product} className="h-11 w-11"
+                              onView={setPhotoGallery} />
                             <div className="min-w-0">
                               <p className="font-medium leading-snug break-words">{line.product.name}</p>
                               <p className="mt-0.5 font-mono text-xs text-muted">{line.product.part_number} <span className="font-sans">· {line.product.unit_of_measure || 'unit'}</span></p>

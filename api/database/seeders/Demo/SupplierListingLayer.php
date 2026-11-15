@@ -16,9 +16,11 @@ use App\Modules\Inventory\Models\Item;
 use App\Modules\Purchasing\Enums\SupplierListingStatus;
 use App\Modules\Purchasing\Models\ApprovedSupplier;
 use App\Modules\Purchasing\Models\SupplierItemListing;
+use App\Modules\Purchasing\Services\ApprovedSupplierService;
 use App\Modules\Purchasing\Services\SupplierListingService;
 use Carbon\CarbonImmutable;
 use Closure;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -38,52 +40,40 @@ final class SupplierListingLayer extends DemoSeeder
     /** @var array<string, list<string>> */
     private const CATEGORY_SOURCES = [
         'Resins' => [
-            'Luzon Polymer Resins Corporation',
-            'Verde Polymer Trading Corporation',
-            'Pagsibol Thermoplastic Solutions Corporation',
+            'Inabata Philippines Inc.',
         ],
         'Colorants' => [
-            'Hiraya Colorants and Compounds Incorporated',
-            'Pagsibol Thermoplastic Solutions Corporation',
-        ],
-        'Metal Inserts' => [
-            'Mabini Precision Metal Inserts Incorporated',
-            'Talisay Engineering Components Corporation',
-            'Bayan Precision Fasteners Supply Incorporated',
-        ],
-        'Packaging' => [
-            'Cavite Industrial Packaging Supply Corporation',
-            'Carmona Packaging Systems Incorporated',
+            'Inabata Philippines Inc.',
         ],
         'Process Consumables' => [
-            'South Luzon Industrial Spares Corporation',
-            'Kalinaw Industrial Oils and Lubricants Corporation',
-            'Dapithapon Industrial Consumables Corporation',
+            'Inabata Philippines Inc.',
         ],
-        'Spare Parts' => [
-            'South Luzon Industrial Spares Corporation',
-            'Talisay Engineering Components Corporation',
-            'Dapithapon Industrial Consumables Corporation',
+        'Metal Inserts' => [
+            'Philippine Nakamura',
+            'Aikawa Philippines Inc.',
+        ],
+        'Packaging' => [
+            'Aikawa Philippines Inc.',
+            'Junlec Printing Supply',
+            'Tanigawa Seisakusho',
+            'Dyna Pack & Malinta',
         ],
     ];
 
     /** @var array<string, array{code:string,price_factor:string,lead_offset:int}> */
     private const VENDOR_QUOTES = [
-        'Luzon Polymer Resins Corporation' => ['code' => 'LPR', 'price_factor' => '1.03', 'lead_offset' => -1],
-        'Hiraya Colorants and Compounds Incorporated' => ['code' => 'HCC', 'price_factor' => '1.05', 'lead_offset' => 1],
-        'Cavite Industrial Packaging Supply Corporation' => ['code' => 'CIPS', 'price_factor' => '1.02', 'lead_offset' => 0],
-        'Mabini Precision Metal Inserts Incorporated' => ['code' => 'MPMI', 'price_factor' => '1.04', 'lead_offset' => 2],
-        'South Luzon Industrial Spares Corporation' => ['code' => 'SLIS', 'price_factor' => '1.06', 'lead_offset' => 3],
-        'Bayan Precision Fasteners Supply Incorporated' => ['code' => 'BPFS', 'price_factor' => '1.01', 'lead_offset' => -1],
-        'Talisay Engineering Components Corporation' => ['code' => 'TEC', 'price_factor' => '1.05', 'lead_offset' => 2],
-        'Kalinaw Industrial Oils and Lubricants Corporation' => ['code' => 'KIOL', 'price_factor' => '1.07', 'lead_offset' => 1],
-        'Verde Polymer Trading Corporation' => ['code' => 'VPT', 'price_factor' => '0.99', 'lead_offset' => 0],
-        'Carmona Packaging Systems Incorporated' => ['code' => 'CPS', 'price_factor' => '1.04', 'lead_offset' => 1],
-        'Pagsibol Thermoplastic Solutions Corporation' => ['code' => 'PTS', 'price_factor' => '1.08', 'lead_offset' => 4],
-        'Dapithapon Industrial Consumables Corporation' => ['code' => 'DIC', 'price_factor' => '1.10', 'lead_offset' => 2],
+        'Inabata Philippines Inc.' => ['code' => 'INABATA', 'price_factor' => '1.03', 'lead_offset' => -1],
+        'Philippine Nakamura' => ['code' => 'NAKAMURA', 'price_factor' => '1.04', 'lead_offset' => 2],
+        'Aikawa Philippines Inc.' => ['code' => 'AIKAWA', 'price_factor' => '1.02', 'lead_offset' => 0],
+        'Junlec Printing Supply' => ['code' => 'JUNLEC', 'price_factor' => '1.01', 'lead_offset' => -1],
+        'Tanigawa Seisakusho' => ['code' => 'TANIGAWA', 'price_factor' => '1.05', 'lead_offset' => 2],
+        'Dyna Pack & Malinta' => ['code' => 'DYNAPACK', 'price_factor' => '1.04', 'lead_offset' => 1],
     ];
 
-    public function __construct(private readonly SupplierListingService $listings) {}
+    public function __construct(
+        private readonly SupplierListingService $listings,
+        private readonly ApprovedSupplierService $approvedSuppliers,
+    ) {}
 
     public function key(): string
     {
@@ -105,7 +95,7 @@ final class SupplierListingLayer extends DemoSeeder
     protected function seedDemoData(DemoSeedContext $context): void
     {
         $asOf = $context->options->asOf->setTimezone('Asia/Manila')->startOfDay();
-        $reviewerId = $context->records()->id('workforce.user.account.purchasing.officer@accounts.ogami-demo.test');
+        $reviewerId = $context->records()->id('workforce.user.account.agnas.shiernalhen@gmail.com');
         $reviewer = User::query()->find((int) $reviewerId);
         if (! $reviewer instanceof User
             || ! ApprovalDelegation::canActForPermission($reviewer, 'purchasing.supplier_listings.review')) {
@@ -118,8 +108,8 @@ final class SupplierListingLayer extends DemoSeeder
             ->whereIn('item_type', [
                 ItemType::RawMaterial->value,
                 ItemType::Packaging->value,
-                ItemType::SparePart->value,
             ])
+            ->whereHas('category', fn (Builder $query) => $query->whereIn('name', array_keys(self::CATEGORY_SOURCES)))
             ->orderBy('code')
             ->get();
         if ($items->isEmpty()) {
@@ -134,7 +124,7 @@ final class SupplierListingLayer extends DemoSeeder
             $primaryVendorsByCategory[$category] ??= $pair['vendor'];
         }
 
-        $primaryResinVendor = Vendor::query()->where('name', 'Luzon Polymer Resins Corporation')->first();
+        $primaryResinVendor = Vendor::query()->where('name', 'Inabata Philippines Inc.')->first();
         $historyItem = $itemsByCode->get('RM-001');
         $rejectionItem = $itemsByCode->get('RM-003');
         $pendingItem = $itemsByCode->get('RM-005');
@@ -172,6 +162,8 @@ final class SupplierListingLayer extends DemoSeeder
                 $this->quoteFactor($vendor),
             );
         }
+
+        $this->assignPreferredSuppliers($context, $sourcePairs, $reviewer, $asOf);
 
         $this->ensureRejectedListing(
             $context,
@@ -212,8 +204,7 @@ final class SupplierListingLayer extends DemoSeeder
             ->keyBy('name');
         $limit = match ($context->options->scale) {
             'small' => 1,
-            'demo' => 2,
-            default => 3,
+            default => 4,
         };
         $pairs = [];
 
@@ -250,6 +241,61 @@ final class SupplierListingLayer extends DemoSeeder
         }
 
         return $pairs;
+    }
+
+    /** @param list<array{vendor:Vendor,item:Item}> $sourcePairs */
+    private function assignPreferredSuppliers(
+        DemoSeedContext $context,
+        array $sourcePairs,
+        User $reviewer,
+        CarbonImmutable $asOf,
+    ): void {
+        $byItem = [];
+        foreach ($sourcePairs as $pair) {
+            $item = $pair['item'];
+            $byItem[(int) $item->getKey()]['item'] = $item;
+            $byItem[(int) $item->getKey()]['vendors'][] = $pair['vendor'];
+        }
+
+        $categoryOrdinals = [];
+        foreach ($byItem as $itemId => $source) {
+            /** @var Item $item */
+            $item = $source['item'];
+            /** @var list<Vendor> $vendors */
+            $vendors = $source['vendors'];
+            $category = (string) $item->category?->name;
+            $ordinal = $categoryOrdinals[$category] ?? 0;
+            $categoryOrdinals[$category] = $ordinal + 1;
+            $preferredVendor = $vendors[$ordinal % count($vendors)] ?? null;
+            if (! $preferredVendor instanceof Vendor) {
+                throw new RuntimeException("No supplier can be preferred for raw-material item {$item->code}.");
+            }
+
+            $approved = ApprovedSupplier::query()
+                ->qualified()
+                ->where('item_id', $itemId)
+                ->where('vendor_id', $preferredVendor->id)
+                ->first();
+            if (! $approved instanceof ApprovedSupplier) {
+                throw new RuntimeException("Preferred supplier {$preferredVendor->name} has no qualified listing for {$item->code}.");
+            }
+
+            if (! $approved->is_preferred) {
+                $context->at($asOf, fn () => $context->asUser($reviewer, fn () => $this->approvedSuppliers->update(
+                    $approved,
+                    ['is_preferred' => true],
+                )));
+            }
+
+            $preferredCount = ApprovedSupplier::query()
+                ->qualified()
+                ->where('item_id', $itemId)
+                ->where('is_preferred', true)
+                ->count();
+            if ($preferredCount !== 1) {
+                throw new RuntimeException("Raw-material item {$item->code} must have exactly one qualified preferred supplier.");
+            }
+        }
     }
 
     private function ensureApprovedListing(
@@ -294,11 +340,11 @@ final class SupplierListingLayer extends DemoSeeder
                 fn (): SupplierItemListing => $context->asUser($reviewer, fn (): SupplierItemListing => $this->listings->reject(
                     $listing,
                     $reviewer,
-                    'Price exceeds the current demo market benchmark.',
+                    'Quoted price exceeds the approved sourcing benchmark.',
                 )),
             ));
         } elseif ($listing->status !== SupplierListingStatus::Rejected
-            || $listing->rejection_reason !== 'Price exceeds the current demo market benchmark.') {
+            || $listing->rejection_reason !== 'Quoted price exceeds the approved sourcing benchmark.') {
             throw new RuntimeException("Demo supplier listing {$listingCode} does not match its planned rejected state.");
         }
 
@@ -332,6 +378,13 @@ final class SupplierListingLayer extends DemoSeeder
         $existing = $this->findOwnedListing($vendor, $item, $listingCode);
         $offer = $this->offer($vendor, $item, $factor, $submittedAt);
         if ($existing !== null) {
+            // A pending supplier offer may still be revised through the
+            // application's normal update action. Approved/rejected offers
+            // keep their submitted supplier-name snapshot as history.
+            if ($existing->status === SupplierListingStatus::Pending
+                && $existing->supplier_item_name !== $item->name) {
+                $existing = $this->listings->update($existing, ['supplier_item_name' => $item->name]);
+            }
             $this->assertListingMatchesOffer($existing, $vendor, $item, $listingCode, $submittedAt, $offer);
 
             return $existing;
@@ -419,7 +472,6 @@ final class SupplierListingLayer extends DemoSeeder
             'vendor_id' => (int) $vendor->id,
             'item_id' => (int) $item->id,
             'supplier_item_code' => $listingCode,
-            'supplier_item_name' => $item->name,
             'price' => $offer['price'],
             'order_uom' => $offer['order_uom'],
             'base_qty_per_order_unit' => $offer['base_qty_per_order_unit'],
@@ -437,6 +489,9 @@ final class SupplierListingLayer extends DemoSeeder
                 throw new RuntimeException("Seed-owned supplier listing {$listingCode} differs from its planned {$field} value.");
             }
         }
+        if (trim((string) $listing->supplier_item_name) === '') {
+            throw new RuntimeException("Seed-owned supplier listing {$listingCode} has no supplier item name.");
+        }
     }
 
     /**
@@ -444,7 +499,17 @@ final class SupplierListingLayer extends DemoSeeder
      */
     private function verifyOwnedListings(array $sourcePairs, Vendor $resinVendor, Item $historyItem, Item $rejectionItem, SupplierItemListing $pending): void
     {
-        $owned = SupplierItemListing::query()->where('supplier_item_code', 'like', 'D-%')->get();
+        $expectedCodes = [];
+        foreach ($sourcePairs as $pair) {
+            $vendor = $pair['vendor'];
+            $item = $pair['item'];
+            $revision = $vendor->name === $resinVendor->name && $item->code === 'RM-001' ? 'R2' : 'R1';
+            $expectedCodes[] = $this->listingCode($vendor, $item, $revision);
+        }
+        $expectedCodes[] = $this->listingCode($resinVendor, $historyItem, 'R1');
+        $expectedCodes[] = $this->listingCode($resinVendor, $rejectionItem, 'REJECTED');
+        $expectedCodes[] = (string) $pending->supplier_item_code;
+        $owned = SupplierItemListing::query()->whereIn('supplier_item_code', array_unique($expectedCodes))->get();
         $expectedStatuses = [
             'approved' => count($sourcePairs),
             'pending' => 1,
@@ -477,7 +542,11 @@ final class SupplierListingLayer extends DemoSeeder
                 ->where('supplier_listing_id', $listing->id)
                 ->where('qualification_status', ApprovedSupplier::QUALIFICATION_APPROVED)
                 ->first();
-            $expectedPrice = Money::div($this->offer($vendor, $item, $this->quoteFactor($vendor), $listing->submitted_at->toImmutable())['price'], $this->orderQuantity($item)['base_qty_per_order_unit'], 6);
+            $expectedPrice = Money::round2(Money::div(
+                $this->offer($vendor, $item, $this->quoteFactor($vendor), $listing->submitted_at->toImmutable())['price'],
+                $this->orderQuantity($item)['base_qty_per_order_unit'],
+                6,
+            ));
             if (! $approved instanceof ApprovedSupplier || Money::cmp((string) $approved->last_price, $expectedPrice) !== 0) {
                 throw new RuntimeException("Approved supplier link or base-unit price is inconsistent for {$vendor->name} / {$item->code}.");
             }

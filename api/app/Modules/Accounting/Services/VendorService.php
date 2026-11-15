@@ -44,7 +44,7 @@ class VendorService
             });
         }
 
-        return $q->orderBy('name')
+        return $q->orderByDesc('created_at')->orderByDesc('id')
             ->paginate(min((int) ($filters['per_page'] ?? 25), 100));
     }
 

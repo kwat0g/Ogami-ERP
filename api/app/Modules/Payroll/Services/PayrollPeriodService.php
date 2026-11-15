@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Modules\Payroll\Services;
 
 use App\Common\Exceptions\BusinessRuleException;
-use App\Common\Exceptions\ForbiddenActionException;
 use App\Common\Models\ApprovalDelegation;
 use App\Common\Models\AuditLog;
 use App\Common\Services\NotificationService;
@@ -25,7 +24,6 @@ use App\Modules\HR\Enums\PayType;
 use App\Modules\HR\Models\Department;
 use App\Modules\HR\Models\Employee;
 use App\Modules\Payroll\Enums\BankFileGenerationStatus;
-use App\Modules\Payroll\Enums\PayrollAnomalyType;
 use App\Modules\Payroll\Enums\PayrollGlHandoffStatus;
 use App\Modules\Payroll\Enums\PayrollPeriodStatus;
 use App\Modules\Payroll\Events\PayrollComputationRequested;
@@ -127,7 +125,7 @@ class PayrollPeriodService
      * Every mutation still repeats its authoritative checks while holding the
      * period row lock.
      *
-     * @return array{permissions: array<string, bool>, available_actions: array<string, bool>, compute_available_on: ?string}
+     * @return array{permissions: array<string, bool>, available_actions: array<string, bool>, compute_available_on: ?string, computation_evaluation: ?array<string, mixed>}
      */
     public function actionContext(PayrollPeriod $period, ?User $actor): array
     {
@@ -159,10 +157,50 @@ class PayrollPeriodService
                 'permissions' => $permissions,
                 'available_actions' => $actions,
                 'compute_available_on' => null,
+                'computation_evaluation' => null,
             ];
         }
 
         $status = $period->status;
+        // During a rolling deployment the application code can become visible
+        // before the evidence-table migration has run. Treat that state as a
+        // missing evaluation; finalize remains unavailable until the table and
+        // a current evaluation are present.
+        $latestEvaluation = Schema::hasTable('payroll_anomaly_evaluations')
+            ? $period->anomalyEvaluations()->orderByDesc('id')->first()
+            : null;
+        $evaluationFreshness = 'missing';
+        if ($latestEvaluation) {
+            if ($latestEvaluation->status === 'failed') {
+                $evaluationFreshness = 'failed';
+            } elseif ($status?->isLocked()) {
+                $evaluationFreshness = 'locked_snapshot';
+            } elseif ($period->computation_policy_version !== PayrollComputationFingerprintService::POLICY_VERSION
+                || ! app(PayrollAnomalyService::class)->hasCurrentEvaluation($period)) {
+                $evaluationFreshness = 'stale';
+            } else {
+                $evaluationFreshness = 'current';
+            }
+        }
+        $unresolvedAnomalyCount = Schema::hasTable('payroll_anomaly_flags')
+            ? PayrollAnomalyFlag::query()->where('payroll_period_id', $period->id)->where('is_resolved', false)->count()
+            : 0;
+        $evaluationSummary = $latestEvaluation ? [
+            'status' => $latestEvaluation->status,
+            'freshness' => $evaluationFreshness,
+            'finding_count' => $latestEvaluation->finding_count,
+            'unresolved_finding_count' => $latestEvaluation->unresolved_finding_count,
+            'unresolved_now' => $unresolvedAnomalyCount,
+            'evaluated_at' => $latestEvaluation->evaluated_at?->toIso8601String(),
+        ] : [
+            'status' => 'missing',
+            'freshness' => 'missing',
+            'finding_count' => 0,
+            'unresolved_finding_count' => 0,
+            'unresolved_now' => $unresolvedAnomalyCount,
+            'evaluated_at' => null,
+        ];
+        $unresolvedAnomalyCount = (int) $evaluationSummary['unresolved_now'];
         $periodEnded = $this->hasPeriodEnded($period);
         $payrollRowsAfterCutoff = in_array($status, [PayrollPeriodStatus::Computed, PayrollPeriodStatus::Approved], true)
             && $this->payrollRowsComputedAfterCutoff($period);
@@ -201,12 +239,6 @@ class PayrollPeriodService
                 || ($status === PayrollPeriodStatus::Approved && $period->approved_by === null));
 
         if ($status === PayrollPeriodStatus::Computed && $permissions['approve']) {
-            $makerIds = array_map(
-                static fn ($id): int => (int) $id,
-                array_filter([$period->created_by, $period->computed_by], static fn ($id): bool => $id !== null),
-            );
-            $isMaker = in_array((int) $actor->id, $makerIds, true);
-            $mayOverrideMakerChecker = $isMaker && $actor->hasPermission('payroll.periods.self_approve_override');
             $eligibleEmployees = $this->availableEmployeeQuery($period)
                 ->pluck('id')->map(static fn ($id): int => (int) $id)->all();
             $computedEmployees = $period->payrolls()
@@ -215,12 +247,10 @@ class PayrollPeriodService
             sort($eligibleEmployees);
             sort($computedEmployees);
 
-            $actions['approve'] = ApprovalDelegation::canActForPermission(
-                $actor,
-                'payroll.periods.approve',
-                $makerIds,
-            )
-                && (! $isMaker || $mayOverrideMakerChecker)
+            $actions['approve'] = $evaluationFreshness === 'current'
+                && ! (bool) $period->anomaly_detection_failed
+                && $period->computation_policy_version === PayrollComputationFingerprintService::POLICY_VERSION
+                && $unresolvedAnomalyCount === 0
                 && $computedAfterCutoff
                 && $period->payrolls()->count() > 0
                 && ! $period->payrolls()->whereNotNull('error_message')->exists()
@@ -232,16 +262,17 @@ class PayrollPeriodService
             $hasUnresolvedAnomalies = PayrollAnomalyFlag::query()
                 ->where('payroll_period_id', $period->id)
                 ->where('is_resolved', false)
-                ->where('flag_type', '!=', PayrollAnomalyType::OpenAttendance->value)
                 ->exists();
             $hasUnclassifiedDeductions = $period->payrolls()
                 ->where('other_deductions', '<>', '0')
                 ->exists();
+            $hasCurrentAnomalyEvaluation = $evaluationFreshness === 'current';
             $actions['finalize'] = $period->approved_by !== null
-                && (int) $period->approved_by !== (int) $actor->id
                 && $payrollRowsAfterCutoff
                 && ! $hasUnclassifiedDeductions
                 && ! (bool) $period->anomaly_detection_failed
+                && $period->computation_policy_version === PayrollComputationFingerprintService::POLICY_VERSION
+                && $hasCurrentAnomalyEvaluation
                 && ! $hasUnresolvedAnomalies;
         }
 
@@ -260,6 +291,7 @@ class PayrollPeriodService
             'permissions' => $permissions,
             'available_actions' => $actions,
             'compute_available_on' => $computeAvailableOn,
+            'computation_evaluation' => $evaluationSummary,
         ];
     }
 
@@ -602,13 +634,15 @@ class PayrollPeriodService
     }
 
     /**
-     * A semi-monthly cutoff must sit inside ONE half of ONE month.
+     * A regular semi-monthly payroll must cover the canonical half of one month.
      *
      * Without this, a window like Aug 10–20 belongs to both halves and a window
      * like Aug 20 – Sep 10 belongs to two months. Either way the derived cycle
      * key describes only the half the window STARTS in, so the other half stays
      * unclaimed and can be paid again — the same double-pay hole the derived key
-     * closes, reopened by an ambiguous window.
+     * closes, reopened by an ambiguous window. Shorter windows within one half
+     * are also unsafe as regular payroll: the calculator pays a full half-month
+     * rate for a fully employed employee.
      *
      * Boundaries: first half is day 1–15, second half is day 16 to month end.
      */
@@ -635,6 +669,24 @@ class PayrollPeriodService
                 $start->format('M'),
                 $start->format('M'),
                 $start->endOfMonth()->format('j'),
+            ));
+        }
+
+        $expectedStart = $startsFirstHalf
+            ? $start->startOfMonth()
+            : $start->startOfMonth()->addDays(15);
+        $expectedEnd = $startsFirstHalf
+            ? $start->startOfMonth()->addDays(14)
+            : $start->endOfMonth();
+
+        if ($start->toDateString() !== $expectedStart->toDateString()
+            || $end->toDateString() !== $expectedEnd->toDateString()) {
+            $half = $startsFirstHalf ? 'first' : 'second';
+            throw new BusinessRuleException(sprintf(
+                'A regular payroll period must cover the full %s half: %s–%s. Shorter ranges cannot be computed as regular payroll.',
+                $half,
+                $expectedStart->toDateString(),
+                $expectedEnd->toDateString(),
             ));
         }
     }
@@ -1311,6 +1363,12 @@ class PayrollPeriodService
                 ));
             }
 
+            // Freeze the exact reviewed statutory inputs before the compute
+            // claim is committed. A schedule publication racing this point is
+            // resolved by database locks; later corrections cannot retarget
+            // this period's calculation.
+            app(GovernmentSchedulePinService::class)->pinForPeriod($period);
+
             $processingStartedAt = now();
             $computedBy = $actor?->id ?? $period->computed_by;
             $claimed = PayrollPeriod::query()
@@ -1333,6 +1391,7 @@ class PayrollPeriodService
                     'processing_started_at' => $processingStartedAt,
                     'processing_token' => (string) Str::uuid(),
                     'computed_by' => $computedBy,
+                    'computation_policy_version' => PayrollComputationFingerprintService::POLICY_VERSION,
                     'updated_at' => $processingStartedAt,
                 ]);
 
@@ -1468,23 +1527,22 @@ class PayrollPeriodService
                 );
             }
 
-            // The requester and the compute operator are both makers. Role
-            // changes during an in-flight period must not make either one an
-            // eligible checker.
-            $makerIds = array_map(
-                static fn ($id): int => (int) $id,
-                array_filter([$locked->created_by, $locked->computed_by], static fn ($id): bool => $id !== null),
-            );
-            if (! ApprovalDelegation::canActForPermission($actor, 'payroll.periods.approve', $makerIds)) {
+            if (! ApprovalDelegation::canActForPermission($actor, 'payroll.periods.approve')) {
                 throw new BusinessRuleException('You do not have permission to approve payroll periods.');
             }
-            $isMaker = in_array((int) $actor->id, $makerIds, true);
-            $makerCheckerOverride = $isMaker && $actor->hasPermission('payroll.periods.self_approve_override');
-            if ($isMaker && ! $makerCheckerOverride) {
+
+            if ((bool) $locked->anomaly_detection_failed) {
+                throw new BusinessRuleException('Cannot approve: payroll anomaly detection failed. Recompute the period after fixing the anomaly policy settings.');
+            }
+            if ($locked->computation_policy_version !== PayrollComputationFingerprintService::POLICY_VERSION) {
+                throw new BusinessRuleException('Cannot approve: recompute this payroll under the current calculation policy first.');
+            }
+
+            app(PayrollAnomalyService::class)->assertCurrentEvaluation($locked, 'approve');
+            $unresolvedAnomalies = app(PayrollAnomalyService::class)->unresolvedCount((int) $locked->id);
+            if ($unresolvedAnomalies > 0) {
                 throw new BusinessRuleException(
-                    $locked->created_by !== null && (int) $locked->created_by === (int) $actor->id
-                        ? 'Maker-checker: the person who created this payroll period cannot approve it. A different approver is required.'
-                        : 'Maker-checker: the person who computed this payroll cannot also approve it. A different approver is required.',
+                    "Cannot approve: {$unresolvedAnomalies} unresolved payroll anomaly flag(s). Review them in the Anomaly review tab first.",
                 );
             }
 
@@ -1502,9 +1560,6 @@ class PayrollPeriodService
                 'status' => PayrollPeriodStatus::Approved->value,
                 'approved_by' => $actor->id,
             ];
-            if ($makerCheckerOverride) {
-                $newAuditValues['maker_checker_override'] = true;
-            }
             AuditLog::create([
                 'user_id' => $actor->id,
                 'action' => 'payroll.period.approve',
@@ -1624,7 +1679,9 @@ class PayrollPeriodService
         // P3.5 — wrap the status mutation in a transaction so any DB write
         // that throws rolls back atomically, matching other lifecycle methods.
         // The event is fired AFTER commit so listeners see persisted state.
-        // REC-04 — the recorded approver and finalizer must be different users.
+        // The same authorized user may approve and finalize a payroll in
+        // organizations with a single Finance Officer. Each stage still checks
+        // its dedicated permission and records its own audit attribution.
         $fresh = DB::transaction(function () use ($period, $actor) {
             // Finalization is the H2R handoff into bank-file generation and GL
             // posting. Re-read and lock the period before checking guards so a
@@ -1650,28 +1707,39 @@ class PayrollPeriodService
             if ($locked->approved_by === null) {
                 throw new BusinessRuleException('Cannot finalize: this period has no recorded approver. Return it for correction before continuing.');
             }
-            if ((int) $locked->approved_by === (int) $actor->id) {
-                throw new ForbiddenActionException('The approver cannot finalize the same payroll period. A different finance user must finalize it.');
-            }
-
             $this->assertDeductionsClassified($locked, 'finalize');
 
-            // Task A9 — block finalization while unresolved anomaly flags exist.
-            //
-            // The detector records an evaluation failure on the period instead
-            // of allowing a broken policy or schema to look like a clean run.
-            // Direct single-employee and 13th-month paths do not invoke the
-            // detector, so their default false value remains non-blocking.
             if ((bool) $locked->anomaly_detection_failed) {
                 throw new BusinessRuleException(
                     'Cannot finalize: payroll anomaly detection failed. Recompute the period after fixing the anomaly policy settings.'
                 );
             }
 
+            if ($locked->computation_policy_version !== PayrollComputationFingerprintService::POLICY_VERSION) {
+                throw new BusinessRuleException('Cannot finalize: recompute this period under the current payroll calculation policy first.');
+            }
+            $this->assertPayrollRowsReconcile($locked);
+
+            $unpaidAbsenceGaps = app(PayrollAnomalyService::class)->unpaidAbsenceGapCount($locked);
+            if ($unpaidAbsenceGaps > 0) {
+                throw new BusinessRuleException(
+                    "Cannot finalize: {$unpaidAbsenceGaps} approved unpaid leave request(s) have no applied payroll adjustment. Add and approve the source-linked adjustment, then recompute this period.",
+                );
+            }
+
+            // Block finalization while unresolved anomaly flags exist, including
+            // open attendance. An open time record can still change pay, so it
+            // requires correction or an audited reviewer resolution.
+            //
+            // The detector records an evaluation failure on the period instead
+            // of allowing a broken policy or schema to look like a clean run.
+            // Batch and direct employee runs persist that failure state; an
+            // annual detector failure aborts its calculation transaction.
+            app(PayrollAnomalyService::class)->assertCurrentEvaluation($locked);
+
             $unresolved = PayrollAnomalyFlag::query()
                 ->where('payroll_period_id', $locked->id)
                 ->where('is_resolved', false)
-                ->where('flag_type', '!=', PayrollAnomalyType::OpenAttendance->value)
                 ->count();
             if ($unresolved > 0) {
                 throw new BusinessRuleException("Cannot finalize: {$unresolved} unresolved payroll anomaly flag(s). Review and resolve them first.");
@@ -1740,6 +1808,45 @@ class PayrollPeriodService
         });
 
         return $fresh;
+    }
+
+    private function assertPayrollRowsReconcile(PayrollPeriod $period): void
+    {
+        foreach ($period->payrolls()->with('employee:id,employee_no')->get() as $payroll) {
+            $uncappedNet = Money::add(
+                Money::sub((string) $payroll->gross_pay, (string) $payroll->total_deductions),
+                (string) $payroll->adjustment_amount,
+            );
+            $employeeLabel = $payroll->employee?->employee_no ?? (string) $payroll->employee_id;
+
+            if (Money::lt($uncappedNet, '0.00')) {
+                throw new BusinessRuleException(sprintf(
+                    'Cannot finalize: payroll for employee %s has deductions or approved recoveries greater than gross earnings. Correct the source amounts; net-pay flooring is not an approved deduction treatment.',
+                    $employeeLabel,
+                ));
+            }
+
+            if (Money::cmp($uncappedNet, (string) $payroll->net_pay) !== 0) {
+                throw new BusinessRuleException(sprintf(
+                    'Cannot finalize: payroll for employee %s does not reconcile gross pay, deductions, adjustments, and net pay. Recompute the period.',
+                    $employeeLabel,
+                ));
+            }
+
+            $allocations = Money::round2((string) DB::table('payroll_loan_recovery_allocations')
+                ->where('payroll_id', $payroll->id)
+                ->sum('withheld_amount'));
+            $payments = Money::round2((string) DB::table('loan_payments')
+                ->where('payroll_id', $payroll->id)
+                ->sum('amount'));
+            if (Money::cmp($allocations, (string) $payroll->loan_deductions) !== 0
+                || Money::cmp($payments, (string) $payroll->loan_deductions) !== 0) {
+                throw new BusinessRuleException(sprintf(
+                    'Cannot finalize: loan recovery evidence for employee %s does not reconcile with the payroll deduction and payment ledger. Recompute the period.',
+                    $employeeLabel,
+                ));
+            }
+        }
     }
 
     /** Queue a single durable retry for a failed or skipped payroll → GL handoff. */

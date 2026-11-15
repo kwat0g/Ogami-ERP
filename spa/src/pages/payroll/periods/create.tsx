@@ -19,6 +19,16 @@ import { useFormSafety } from '@/hooks/useFormSafety';
 import { FormDraftBanner } from '@/components/ui/FormDraftBanner';
 import { FormActions } from '@/components/ui/FormActions';
 import { reconcileRealtimeMutationResponse } from '@/lib/realtime/invalidationMap';
+
+function expectedRegularCutoff(date: Date): { firstHalf: boolean; startDay: number; endDay: number } {
+ const firstHalf = date.getDate() <= 15;
+ return {
+  firstHalf,
+  startDay: firstHalf ? 1 : 16,
+  endDay: firstHalf ? 15 : new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate(),
+ };
+}
+
 const schema = z.object({
  period_start: z.string().min(1, 'Start date is required'),
  period_end: z.string().min(1, 'End date is required'),
@@ -36,6 +46,17 @@ const schema = z.object({
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['period_end'], message: 'A payroll cutoff must stay within one month.' });
    } else if ((startDate.getDate() <= 15) !== (endDate.getDate() <= 15)) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['period_end'], message: 'A payroll cutoff cannot cross the 15th/16th boundary.' });
+   } else {
+    const expected = expectedRegularCutoff(startDate);
+    if (startDate.getDate() !== expected.startDay || endDate.getDate() !== expected.endDay) {
+     const half = expected.firstHalf ? 'first' : 'second';
+     const endLabel = expected.firstHalf ? '15' : 'the last day of the month';
+     context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['period_end'],
+      message: `A regular ${half}-half payroll must run from day ${expected.startDay} through ${endLabel}. Shorter ranges are not supported as regular payroll.`,
+     });
+    }
    }
   }
  }
@@ -73,6 +94,9 @@ export default function CreatePayrollPeriodPage() {
  queryFn: periodsApi.options,
  staleTime: 300_000,
  });
+ const departmentOptions = periodOptions?.departments ?? [];
+ const allDepartmentsSelected = departmentOptions.length > 0
+  && departmentOptions.every((option) => departmentIds.includes(option.value));
 
   const form = useForm<FormValues>({
  resolver: zodResolver(schema),
@@ -85,7 +109,7 @@ export default function CreatePayrollPeriodPage() {
  const periodStart = watch('period_start');
  const periodEnd = watch('period_end');
 
- // Mirrors PayrollPeriod::deriveIsFirstHalf() and the server's straddle guard.
+ // Mirrors PayrollPeriod::deriveIsFirstHalf() and the server's canonical-range guard.
  // Purely to show the operator what the server will conclude — the server
  // derives it again and never trusts anything sent from here.
  const cycle = useMemo((): CycleInfo => {
@@ -106,6 +130,16 @@ export default function CreatePayrollPeriodPage() {
  state: 'invalid',
  message: 'A payroll cutoff must stay within one half of the month — it cannot cross the 15th/16th boundary.',
  };
+ }
+
+ const expected = expectedRegularCutoff(start);
+ if (start.getDate() !== expected.startDay || end.getDate() !== expected.endDay) {
+  const half = expected.firstHalf ? 'first' : 'second';
+  const endLabel = expected.firstHalf ? '15' : 'the last day of the month';
+  return {
+   state: 'invalid',
+   message: `A regular ${half}-half payroll must run from day ${expected.startDay} through ${endLabel}. Shorter ranges are not supported as regular payroll.`,
+  };
  }
 
  const monthLabel = start.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
@@ -184,9 +218,14 @@ navigate(`/payroll/periods/${period.id}`);
  <form onSubmit={handleSubmit(onSubmit, onFormInvalid<FormValues>())} className="min-w-0 w-full px-5 py-4">
  <fieldset className="mb-8">
  <legend className="text-xs uppercase tracking-wider text-muted font-medium mb-4">Schedule</legend>
- <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
- <Input label="Period start" type="date" required {...register('period_start')} error={errors.period_start?.message} />
- <Input label="Period end" type="date" required {...register('period_end')} error={errors.period_end?.message} />
+ <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(16rem,1fr)]">
+ <fieldset className="min-w-0">
+ <legend className="text-label text-muted font-medium mb-1">Pay period</legend>
+ <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+ <Input label="Start" type="date" required {...register('period_start')} error={errors.period_start?.message} />
+ <Input label="End" type="date" required {...register('period_end')} error={errors.period_end?.message} />
+ </div>
+ </fieldset>
  <Input label="Payroll date" type="date" required {...register('payroll_date')} error={errors.payroll_date?.message} />
  </div>
 
@@ -240,7 +279,10 @@ navigate(`/payroll/periods/${period.id}`);
  </div>
 
  <div>
- <p className="text-xs font-medium mb-2">Pay type</p>
+ <p className="text-xs font-medium mb-1">Pay type</p>
+ <p className="text-xs text-muted mb-2">
+ Pay type filters salary basis, not payout frequency. Monthly pay is split across the two half-month cutoff runs.
+ </p>
  <div className="flex flex-col gap-1.5">
  {(periodOptions?.pay_types ?? []).map((option) => (
  <Checkbox
@@ -253,10 +295,42 @@ navigate(`/payroll/periods/${period.id}`);
  </div>
  </div>
 
- <div className="col-span-2">
- <p className="text-xs font-medium mb-2">Departments</p>
- <div className="grid grid-cols-2 gap-1.5 max-h-52 overflow-y-auto border border-default rounded-md p-3">
- {(periodOptions?.departments ?? []).map((option) => (
+ <fieldset className="col-span-2 min-w-0 border-0 p-0">
+ <legend className="mb-2 text-xs font-medium">Departments</legend>
+ <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+ <p role="status" className="text-xs text-muted">
+ {periodOptions
+  ? `${departmentIds.length} of ${departmentOptions.length} departments selected`
+  : 'Loading departments…'}
+ </p>
+ <div className="flex flex-wrap items-center gap-2">
+ <Button
+ type="button"
+ variant="secondary"
+ size="sm"
+ className="min-h-11"
+ aria-label="Select all departments"
+ disabled={departmentOptions.length === 0 || allDepartmentsSelected}
+ onClick={() => setDepartmentIds(departmentOptions.map((option) => option.value))}
+ >
+ Select all
+ </Button>
+ <Button
+ type="button"
+ variant="ghost"
+ size="sm"
+ className="min-h-11"
+ aria-label="Clear department selection"
+ disabled={departmentIds.length === 0}
+ onClick={() => setDepartmentIds([])}
+ >
+ Clear
+ </Button>
+ </div>
+ </div>
+ {departmentOptions.length > 0 ? (
+ <div className="grid max-h-52 grid-cols-1 gap-1.5 overflow-y-auto rounded-md border border-default p-3 sm:grid-cols-2">
+ {departmentOptions.map((option) => (
  <Checkbox
  key={option.value}
  label={option.label}
@@ -265,16 +339,12 @@ navigate(`/payroll/periods/${period.id}`);
  />
  ))}
  </div>
- {departmentIds.length > 0 && (
- <button
- type="button"
- className="mt-2 text-xs text-accent hover:underline"
- onClick={() => setDepartmentIds([])}
- >
- Clear {departmentIds.length} selected
- </button>
+ ) : (
+ <p className="rounded-md border border-dashed border-subtle px-3 py-4 text-sm text-muted">
+ {periodOptions ? 'No departments are available for filtering.' : 'Loading departments…'}
+ </p>
  )}
- </div>
+ </fieldset>
 
  {!isCompanyWide && (
  <div className="col-span-2">

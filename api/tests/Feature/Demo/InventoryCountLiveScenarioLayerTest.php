@@ -63,18 +63,18 @@ final class InventoryCountLiveScenarioLayerTest extends TestCase
 
         $runner->run($options);
 
-        $session = StockCountSession::query()->where('title', 'DEMO-CYCLE-COUNT-LIVE:ZONE-A')->firstOrFail();
+        $session = StockCountSession::query()->where('title', 'Zone A Cycle Count — Variance Review')->firstOrFail();
         $line = $session->items()->whereHas('item', static fn ($query) => $query->where('code', 'RM-002'))->firstOrFail();
         $pendingCount = $session->items()->where('status', StockCountItemStatus::Pending->value)->count();
         $this->assertSame(StockCountSessionStatus::InProgress, $session->status);
         $this->assertSame(StockCountItemStatus::Counted, $line->status);
-        $this->assertSame('warehouse.staff@accounts.ogami-demo.test', $session->creator->email);
+        $this->assertSame('villanueva.aira@gmail.com', $session->creator->email);
         $this->assertSame($session->items()->count() - 1, $pendingCount);
         $this->assertSame(1, (int) $session->counted_locations);
         $this->assertNotSame(0, bccomp((string) $line->variance, '0.000', 3));
         $this->assertSame('2026-11-16 09:15:00', $session->created_at->timezone('Asia/Manila')->format('Y-m-d H:i:s'));
         $this->assertSame('2026-11-16 10:00:00', $line->counted_at->timezone('Asia/Manila')->format('Y-m-d H:i:s'));
-        $reviewer = User::query()->where('email', 'system.admin@accounts.ogami-demo.test')->firstOrFail();
+        $reviewer = User::query()->where('email', 'aballe.aaron@gmail.com')->firstOrFail();
         $this->assertContains('approve_variance', StockCountAvailableActions::forItem($line->load('session'), $reviewer));
 
         $stockBefore = DB::table('stock_levels')->orderBy('id')->get()->map(static fn ($row): array => (array) $row)->all();
@@ -91,7 +91,7 @@ final class InventoryCountLiveScenarioLayerTest extends TestCase
 
         $runner->run($options);
 
-        $this->assertSame(1, StockCountSession::query()->where('title', 'DEMO-CYCLE-COUNT-LIVE:ZONE-A')->count());
+        $this->assertSame(1, StockCountSession::query()->where('title', 'Zone A Cycle Count — Variance Review')->count());
         $this->assertSame($stockBefore, DB::table('stock_levels')->orderBy('id')->get()->map(static fn ($row): array => (array) $row)->all());
         $this->assertSame($movementsBefore, DB::table('stock_movements')->orderBy('id')->get()->map(static fn ($row): array => (array) $row)->all());
         $this->assertSame($sessionBefore, (array) DB::table('stock_count_sessions')->where('id', $session->id)->first());
@@ -118,11 +118,11 @@ final class InventoryCountLiveScenarioLayerTest extends TestCase
 
         $context = new DemoSeedContext($options);
         $service = app(StockCountService::class);
-        $session = StockCountSession::query()->where('title', 'DEMO-CYCLE-COUNT-LIVE:ZONE-A')->firstOrFail();
+        $session = StockCountSession::query()->where('title', 'Zone A Cycle Count — Variance Review')->firstOrFail();
         $varianceLine = $session->items()->whereHas('item', static fn ($query) => $query->where('code', 'RM-002'))->firstOrFail();
-        $counter = User::query()->where('email', 'warehouse.staff@accounts.ogami-demo.test')->firstOrFail();
-        $reviewer = User::query()->where('email', 'system.admin@accounts.ogami-demo.test')->firstOrFail();
-        $finisher = User::query()->where('email', 'warehouse.supervisor@accounts.ogami-demo.test')->firstOrFail();
+        $counter = User::query()->where('email', 'villanueva.aira@gmail.com')->firstOrFail();
+        $reviewer = User::query()->where('email', 'aballe.aaron@gmail.com')->firstOrFail();
+        $finisher = User::query()->where('email', 'villar.aira@gmail.com')->firstOrFail();
 
         $context->at($asOf->setTime(10, 30), fn () => $context->asUser($reviewer, fn () => $service->approveVariance((int) $varianceLine->id, $reviewer)));
 

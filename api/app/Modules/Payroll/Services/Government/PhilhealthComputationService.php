@@ -25,27 +25,33 @@ class PhilhealthComputationService
     public function __construct(private readonly GovernmentContributionTableService $tables) {}
 
     /**
-     * @param  string|float|int  $monthlySalary
      * @return array{ee: string, er: string}
      */
-    public function compute(string|float|int $monthlySalary, ?Carbon $effectiveDate = null): array
+    public function compute(string|float|int $monthlySalary, ?Carbon $effectiveDate = null, ?int $scheduleVersionId = null): array
     {
         $salary = (string) $monthlySalary;
         if (bccomp($salary, '0', 2) <= 0) {
             return ['ee' => '0.00', 'er' => '0.00'];
         }
 
-        $row = $this->tables->bracketsEffectiveOn(ContributionAgency::Philhealth, $effectiveDate ?? now())->first();
+        $rows = $scheduleVersionId === null
+            ? $this->tables->bracketsEffectiveOn(ContributionAgency::Philhealth, $effectiveDate ?? now())
+            : $this->tables->bracketsForVersion($scheduleVersionId, ContributionAgency::Philhealth);
+        $row = $rows->first();
         if (! $row) {
             return ['ee' => '0.00', 'er' => '0.00'];
         }
 
-        $floor   = (string) $row->bracket_min;
+        $floor = (string) $row->bracket_min;
         $ceiling = (string) $row->bracket_max;
 
         $basis = $salary;
-        if (bccomp($basis, $floor, 2) < 0)   $basis = $floor;
-        if (bccomp($basis, $ceiling, 2) > 0) $basis = $ceiling;
+        if (bccomp($basis, $floor, 2) < 0) {
+            $basis = $floor;
+        }
+        if (bccomp($basis, $ceiling, 2) > 0) {
+            $basis = $ceiling;
+        }
 
         $ee = bcmul($basis, (string) $row->ee_amount, 4);
         $er = bcmul($basis, (string) $row->er_amount, 4);
@@ -64,6 +70,7 @@ class PhilhealthComputationService
         $sign = bccomp($v, '0', 4) >= 0 ? '1' : '-1';
         $abs = ltrim($v, '-');
         $rounded = bcadd($abs, '0.005', 2);
+
         return $sign === '-1' ? bcmul($rounded, '-1', 2) : bcadd($rounded, '0', 2);
     }
 }

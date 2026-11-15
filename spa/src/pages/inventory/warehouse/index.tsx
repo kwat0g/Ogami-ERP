@@ -17,7 +17,6 @@ import { Input } from '@/components/ui/Input';
 import { Modal, ModalFooter } from '@/components/ui/Modal';
 import { Panel } from '@/components/ui/Panel';
 import { DataTable, type Column } from '@/components/ui/DataTable';
-import { Select } from '@/components/ui/Select';
 import { Switch } from '@/components/ui/Switch';
 import { SkeletonBlock } from '@/components/ui/Skeleton';
 import { PageHeader } from '@/components/layout/PageHeader';
@@ -28,6 +27,7 @@ import type { ApiValidationError } from '@/types';
 import type { Warehouse, WarehouseLocation, WarehouseZone } from '@/types/inventory';
 import { cn } from '@/lib/cn';
 import { focusRingInset } from '@/lib/focus';
+import { WarehouseLocationForm as LocationForm, WarehouseZoneForm as ZoneForm } from '../../warehouse/map-management';
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Schemas
@@ -42,22 +42,6 @@ const warehouseSchema = z.object({
  is_active: z.boolean().default(true),
 });
 type WarehouseFormValues = z.infer<typeof warehouseSchema>;
-
-const zoneSchema = z.object({
- name: z.string().trim().min(2).max(50),
- code: z.string().trim().min(1).max(10).regex(codeRegex, 'Use uppercase letters, digits, hyphens.'),
- zone_type: z.string().min(1, 'Zone type is required'),
-});
-type ZoneFormValues = z.infer<typeof zoneSchema>;
-
-const locationSchema = z.object({
- code: z.string().trim().min(1).max(20).regex(codeRegex, 'Use uppercase letters, digits, hyphens.'),
- rack: z.string().max(10).optional().or(z.literal('')),
- bin: z.string().max(10).optional().or(z.literal('')),
-  is_active: z.boolean().default(true),
-  is_blocked: z.boolean().default(false),
-});
-type LocationFormValues = z.infer<typeof locationSchema>;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Page
@@ -109,6 +93,15 @@ export default function WarehousePage() {
      {location.is_blocked && <Chip variant="warning">Blocked</Chip>}
     </div>
    ),
+  },
+  {
+   key: 'capacity_kg', header: 'Max kg', width: 92, minWidth: 80, maxWidth: 120, align: 'right',
+   cell: (location) => location.capacity_kg ? (
+    <div className="flex flex-wrap items-center justify-end gap-1">
+     <span>{Number(location.capacity_kg).toLocaleString('en-PH')} kg</span>
+     <Chip variant={location.capacity_status === 'rated' ? 'success' : 'warning'}>{capacityStatusText(location.capacity_status)}</Chip>
+    </div>
+   ) : '—',
   },
   {
    key: 'actions', header: '', width: 96, minWidth: 92, maxWidth: 112, align: 'right',
@@ -282,6 +275,8 @@ export default function WarehousePage() {
  <span className="font-mono text-xs">{z.code}</span>
  <span className="flex-1 truncate">{z.name}</span>
  <Chip variant="neutral">{z.zone_type_label ?? z.zone_type}</Chip>
+                 <Chip variant="neutral">{z.capacity_kg ? `${Number(z.capacity_kg).toLocaleString('en-PH')} kg` : 'No limit'}</Chip>
+                 {z.capacity_kg && <Chip variant={z.capacity_status === 'rated' ? 'success' : 'warning'}>{capacityStatusText(z.capacity_status)}</Chip>}
  </button>
  {canManage && (
  <div className="warehouse-row-actions flex justify-end gap-0.5 pr-1">
@@ -349,6 +344,7 @@ export default function WarehousePage() {
  <Modal isOpen={!!zoneModal} onClose={() => setZoneModal(null)} title={zoneModal?.mode === 'edit' ? `Edit ${zoneModal.existing?.name}` : 'New zone'} size="sm">
  {zoneModal && wh && (
  <ZoneForm
+ key={`${zoneModal.mode}-${zoneModal.existing?.id ?? 'new'}`}
  mode={zoneModal.mode}
  existing={zoneModal.existing}
  warehouseId={wh.id}
@@ -362,6 +358,7 @@ export default function WarehousePage() {
  <Modal isOpen={!!locModal} onClose={() => setLocModal(null)} title={locModal?.mode === 'edit' ? `Edit ${locModal.existing?.code}` : 'New location'} size="sm">
  {locModal && zone && (
  <LocationForm
+ key={`${locModal.mode}-${locModal.existing?.id ?? 'new'}`}
  mode={locModal.mode}
  existing={locModal.existing}
  zoneId={zone.id}
@@ -485,6 +482,15 @@ function applyServerErrors<T extends Record<string, unknown>>(
  }
 }
 
+function capacityStatusText(status: WarehouseZone['capacity_status'] | WarehouseLocation['capacity_status']): string {
+ switch (status) {
+  case 'rated': return 'Posted rating';
+  case 'derived': return 'Bin-derived';
+  case 'estimated': return 'Estimate';
+  default: return 'Unverified';
+ }
+}
+
 function WarehouseForm({ mode, existing, onClose, onSaved }: {
  mode: 'create' | 'edit'; existing: Warehouse | null; onClose: () => void; onSaved: () => void;
 }) {
@@ -517,99 +523,6 @@ function WarehouseForm({ mode, existing, onClose, onSaved }: {
  className="font-mono uppercase" placeholder="Warehouse code" />
   <Input label="Address" maxLength={500} {...register('address')} error={errors.address?.message} />
   <Switch label="Active" {...register('is_active')} />
- </div>
- <ModalFooter>
- <Button type="button" variant="secondary" onClick={onClose} disabled={m.isPending}>Cancel</Button>
- <Button type="submit" variant="primary" loading={m.isPending} disabled={m.isPending || isSubmitting}>
- {mode === 'create' ? 'Create' : 'Save changes'}
- </Button>
- </ModalFooter>
- </form>
- );
-}
-
-function ZoneForm({ mode, existing, warehouseId, onClose, onSaved }: {
- mode: 'create' | 'edit'; existing: WarehouseZone | null; warehouseId: string; onClose: () => void; onSaved: () => void;
-}) {
- const { data: warehouseOptions } = useQuery({
- queryKey: ['inventory', 'warehouse-options'],
- queryFn: warehouseApi.options,
- staleTime: 5 * 60 * 1000,
- });
- const { register, handleSubmit, setError, formState: { errors, isSubmitting } } = useForm<z.input<typeof zoneSchema>, unknown, ZoneFormValues>({
- resolver: zodResolver(zoneSchema),
- defaultValues: {
- name: existing?.name ?? '',
- code: existing?.code ?? '',
- zone_type: existing?.zone_type ?? warehouseOptions?.zone_types?.[0]?.value ?? '',
- },
- });
-
- const m = useMutation({
- mutationFn: (d: ZoneFormValues) =>
- mode === 'create'
- ? warehouseApi.createZone({ warehouse_id: warehouseId, ...d })
- : warehouseApi.updateZone(existing!.id, d),
- onSuccess: () => { toast.success(mode === 'create' ? 'Zone created.' : 'Zone updated.'); onSaved(); },
- onError: (e: AxiosError<ApiValidationError>) => applyServerErrors<ZoneFormValues>(e, setError, 'Failed to save zone.'),
- });
-
- return (
- <form onSubmit={handleSubmit((d) => m.mutate(d), onFormInvalid<ZoneFormValues>())} className="py-3">
- <div className="space-y-3">
- <Input label="Name" required maxLength={50} autoFocus {...register('name')} error={errors.name?.message} />
- <Input label="Code" required maxLength={10} {...register('code')} error={errors.code?.message}
- className="font-mono uppercase" placeholder="Zone code" />
- <Select label="Type" required {...register('zone_type')} error={errors.zone_type?.message}>
- {(warehouseOptions?.zone_types ?? []).map((z) => <option key={z.value} value={z.value}>{z.label}</option>)}
- </Select>
- </div>
- <ModalFooter>
- <Button type="button" variant="secondary" onClick={onClose} disabled={m.isPending}>Cancel</Button>
- <Button type="submit" variant="primary" loading={m.isPending} disabled={m.isPending || isSubmitting}>
- {mode === 'create' ? 'Create' : 'Save changes'}
- </Button>
- </ModalFooter>
- </form>
- );
-}
-
-function LocationForm({ mode, existing, zoneId, onClose, onSaved }: {
- mode: 'create' | 'edit'; existing: WarehouseLocation | null; zoneId: string; onClose: () => void; onSaved: () => void;
-}) {
- const { register, handleSubmit, setError, formState: { errors, isSubmitting } } = useForm<z.input<typeof locationSchema>, unknown, LocationFormValues>({
- resolver: zodResolver(locationSchema),
- defaultValues: {
- code: existing?.code ?? '',
-  rack: existing?.rack ?? '',
-  bin: existing?.bin ?? '',
-  is_active: existing?.is_active ?? true,
-  is_blocked: existing?.is_blocked ?? false,
- },
- });
-
- const m = useMutation({
- mutationFn: (d: LocationFormValues) => {
- const payload = { ...d, rack: d.rack?.trim() || null, bin: d.bin?.trim() || null };
- return mode === 'create'
- ? warehouseApi.createLocation({ zone_id: zoneId, ...payload })
- : warehouseApi.updateLocation(existing!.id, payload);
- },
- onSuccess: () => { toast.success(mode === 'create' ? 'Location created.' : 'Location updated.'); onSaved(); },
- onError: (e: AxiosError<ApiValidationError>) => applyServerErrors<LocationFormValues>(e, setError, 'Failed to save location.'),
- });
-
- return (
- <form onSubmit={handleSubmit((d) => m.mutate(d), onFormInvalid<LocationFormValues>())} className="py-3">
- <div className="space-y-3">
- <Input label="Code" required maxLength={20} autoFocus {...register('code')} error={errors.code?.message}
- className="font-mono uppercase" placeholder="Location code" />
- <div className="grid grid-cols-2 gap-3">
- <Input label="Rack" maxLength={10} {...register('rack')} error={errors.rack?.message} />
-  <Input label="Bin" maxLength={10} {...register('bin')} error={errors.bin?.message} />
-  </div>
-  <Switch label="Active" {...register('is_active')} />
-  <Switch label="Blocked for receiving" {...register('is_blocked')} />
  </div>
  <ModalFooter>
  <Button type="button" variant="secondary" onClick={onClose} disabled={m.isPending}>Cancel</Button>

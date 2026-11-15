@@ -18,7 +18,7 @@ use RuntimeException;
 /** Publishes configured baseline incoming-inspection plans for eligible items. */
 final class QualityPlanLayer extends DemoSeeder
 {
-    private const NOTES = 'Synthetic demo baseline generated from the application quality-rollout settings. QC should confirm supplier certificates and released item specifications before production use.';
+    private const NOTES = 'Baseline generated from the application quality-rollout settings. QC should confirm supplier certificates and released item specifications before production use.';
 
     public function __construct(
         private readonly ItemQualityPlanService $plans,

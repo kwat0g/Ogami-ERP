@@ -23,6 +23,7 @@ services:
     volumes:
       - ./api/app:/var/www/app:ro
       - ./api/routes:/var/www/routes:ro
+      - ./api/database/migrations:/var/www/database/migrations:ro
       - ./docker/php/live-dev-opcache.ini:/usr/local/etc/php/conf.d/zz-live-dev.ini:ro
       - appstorage:/var/www/storage/app
     # Development mode keeps config and route files uncached so PHP source

@@ -9,10 +9,14 @@ use App\Common\Models\ApprovalDelegation;
 use App\Common\Services\NotificationService;
 use App\Modules\Auth\Models\User;
 use App\Modules\HR\Models\Employee;
+use App\Modules\Leave\Enums\LeaveRequestStatus;
+use App\Modules\Leave\Models\LeaveRequest;
 use App\Modules\Payroll\Enums\PayrollAdjustmentStatus;
+use App\Modules\Payroll\Enums\PayrollAdjustmentType;
 use App\Modules\Payroll\Enums\PayrollPeriodStatus;
 use App\Modules\Payroll\Models\Payroll;
 use App\Modules\Payroll\Models\PayrollAdjustment;
+use App\Modules\Payroll\Models\PayrollPeriod;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Http\Request;
@@ -98,7 +102,10 @@ class PayrollAdjustmentService
     public function list(array $filters): LengthAwarePaginator
     {
         $query = PayrollAdjustment::query()
-            ->with(['period', 'employee.department', 'employee.position', 'originalPayroll', 'approver']);
+            ->with([
+                'period', 'employee.department', 'employee.position', 'originalPayroll', 'approver',
+                'sourceLeaveRequest', 'targetPeriod',
+            ]);
 
         if (! empty($filters['status'])) {
             $query->where('status', $filters['status']);
@@ -139,6 +146,14 @@ class PayrollAdjustmentService
                 throw new BusinessRuleException('Adjustments can only be raised against finalized payroll periods.');
             }
 
+            $sourceLeaveRequestId = null;
+            $targetPeriodId = null;
+            if (PayrollAdjustmentType::from((string) $data['type']) === PayrollAdjustmentType::UnpaidAbsence) {
+                [$leaveRequest, $targetPeriod] = $this->validateUnpaidAbsenceLink($data, $original);
+                $sourceLeaveRequestId = $leaveRequest->id;
+                $targetPeriodId = $targetPeriod->id;
+            }
+
             $adj = PayrollAdjustment::create([
                 'payroll_period_id' => $period->id,
                 'employee_id' => $original->employee_id,
@@ -147,6 +162,8 @@ class PayrollAdjustmentService
                 'amount' => $data['amount'],
                 'reason' => $data['reason'],
                 'created_by' => $user->id,
+                'source_leave_request_id' => $sourceLeaveRequestId,
+                'target_payroll_period_id' => $targetPeriodId,
             ]);
             // status non-fillable; service-only.
             $adj->forceFill(['status' => PayrollAdjustmentStatus::Pending->value])->save();
@@ -172,6 +189,139 @@ class PayrollAdjustmentService
 
             return $adj;
         });
+    }
+
+    /**
+     * Unpaid absence remains a manually valued adjustment, but it must identify
+     * the approved unpaid source and the regular cutoff receiving the deduction.
+     *
+     * @return array{LeaveRequest, PayrollPeriod}
+     */
+    private function validateUnpaidAbsenceLink(array $data, Payroll $original): array
+    {
+        $targetPeriod = PayrollPeriod::query()
+            ->lockForUpdate()
+            ->findOrFail($data['target_payroll_period_id']);
+        $leaveRequest = LeaveRequest::query()
+            ->with('leaveType')
+            ->lockForUpdate()
+            ->findOrFail($data['source_leave_request_id']);
+
+        if ((int) $leaveRequest->employee_id !== (int) $original->employee_id) {
+            throw new BusinessRuleException('The unpaid leave request must belong to the source payroll employee.');
+        }
+        if ($leaveRequest->status !== LeaveRequestStatus::Approved || $leaveRequest->leaveType?->is_paid !== false) {
+            throw new BusinessRuleException('The source must be an approved request for unpaid leave.');
+        }
+        if ($targetPeriod->is_thirteenth_month || ! $targetPeriod->status?->isComputable()) {
+            throw new BusinessRuleException('Unpaid absence adjustments require a regular draft or computed target period.');
+        }
+        if ($leaveRequest->start_date->gt($targetPeriod->period_end)
+            || $leaveRequest->end_date->lt($targetPeriod->period_start)) {
+            throw new BusinessRuleException('The target payroll cutoff must overlap the unpaid leave dates.');
+        }
+
+        $eligible = app(PayrollPeriodService::class)
+            ->availableEmployeeQuery($targetPeriod)
+            ->whereKey($leaveRequest->employee_id)
+            ->exists();
+        if (! $eligible) {
+            throw new BusinessRuleException('The target payroll period does not include the unpaid leave employee.');
+        }
+
+        $alreadyLinked = PayrollAdjustment::query()
+            ->where('source_leave_request_id', $leaveRequest->id)
+            ->where('target_payroll_period_id', $targetPeriod->id)
+            ->whereIn('status', [
+                PayrollAdjustmentStatus::Pending->value,
+                PayrollAdjustmentStatus::Approved->value,
+                PayrollAdjustmentStatus::Applied->value,
+            ])
+            ->exists();
+        if ($alreadyLinked) {
+            throw new BusinessRuleException('This unpaid leave already has an active adjustment for the selected payroll cutoff.');
+        }
+
+        return [$leaveRequest, $targetPeriod];
+    }
+
+    /**
+     * Source options are scoped to the selected source payroll employee and do
+     * not require the caller to also hold leave-management permissions.
+     *
+     * @return array{leave_requests: array<int, array<string, mixed>>, target_periods: array<int, array<string, mixed>>}
+     */
+    public function unpaidAbsenceOptions(array $filters, User $user): array
+    {
+        $payrollId = Payroll::tryDecodeHash((string) ($filters['original_payroll_id'] ?? ''));
+        abort_if($payrollId === null, 422, 'Invalid payroll reference.');
+        $original = Payroll::query()->with('period')->findOrFail($payrollId);
+        $this->assertCanAccessPayroll($original, $user);
+
+        $leaveRequests = LeaveRequest::query()
+            ->with('leaveType')
+            ->where('employee_id', $original->employee_id)
+            ->where('status', LeaveRequestStatus::Approved->value)
+            ->whereHas('leaveType', fn ($query) => $query->where('is_paid', false))
+            ->when(! empty($filters['leave_request_id']), function ($query) use ($filters, $original): void {
+                $id = LeaveRequest::tryDecodeHash((string) $filters['leave_request_id']);
+                abort_if($id === null, 422, 'Invalid leave request reference.');
+                $query->whereKey($id)->where('employee_id', $original->employee_id);
+            })
+            ->orderByDesc('start_date')
+            ->limit(100)
+            ->get();
+
+        $leaveOptions = $leaveRequests->map(static fn (LeaveRequest $leave): array => [
+            'id' => $leave->hash_id,
+            'leave_request_no' => $leave->leave_request_no,
+            'leave_type' => $leave->leaveType?->name,
+            'start_date' => $leave->start_date->toDateString(),
+            'end_date' => $leave->end_date->toDateString(),
+            'days' => (string) $leave->days,
+        ])->values()->all();
+
+        $selectedLeave = ! empty($filters['leave_request_id']) ? $leaveRequests->first() : null;
+        if (! $selectedLeave) {
+            return ['leave_requests' => $leaveOptions, 'target_periods' => []];
+        }
+
+        $occupiedTargetIds = PayrollAdjustment::query()
+            ->where('source_leave_request_id', $selectedLeave->id)
+            ->whereIn('status', [
+                PayrollAdjustmentStatus::Pending->value,
+                PayrollAdjustmentStatus::Approved->value,
+                PayrollAdjustmentStatus::Applied->value,
+            ])
+            ->pluck('target_payroll_period_id')
+            ->filter()
+            ->map(static fn ($id): int => (int) $id)
+            ->all();
+
+        $targetPeriods = PayrollPeriod::query()
+            ->where('is_thirteenth_month', false)
+            ->whereIn('status', [PayrollPeriodStatus::Draft->value, PayrollPeriodStatus::Computed->value])
+            ->whereDate('period_start', '<=', $selectedLeave->end_date->toDateString())
+            ->whereDate('period_end', '>=', $selectedLeave->start_date->toDateString())
+            ->orderBy('period_start')
+            ->get()
+            ->filter(function (PayrollPeriod $target) use ($selectedLeave, $occupiedTargetIds): bool {
+                return ! in_array((int) $target->id, $occupiedTargetIds, true)
+                    && app(PayrollPeriodService::class)->availableEmployeeQuery($target)
+                        ->whereKey($selectedLeave->employee_id)
+                        ->exists();
+            })
+            ->map(static fn (PayrollPeriod $target): array => [
+                'id' => $target->hash_id,
+                'label' => $target->label(),
+                'period_start' => $target->period_start->toDateString(),
+                'period_end' => $target->period_end->toDateString(),
+                'status' => $target->status?->value,
+            ])
+            ->values()
+            ->all();
+
+        return ['leave_requests' => $leaveOptions, 'target_periods' => $targetPeriods];
     }
 
     /**

@@ -614,7 +614,7 @@ class SalesOrderService
                     throw new BusinessRuleException('Replacement orders support two decimal places. Review fractional quantities before authorization.');
                 }
                 $so->items()->create([
-                    'product_id' => $line->product_id, 'quantity' => $quantity, 'unit_price' => '0.00',
+                    'product_id' => $line->product_id, 'quantity' => $quantity, 'fulfillment_policy' => 'stock_first', 'unit_price' => '0.00',
                     'total' => '0.00', 'quantity_delivered' => '0', 'delivery_date' => $lockedCase->expected_date?->toDateString() ?? now()->toDateString(),
                 ]);
             }

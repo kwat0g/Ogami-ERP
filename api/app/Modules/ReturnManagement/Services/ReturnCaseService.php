@@ -424,7 +424,7 @@ class ReturnCaseService
                         $order = app(\App\Modules\CRM\Services\SalesOrderService::class)->confirm($order);
                     }
                     $patch = ['replacement_sales_order_id' => $order->id, 'status' => 'in_progress'];
-                    $message = 'No-charge replacement approved and confirmed. Automatic production planning is queued; Quality, dispatch and customer receipt are still required.';
+                    $message = 'No-charge replacement approved and confirmed. Available approved stock is allocated first; only any remaining quantity is planned for production. Quality, dispatch and customer receipt are still required.';
                     break;
                 case 'create_return':
                     $this->requireState($case, ['action_agreed', 'in_progress']);

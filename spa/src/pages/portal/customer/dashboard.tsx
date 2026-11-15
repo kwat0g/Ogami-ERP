@@ -1,9 +1,12 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { LuArrowRight } from '@/lib/icons';
+import { LuArrowRight, LuChevronLeft, LuChevronRight, LuSearch } from '@/lib/icons';
 import { customerPortalApi } from '@/api/b2b/customer';
+import { Button } from '@/components/ui/Button';
 import { Chip } from '@/components/ui/Chip';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { Input } from '@/components/ui/Input';
 import { Panel } from '@/components/ui/Panel';
 import { StatCard } from '@/components/ui/StatCard';
 import {
@@ -15,6 +18,8 @@ import { formatDate } from '@/lib/formatDate';
 import { formatPeso } from '@/lib/formatNumber';
 import { complaintStatusVariant, deliveryStatusVariant, invoiceStatusVariant, salesOrderStatusVariant } from '@/lib/statusVariants';
 import { Td, Th, tableCls, theadTrCls, trCls } from '@/components/ui/table-cells';
+
+const PRODUCT_TERMS_PAGE_SIZE = 4;
 
 const coveredIssueLabels: Record<string, string> = {
   manufacturing_defect: 'Manufacturing defect',
@@ -42,6 +47,8 @@ function warrantyList(values: string[] | null, labels: Record<string, string>): 
 }
 
 export default function CustomerDashboardPage() {
+  const [productSearch, setProductSearch] = useState('');
+  const [productPage, setProductPage] = useState(1);
   const dashboard = useQuery({
     queryKey: ['portal', 'customer', 'dashboard'],
     queryFn: () => customerPortalApi.dashboard(),
@@ -51,6 +58,18 @@ export default function CustomerDashboardPage() {
     queryFn: () => customerPortalApi.me(),
   });
   const terms = account.data?.customer_terms;
+  const productTerms = (dashboard.data?.product_terms ?? []).filter((product) => {
+    const query = productSearch.trim().toLowerCase();
+    return !query || `${product.part_number} ${product.name}`.toLowerCase().includes(query);
+  });
+  const productPageCount = Math.max(1, Math.ceil(productTerms.length / PRODUCT_TERMS_PAGE_SIZE));
+  const currentProductPage = Math.min(productPage, productPageCount);
+  const visibleProductTerms = productTerms.slice(
+    (currentProductPage - 1) * PRODUCT_TERMS_PAGE_SIZE,
+    currentProductPage * PRODUCT_TERMS_PAGE_SIZE,
+  );
+  const productRangeStart = productTerms.length ? (currentProductPage - 1) * PRODUCT_TERMS_PAGE_SIZE + 1 : 0;
+  const productRangeEnd = Math.min(currentProductPage * PRODUCT_TERMS_PAGE_SIZE, productTerms.length);
 
   const viewAll = (to: string) => (
     <Link to={to} className="text-2xs text-accent hover:underline flex items-center gap-1">
@@ -113,42 +132,97 @@ export default function CustomerDashboardPage() {
                       <span className="text-xs text-muted">{data.product_terms?.length ?? 0} products in your agreement</span>
                     </div>
                     {data.product_terms?.length ? (
-                      <ul className="space-y-2">
-                        {data.product_terms.map((product) => (
-                          <li key={product.id} className="rounded-md border border-subtle bg-elevated/20 p-3">
-                            <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-                              <div className="min-w-0">
-                                <h4 className="text-sm font-medium text-primary">{product.part_number} · {product.name}</h4>
-                                <p className="mt-1 text-xs text-muted">
-                                  Quantity per order: {agreementQuantityRange(product.minimum_order_quantity, product.maximum_order_quantity, product.unit_of_measure)}
-                                </p>
-                              </div>
+                      <div className="space-y-3">
+                        {data.product_terms.length > PRODUCT_TERMS_PAGE_SIZE && (
+                          <Input
+                            aria-label="Search product terms"
+                            placeholder="Search part number or name"
+                            fieldSize="md"
+                            prefix={<LuSearch size={16} aria-hidden="true" />}
+                            value={productSearch}
+                            onChange={(event) => {
+                              setProductSearch(event.target.value);
+                              setProductPage(1);
+                            }}
+                          />
+                        )}
+                        {visibleProductTerms.length ? (
+                          <ul className="space-y-2">
+                            {visibleProductTerms.map((product) => (
+                              <li key={product.id}>
+                                <details name="customer-product-term" className="rounded-md border border-subtle bg-elevated/20">
+                                  <summary className="cursor-pointer p-3 marker:text-muted">
+                                    <span className="text-sm font-medium text-primary">{product.part_number} · {product.name}</span>
+                                    <span className="mt-1 block text-xs text-muted">
+                                      Quantity per order: {agreementQuantityRange(product.minimum_order_quantity, product.maximum_order_quantity, product.unit_of_measure)}
+                                    </span>
+                                  </summary>
+                                  <div className="mx-3 border-t border-subtle pb-3 pt-3">
+                                    <p className="text-xs font-medium text-primary">Warranty choices</p>
+                                    {product.warranty_options.length ? (
+                                      <ul className="mt-2 space-y-2">
+                                        {product.warranty_options.map((option) => (
+                                          <li key={option.id}>
+                                            <details name={`customer-warranty-${product.id}`} className="rounded-sm bg-canvas/70 px-3 py-2">
+                                              <summary className="flex cursor-pointer flex-wrap items-baseline justify-between gap-x-3 gap-y-1 marker:text-muted">
+                                                <span className="text-sm font-medium text-primary">{option.label}</span>
+                                                <span className="text-xs text-muted">{option.warranty_duration_days == null ? 'Duration not specified' : `${option.warranty_duration_days} days`}</span>
+                                              </summary>
+                                              <dl className="mt-2 grid gap-x-4 gap-y-2 text-xs sm:grid-cols-2 xl:grid-cols-4">
+                                                <div><dt className="text-muted">Report deadline (from delivery)</dt><dd className="mt-0.5">{option.warranty_report_window_days == null ? 'Not specified' : `${option.warranty_report_window_days} days`}</dd></div>
+                                                <div><dt className="text-muted">Warranty starts from</dt><dd className="mt-0.5">{option.warranty_start_basis ? option.warranty_start_basis[0].toUpperCase() + option.warranty_start_basis.slice(1) : 'Not specified'}</dd></div>
+                                                <div><dt className="text-muted">Covered issues</dt><dd className="mt-0.5">{warrantyList(option.warranty_covered_issues, coveredIssueLabels)}</dd></div>
+                                                <div><dt className="text-muted">Remedies</dt><dd className="mt-0.5">{warrantyList(option.warranty_remedies, remedyLabels)}</dd></div>
+                                              </dl>
+                                              {option.additional_terms && <p className="mt-2 whitespace-pre-line text-xs text-muted">{option.additional_terms}</p>}
+                                            </details>
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    ) : <p className="mt-1 text-xs text-muted">No product warranty choices are recorded.</p>}
+                                  </div>
+                                </details>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p role="status" className="rounded-md border border-dashed border-subtle px-3 py-4 text-sm text-muted">No product terms match “{productSearch}”.</p>
+                        )}
+                        {productTerms.length > PRODUCT_TERMS_PAGE_SIZE && (
+                          <nav aria-label="Product terms pages" className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                            <span className="text-xs tabular-nums text-muted">
+                              Showing {productRangeStart}–{productRangeEnd} of {productTerms.length}{productSearch.trim() ? ' matching products' : ' products'}
+                            </span>
+                            <div className="flex items-center gap-1">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="min-h-11"
+                                icon={<LuChevronLeft size={14} />}
+                                disabled={currentProductPage <= 1}
+                                onClick={() => setProductPage((page) => Math.max(1, page - 1))}
+                              >
+                                Previous
+                              </Button>
+                              <span aria-live="polite" className="px-2 text-xs tabular-nums text-muted">
+                                {currentProductPage} / {productPageCount}
+                              </span>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="min-h-11"
+                                icon={<LuChevronRight size={14} />}
+                                disabled={currentProductPage >= productPageCount}
+                                onClick={() => setProductPage((page) => Math.min(productPageCount, page + 1))}
+                              >
+                                Next
+                              </Button>
                             </div>
-                            <div className="mt-3 border-t border-subtle pt-3">
-                              <p className="text-xs font-medium text-primary">Warranty choices</p>
-                              {product.warranty_options.length ? (
-                                <ul className="mt-2 space-y-2">
-                                  {product.warranty_options.map((option) => (
-                                    <li key={option.id} className="rounded-sm bg-canvas/70 px-3 py-2">
-                                      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                                        <span className="text-sm font-medium text-primary">{option.label}</span>
-                                        <span className="text-xs text-muted">{option.warranty_duration_days == null ? 'Duration not specified' : `${option.warranty_duration_days} days`}</span>
-                                      </div>
-                                      <dl className="mt-2 grid gap-x-4 gap-y-2 text-xs sm:grid-cols-2 xl:grid-cols-4">
-                                        <div><dt className="text-muted">Report deadline (from delivery)</dt><dd className="mt-0.5">{option.warranty_report_window_days == null ? 'Not specified' : `${option.warranty_report_window_days} days`}</dd></div>
-                                        <div><dt className="text-muted">Warranty starts from</dt><dd className="mt-0.5">{option.warranty_start_basis ? option.warranty_start_basis[0].toUpperCase() + option.warranty_start_basis.slice(1) : 'Not specified'}</dd></div>
-                                        <div><dt className="text-muted">Covered issues</dt><dd className="mt-0.5">{warrantyList(option.warranty_covered_issues, coveredIssueLabels)}</dd></div>
-                                        <div><dt className="text-muted">Remedies</dt><dd className="mt-0.5">{warrantyList(option.warranty_remedies, remedyLabels)}</dd></div>
-                                      </dl>
-                                      {option.additional_terms && <p className="mt-2 whitespace-pre-line text-xs text-muted">{option.additional_terms}</p>}
-                                    </li>
-                                  ))}
-                                </ul>
-                              ) : <p className="mt-1 text-xs text-muted">No product warranty choices are recorded.</p>}
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
+                          </nav>
+                        )}
+                      </div>
                     ) : <p className="rounded-md border border-dashed border-subtle px-3 py-4 text-sm text-muted">No products are currently listed in your agreement. Contact Sales if you expect to place an order.</p>}
                   </section>
                   <p className="border-t border-subtle pt-3 text-xs text-muted">The account payment term is a default; you may request different terms on each order for Sales to review. Order totals exclude freight. Sales confirms any customer-paid freight separately. Warranty reports are reviewed under the product terms above.</p>

@@ -31,16 +31,16 @@ final class InventoryCatalogLayer extends DemoSeeder
 
     /** @var list<array{code: string, name: string, description: string, category: string, uom: string, cost: string, reorder: string, safety: string, moq: string, lead: int, critical: bool}> */
     private const ITEMS = [
-        ['code' => 'RM-001', 'name' => 'ABS injection resin, natural', 'description' => 'General-purpose ABS resin for interior trim and connector housings.', 'category' => 'Resins', 'uom' => 'KG', 'cost' => '120.0000', 'reorder' => '500.000', 'safety' => '200.000', 'moq' => '25.000', 'lead' => 14, 'critical' => false],
-        ['code' => 'RM-002', 'name' => 'PP impact copolymer resin, natural', 'description' => 'Impact-modified polypropylene resin for covers and duct components.', 'category' => 'Resins', 'uom' => 'KG', 'cost' => '95.0000', 'reorder' => '500.000', 'safety' => '200.000', 'moq' => '25.000', 'lead' => 14, 'critical' => false],
+        ['code' => 'RM-001', 'name' => 'ABS PA-777D injection resin, black', 'description' => 'General-purpose ABS resin for interior trim and connector housings. The company POC workbook references ABS PA-777D (FBP 0CA537 Black) for Fan Case M41-2-2578-101-00-3; its recorded consumption weight is 61.0 and the source does not state a unit.', 'category' => 'Resins', 'uom' => 'KG', 'cost' => '120.0000', 'reorder' => '500.000', 'safety' => '200.000', 'moq' => '25.000', 'lead' => 14, 'critical' => false],
+        ['code' => 'RM-002', 'name' => 'PP IDEMITSU J-762HP impact copolymer resin', 'description' => 'Impact-modified polypropylene for covers and molded components. The company POC workbook lists this grade with BC4C 10MB (2.5%) for selected parts; listed consumption weights have no stated unit.', 'category' => 'Resins', 'uom' => 'KG', 'cost' => '95.0000', 'reorder' => '500.000', 'safety' => '200.000', 'moq' => '25.000', 'lead' => 14, 'critical' => false],
         ['code' => 'RM-003', 'name' => 'PA6 resin, natural', 'description' => 'Injection-grade polyamide 6 for clips and structural brackets.', 'category' => 'Resins', 'uom' => 'KG', 'cost' => '150.0000', 'reorder' => '300.000', 'safety' => '120.000', 'moq' => '25.000', 'lead' => 21, 'critical' => true],
-        ['code' => 'RM-004', 'name' => 'POM copolymer resin, natural', 'description' => 'Low-friction acetal resin for bushings and moving components.', 'category' => 'Resins', 'uom' => 'KG', 'cost' => '180.0000', 'reorder' => '300.000', 'safety' => '100.000', 'moq' => '25.000', 'lead' => 21, 'critical' => false],
+        ['code' => 'RM-004', 'name' => 'POM DURACON M90-44 CF2001 NAT', 'description' => 'Low-friction acetal resin for bushings and moving components. The company POC workbook includes this grade in a Bush RR formulation example; the source weight unit is not specified.', 'category' => 'Resins', 'uom' => 'KG', 'cost' => '180.0000', 'reorder' => '300.000', 'safety' => '100.000', 'moq' => '25.000', 'lead' => 21, 'critical' => false],
         ['code' => 'RM-005', 'name' => 'PC injection resin, clear', 'description' => 'Polycarbonate resin for transparent indicator and lamp components.', 'category' => 'Resins', 'uom' => 'KG', 'cost' => '220.0000', 'reorder' => '200.000', 'safety' => '80.000', 'moq' => '25.000', 'lead' => 21, 'critical' => false],
-        ['code' => 'RM-006', 'name' => 'PBT GF30 resin, black', 'description' => '30 percent glass-filled PBT resin for electrical housings.', 'category' => 'Resins', 'uom' => 'KG', 'cost' => '190.0000', 'reorder' => '250.000', 'safety' => '100.000', 'moq' => '25.000', 'lead' => 21, 'critical' => false],
+        ['code' => 'RM-006', 'name' => 'PBT DX 515HR EF2001 NC (J)', 'description' => 'PBT injection resin for electrical housings. The company POC workbook lists this grade with SK-P0499DC (0.40%) in a Terminal Unit example; its recorded consumption weight is 1.9095 and the source does not state a unit.', 'category' => 'Resins', 'uom' => 'KG', 'cost' => '190.0000', 'reorder' => '250.000', 'safety' => '100.000', 'moq' => '25.000', 'lead' => 21, 'critical' => false],
         ['code' => 'RM-007', 'name' => 'HDPE injection resin, natural', 'description' => 'High-density polyethylene for caps and protective covers.', 'category' => 'Resins', 'uom' => 'KG', 'cost' => '75.0000', 'reorder' => '250.000', 'safety' => '100.000', 'moq' => '25.000', 'lead' => 14, 'critical' => false],
-        ['code' => 'RM-008', 'name' => 'PA66 GF30 resin, black', 'description' => '30 percent glass-filled nylon 66 for heat-resistant brackets.', 'category' => 'Resins', 'uom' => 'KG', 'cost' => '240.0000', 'reorder' => '200.000', 'safety' => '80.000', 'moq' => '25.000', 'lead' => 28, 'critical' => true],
-        ['code' => 'RM-009', 'name' => 'PA6 GF30 injection resin, natural', 'description' => 'Synthetic catalog entry for 30 percent glass-filled polyamide 6 parts in the demo product set.', 'category' => 'Resins', 'uom' => 'KG', 'cost' => '220.0000', 'reorder' => '180.000', 'safety' => '70.000', 'moq' => '25.000', 'lead' => 28, 'critical' => true],
-        ['code' => 'RM-010', 'name' => 'Black masterbatch, carbon black', 'description' => 'Concentrated black colorant for injection molding compounds.', 'category' => 'Colorants', 'uom' => 'KG', 'cost' => '250.0000', 'reorder' => '50.000', 'safety' => '20.000', 'moq' => '5.000', 'lead' => 7, 'critical' => false],
+        ['code' => 'RM-008', 'name' => 'PA66 A3W NATURAL resin', 'description' => 'PA66 injection resin. The company POC workbook references PA66 A3W NATURAL for Clip Wire Harness part 53904-405-00; its recorded consumption weight is 0.77 and the source does not state a unit.', 'category' => 'Resins', 'uom' => 'KG', 'cost' => '240.0000', 'reorder' => '200.000', 'safety' => '80.000', 'moq' => '25.000', 'lead' => 28, 'critical' => true],
+        ['code' => 'RM-009', 'name' => 'PA6 GF30 injection resin, natural', 'description' => 'Injection resin for 30 percent glass-filled polyamide 6 molded parts.', 'category' => 'Resins', 'uom' => 'KG', 'cost' => '220.0000', 'reorder' => '180.000', 'safety' => '70.000', 'moq' => '25.000', 'lead' => 28, 'critical' => true],
+        ['code' => 'RM-010', 'name' => 'BC4C 10MB black masterbatch', 'description' => 'Black color concentrate. The company POC workbook lists BC4C 10MB at 2.5% in selected PP formulations; this remains a separate catalog item from the base resin.', 'category' => 'Colorants', 'uom' => 'KG', 'cost' => '250.0000', 'reorder' => '50.000', 'safety' => '20.000', 'moq' => '5.000', 'lead' => 7, 'critical' => false],
         ['code' => 'RM-011', 'name' => 'White masterbatch, titanium dioxide', 'description' => 'White color concentrate for molded covers and caps.', 'category' => 'Colorants', 'uom' => 'KG', 'cost' => '280.0000', 'reorder' => '50.000', 'safety' => '20.000', 'moq' => '5.000', 'lead' => 7, 'critical' => false],
         ['code' => 'RM-012', 'name' => 'Gray masterbatch, neutral gray', 'description' => 'Neutral gray color concentrate for interior trim components.', 'category' => 'Colorants', 'uom' => 'KG', 'cost' => '260.0000', 'reorder' => '40.000', 'safety' => '15.000', 'moq' => '5.000', 'lead' => 7, 'critical' => false],
         ['code' => 'RM-050', 'name' => 'Brass insert, small, M4', 'description' => 'Threaded insert for molded connector and cover assemblies.', 'category' => 'Metal Inserts', 'uom' => 'PCS', 'cost' => '5.5000', 'reorder' => '5000.000', 'safety' => '2000.000', 'moq' => '1000.000', 'lead' => 21, 'critical' => false],
@@ -239,28 +239,40 @@ final class InventoryCatalogLayer extends DemoSeeder
 
         foreach (self::ITEMS as $definition) {
             $item = Item::withTrashed()->where('code', $definition['code'])->first();
+            $itemData = [
+                'code' => $definition['code'],
+                'name' => $definition['name'],
+                'description' => $definition['description'],
+                'category_id' => $categoryIds[$categoryKeys[$definition['category']]],
+                'unit_of_measure' => $definition['uom'],
+                'standard_cost' => $definition['cost'],
+                'reorder_method' => 'fixed_quantity',
+                'reorder_point' => $definition['reorder'],
+                'safety_stock' => $definition['safety'],
+                'minimum_order_quantity' => $definition['moq'],
+                'lead_time_days' => $definition['lead'],
+                'is_critical' => $definition['critical'],
+                'is_active' => true,
+            ];
             if ($item === null) {
-                $item = $this->items->create([
-                    'code' => $definition['code'],
-                    'name' => $definition['name'],
-                    'description' => $definition['description'],
-                    'category_id' => $categoryIds[$categoryKeys[$definition['category']]],
-                    'unit_of_measure' => $definition['uom'],
-                    'standard_cost' => $definition['cost'],
-                    'reorder_method' => 'fixed_quantity',
-                    'reorder_point' => $definition['reorder'],
-                    'safety_stock' => $definition['safety'],
-                    'minimum_order_quantity' => $definition['moq'],
-                    'lead_time_days' => $definition['lead'],
-                    'is_critical' => $definition['critical'],
-                    'is_active' => true,
-                ]);
+                $item = $this->items->create($itemData);
             } elseif ($item->trashed()) {
                 $this->items->restore($item);
                 $item->refresh();
             }
 
+            $displayChanges = [];
+            foreach (['name', 'description'] as $field) {
+                if ($item->{$field} !== $itemData[$field]) {
+                    $displayChanges[$field] = $itemData[$field];
+                }
+            }
+            if ($displayChanges !== []) {
+                $item = $this->items->update($item, $displayChanges);
+            }
+
             $context->records()->remember('inventory.item.'.$definition['code'], $item);
         }
     }
+
 }

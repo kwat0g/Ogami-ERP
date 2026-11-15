@@ -71,7 +71,7 @@ class QualityInspectionReferencesLayerTest extends TestCase
             ->get();
         $revisions = InspectionSpecRevision::query()->whereIn('inspection_spec_id', $specs->modelKeys())->get();
         $items = InspectionSpecItem::query()->whereIn('inspection_spec_id', $specs->modelKeys())->orderBy('inspection_spec_id')->orderBy('sort_order')->get();
-        $templates = NcrTemplate::query()->where('name', 'like', 'DEMO —%')->orderBy('name')->get();
+        $templates = NcrTemplate::query()->where('notes', 'Review applicability against current customer, product, and supplier requirements before use.')->orderBy('name')->get();
         $qualityActor = User::query()->whereHas('role', fn ($query) => $query->where('slug', 'qc_inspector'))->firstOrFail();
 
         $this->assertCount(16, $products);

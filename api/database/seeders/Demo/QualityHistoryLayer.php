@@ -27,7 +27,7 @@ use RuntimeException;
 /** Seeds current customer complaints, 8D response, and NCR corrective actions. */
 final class QualityHistoryLayer extends DemoSeeder
 {
-    private const PREFIX = 'DEMO-QUALITY:';
+    private const PREFIX = 'OGI-QUALITY:';
 
     public function __construct(
         private readonly ComplaintService $complaints,
@@ -55,9 +55,9 @@ final class QualityHistoryLayer extends DemoSeeder
     protected function seedDemoData(DemoSeedContext $context): void
     {
         $asOf = $context->options->asOf->setTimezone('Asia/Manila');
-        $customerService = $this->account('customer.service@accounts.ogami-demo.test', 'crm.complaints.manage');
-        $qualityManager = $this->account('system.admin@accounts.ogami-demo.test', 'quality.ncr.manage');
-        $qualityOwner = $this->account('qc.inspector@accounts.ogami-demo.test', 'quality.ncr.manage');
+        $customerService = $this->account('natividad.abegail@gmail.com', 'crm.complaints.manage');
+        $qualityManager = $this->account('aballe.aaron@gmail.com', 'quality.ncr.manage');
+        $qualityOwner = $this->account('villar.airah@gmail.com', 'quality.ncr.manage');
         $customer = Customer::query()->where('is_active', true)->orderBy('id')->first();
         $product = Product::query()->where('part_number', 'FC-001')->where('is_active', true)->first();
         if (! $customer instanceof Customer || ! $product instanceof Product) {
@@ -90,7 +90,7 @@ final class QualityHistoryLayer extends DemoSeeder
         User $qualityManager,
         User $qualityOwner,
     ): void {
-        $grn = GoodsReceiptNote::query()->where('remarks', 'DEMO-RECEIVING:GRN-PARTIAL-ACCEPT')->first();
+        $grn = GoodsReceiptNote::query()->where('remarks', 'OGI-RECEIVING:GRN-PARTIAL-ACCEPT')->first();
         if (! $grn instanceof GoodsReceiptNote) {
             throw new RuntimeException('Quality history requires the incoming partial-acceptance receipt from receiving history.');
         }
@@ -120,7 +120,7 @@ final class QualityHistoryLayer extends DemoSeeder
         CarbonImmutable $createdAt,
         bool $live,
     ): CustomerComplaint {
-        $description = self::PREFIX.$scenario.': Customer reported a fitment concern on synthetic FC-001 fuse-box covers.';
+        $description = self::PREFIX.$scenario.': Customer reported a fitment concern on FC-001 fuse-box covers.';
         $existing = CustomerComplaint::query()->where('description', $description)->first();
         if ($existing instanceof CustomerComplaint) {
             return $existing->fresh(['ncr', 'eightDReport']);

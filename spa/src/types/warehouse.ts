@@ -8,9 +8,20 @@ export interface WarehouseMapLocation {
   full_code: string;
   rack: string | null;
   bin: string | null;
+  is_active: boolean;
   is_blocked: boolean;
   blocked_reason: string | null;
   capacity_kg: string | null;
+  capacity_status?: 'unverified' | 'estimated' | 'rated';
+  capacity_used_kg: string;
+  capacity_untracked_line_count?: number;
+  capacity_untracked_items?: Array<{
+    item_id: string | null;
+    item_code: string | null;
+    item_name: string | null;
+    quantity: string;
+    unit_of_measure: string | null;
+  }>;
   current_item: { id: string; code: string; name: string; unit_of_measure?: string } | null;
   current_quantity: string;
   current_lot_number: string | null;
@@ -27,6 +38,10 @@ export interface WarehouseMapZone {
   name: string;
   zone_type: string;
   type_label: string;
+  capacity_kg: string | null;
+  capacity_status?: 'unverified' | 'estimated' | 'derived' | 'rated';
+  capacity_used_kg: string;
+  capacity_untracked_line_count?: number;
   locations: WarehouseMapLocation[];
 }
 
@@ -35,6 +50,7 @@ export interface WarehouseMap {
   code: string;
   name: string;
   address: string | null;
+  is_active?: boolean;
   zones: WarehouseMapZone[];
 }
 

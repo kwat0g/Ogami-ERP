@@ -72,13 +72,17 @@ export interface AmortizationItem {
 export interface LoanTypeOption {
  value: LoanType;
  label: string;
+ principal_min?: string;
+ principal_max?: string;
  interest_rate: string;
  interest_rate_percent?: string;
  approval_steps: number;
+ approval_chain?: string[];
  vp_approval_threshold?: string | null;
 }
 
 export interface LoanLimits {
+ principal_min?: string;
  principal_max: string;
  has_active: boolean;
  max_pay_periods: number;

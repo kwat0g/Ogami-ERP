@@ -139,6 +139,15 @@ function ActionEditor({
 
   const close = () => { if (!busy) onClose(); };
   const agreement = agreementValidation(record, verified, resolution);
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const latestDateValue = new Date(`${today}T00:00:00Z`);
+  latestDateValue.setUTCFullYear(latestDateValue.getUTCFullYear() + 1);
+  const latestDate = latestDateValue.toISOString().slice(0, 10);
+  const expectedDateError = expectedDate && (expectedDate < today
+    ? 'Choose today or a later date.'
+    : expectedDate > latestDate
+      ? 'Choose a date within one year.'
+      : undefined);
   const isModal = ['agree', 'create_return', 'create_replacement'].includes(panel);
   const Footer = isModal ? ModalFooter : 'div';
   const form = <form onSubmit={onSubmit} className="space-y-3">
@@ -156,7 +165,7 @@ function ActionEditor({
         </label>
         {resolution === 'return_goods' && <p className="text-xs text-muted">Return goods applies to defective items only. If quantities are missing, choose redelivery or credit for the case; a physical return can still be arranged for its defective goods.</p>}
         {agreement.resolutionError && <p role="alert" className="text-xs text-danger-fg">{agreement.resolutionError}</p>}
-        <Input label="Expected completion date (optional)" type="date" value={expectedDate} onChange={(event) => setExpectedDate(event.target.value)} />
+        <Input label="Expected completion date" type="date" required min={today} max={latestDate} value={expectedDate} onChange={(event) => setExpectedDate(event.target.value)} error={expectedDateError} helper="Choose a date within the next year." />
         <div className="divide-y divide-default border-y border-default">
           {agreement.rows.map(({ line, showMissing, showDamaged, missing, defective, missingError, defectiveError }) => <div key={line.id} className="grid min-w-0 gap-3 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,340px)] sm:items-start">
             <p className="min-w-0 break-words text-sm text-primary">{line.product_label ?? line.item_label ?? line.description}</p>
@@ -174,7 +183,7 @@ function ActionEditor({
       />}
       {panel === 'create_return' && <p className="text-sm text-secondary">Create the physical return workflow for the agreed goods. The return request remains the authority for receipt and disposition.</p>}
       {panel === 'create_credit' && <p className="text-sm text-secondary">Create a credit note through Accounting. Posting and application remain subject to Finance controls.</p>}
-      {panel === 'create_replacement' && <p className="text-sm text-secondary">Approve and confirm the zero-price replacement order for the verified quantities. Production planning starts automatically. Production, Quality, dispatch and customer receipt are still required; the case closes automatically once all agreed work is complete.</p>}
+      {panel === 'create_replacement' && <p className="text-sm text-secondary">Approve and confirm the zero-price replacement order for the verified quantities. Available approved stock is allocated first; only any remaining quantity is planned for production. Quality, dispatch and customer receipt are still required; the case closes automatically once all agreed work is complete.</p>}
       {error && <p role="alert" className="text-xs text-danger-fg">{error}</p>}
     </fieldset>
       <Footer className={isModal ? undefined : 'flex justify-end gap-2 border-t border-subtle pt-3'}>
@@ -362,6 +371,15 @@ export default function ReturnCaseDetailPage() {
       }
       if (panel === 'agree') {
         if (!record || act.isPending) return;
+        const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+        const latestDateValue = new Date(`${today}T00:00:00Z`);
+        latestDateValue.setUTCFullYear(latestDateValue.getUTCFullYear() + 1);
+        const latestDate = latestDateValue.toISOString().slice(0, 10);
+        if (!expectedDate) { setActionError('Choose an expected completion date.'); return; }
+        if (expectedDate < today || expectedDate > latestDate) {
+          setActionError('Choose a completion date from today through one year ahead.');
+          return;
+        }
         const agreement = agreementValidation(record, verified, resolution);
         if (!agreement.valid) return;
         sendAction('agree', {
@@ -419,7 +437,7 @@ export default function ReturnCaseDetailPage() {
   const customerReplacement = record.type === 'customer' && record.resolution === 'redelivery';
   const replacementDraft = record.replacement_order?.status === 'draft';
   const replacementNextStep = customerReplacement && workAgreed
-    ? !record.replacement_order ? 'Finance approves the no-charge replacement once. Approval confirms the order and starts production planning automatically.'
+    ? !record.replacement_order ? 'Finance approves the no-charge replacement once. Approval confirms the order, allocates available approved stock first, and plans production for any remaining quantity.'
       : replacementDraft ? 'This replacement was created as a draft. Finance can start replacement planning here, or CRM can confirm the linked order. No new order is needed.'
       : record.return_request && record.return_request.status !== 'completed' && record.replacement_delivery?.status === 'confirmed' ? 'Complete the linked physical return. Replacement receipt is already confirmed; the case will close automatically when the return is complete.'
       : record.replacement_delivery?.status === 'delivered' ? 'Customer confirms receipt of the replacement shipment. The case closes automatically when every agreed quantity is received and any linked return is complete.'

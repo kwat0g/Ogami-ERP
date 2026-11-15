@@ -33,19 +33,16 @@ class WorkflowSeeder extends Seeder
                 'workflow_type' => 'cash_advance',
                 'name'          => 'Cash Advance Approval',
                 'steps' => [
-                    ['order' => 1, 'role' => 'department_head',  'label' => 'Department Head'],
-                    ['order' => 2, 'role' => 'finance_officer',  'label' => 'Finance / Accounting'],
-                    ['order' => 3, 'role' => 'vice_president',   'label' => 'VP / Approver'],
+                    ['order' => 1, 'role' => 'hr_officer',      'label' => 'HR Officer'],
+                    ['order' => 2, 'role' => 'finance_officer', 'label' => 'Finance Officer'],
                 ],
             ],
             [
                 'workflow_type' => 'company_loan',
                 'name'          => 'Company Loan Approval',
                 'steps' => [
-                    ['order' => 1, 'role' => 'department_head',    'label' => 'Department Head'],
-                    ['order' => 2, 'role' => 'hr_officer',         'label' => 'HR Officer'],
-                    ['order' => 3, 'role' => 'finance_officer',    'label' => 'Finance / Accounting'],
-                    ['order' => 4, 'role' => 'vice_president',     'label' => 'VP / Approver', 'threshold' => '50000.00'],
+                    ['order' => 1, 'role' => 'hr_officer',      'label' => 'HR Officer'],
+                    ['order' => 2, 'role' => 'finance_officer', 'label' => 'Finance Officer'],
                 ],
             ],
             // 2026-09-10 — PR chain redesign. Creators are department heads and

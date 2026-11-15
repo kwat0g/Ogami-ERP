@@ -92,10 +92,9 @@ class ProcessPayrollJob implements ShouldQueue
             return;
         }
 
-        // REC-04 — record the maker (HR user who clicked Compute) so approve()
-        // can enforce maker-checker: the computer may not also approve.
-        // claimForCompute() normally stamps this; keep it for queued dispatches
-        // that bypassed the HTTP path (e.g. AutoPayrollPeriodService).
+        // Record who computed the payroll for its audit trail. claimForCompute()
+        // normally stamps this; keep it for queued dispatches that bypass the
+        // HTTP path (e.g. AutoPayrollPeriodService).
         if ($this->triggeredBy !== null && $period->computed_by !== $this->triggeredBy) {
             $period = DB::transaction(function () use ($period, $periods): PayrollPeriod {
                 $owned = $periods->assertComputeClaim($period, $this->claimToken);

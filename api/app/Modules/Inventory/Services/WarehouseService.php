@@ -96,7 +96,12 @@ class WarehouseService
 
     public function createZone(array $data): WarehouseZone
     {
-        return DB::transaction(fn () => WarehouseZone::create($data));
+        return DB::transaction(function () use ($data): WarehouseZone {
+            $zone = WarehouseZone::create($data);
+            $this->syncDerivedZoneCapacity((int) $zone->id);
+
+            return $zone->fresh();
+        });
     }
 
     public function updateZone(WarehouseZone $z, array $data): WarehouseZone
@@ -134,6 +139,7 @@ class WarehouseService
             }
 
             $locked->update($data);
+            $this->syncDerivedZoneCapacity((int) $locked->id);
 
             return $locked->fresh();
         });
@@ -161,7 +167,10 @@ class WarehouseService
         return DB::transaction(function () use ($data) {
             $this->assertActiveZone((int) $data['zone_id']);
 
-            return WarehouseLocation::create($data);
+            $location = WarehouseLocation::create($data);
+            $this->syncDerivedZoneCapacity((int) $location->zone_id);
+
+            return $location;
         });
     }
 
@@ -169,9 +178,10 @@ class WarehouseService
     {
         return DB::transaction(function () use ($l, $data) {
             $locked = WarehouseLocation::query()->lockForUpdate()->findOrFail($l->id);
+            $previousZoneId = (int) $locked->zone_id;
             $targetZoneId = array_key_exists('zone_id', $data)
                 ? (int) $data['zone_id']
-                : (int) $locked->zone_id;
+                : $previousZoneId;
             $this->assertActiveZone($targetZoneId);
             $hasStock = StockLevel::query()
                 ->where('location_id', $locked->id)
@@ -195,6 +205,9 @@ class WarehouseService
             }
 
             $locked->update($data);
+            foreach (collect([$previousZoneId, $targetZoneId])->unique() as $zoneId) {
+                $this->syncDerivedZoneCapacity((int) $zoneId);
+            }
 
             return $locked->fresh(['zone.warehouse']);
         });
@@ -220,6 +233,7 @@ class WarehouseService
             }
 
             $locked->restore();
+            $this->syncDerivedZoneCapacity((int) $locked->id);
 
             return $locked->fresh(['warehouse']);
         });
@@ -235,6 +249,7 @@ class WarehouseService
             }
 
             $locked->restore();
+            $this->syncDerivedZoneCapacity((int) $locked->zone_id);
 
             return $locked->fresh(['zone.warehouse']);
         });
@@ -261,8 +276,25 @@ class WarehouseService
                 throw new BusinessRuleException('Cannot delete a location with stock or reservations.');
             }
             $this->assertNoPendingAdjustments([(int) $locked->id]);
+            $zoneId = (int) $locked->zone_id;
             $locked->delete();
+            $this->syncDerivedZoneCapacity($zoneId);
         });
+    }
+
+    private function syncDerivedZoneCapacity(int $zoneId): void
+    {
+        $zone = WarehouseZone::query()->lockForUpdate()->find($zoneId);
+        if (! $zone || $zone->capacity_status !== 'derived') {
+            return;
+        }
+
+        $capacityKg = $zone->locations()
+            ->where('is_active', true)
+            ->whereNotNull('capacity_kg')
+            ->sum('capacity_kg');
+
+        $zone->update(['capacity_kg' => $capacityKg > 0 ? $capacityKg : null]);
     }
 
     /** @param array<int, int> $locationIds */

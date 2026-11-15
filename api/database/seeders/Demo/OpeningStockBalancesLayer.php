@@ -35,7 +35,7 @@ final class OpeningStockBalancesLayer extends DemoSeeder
         'HS-001', 'AD-001', 'TC-001', 'HR-001', 'WB-002', 'PC-002', 'RC-002', 'BC-001',
     ];
 
-    private const OPENING_REMARKS_PREFIX = 'DEMO opening inventory';
+    private const LEGACY_OPENING_REMARKS_PREFIX = 'DEMO opening inventory';
 
     /** Mirrors the current base-unit discreteness rules in UomConversionService. */
     private const WHOLE_UNIT_CODES = ['PC', 'PCS', 'PIECE', 'PIECES', 'EA', 'EACH', 'UNIT', 'UNITS', 'SET', 'SETS'];
@@ -81,18 +81,29 @@ final class OpeningStockBalancesLayer extends DemoSeeder
             ItemType::FinishedGood->value => $this->activeLocation('C-01'),
             ItemType::SparePart->value => $this->activeLocation('D-01'),
         ];
+        $bufferLocations = [
+            ItemType::RawMaterial->value => $this->activeLocation('B-01'),
+            ItemType::Packaging->value => $this->activeLocation('B-01'),
+            ItemType::FinishedGood->value => $this->activeLocation('C-01'),
+        ];
         $actor = $this->activeUserForRole('warehouse_staff');
         $openingDate = $context->options->asOf->subMonthsNoOverflow(18)->startOfDay();
         $asOfDate = $context->options->asOf->toDateString();
 
-        $context->at($openingDate, function () use ($context, $codes, $locations, $actor, $openingDate, $asOfDate): void {
+        $context->at($openingDate, function () use ($context, $codes, $locations, $bufferLocations, $actor, $openingDate, $asOfDate): void {
             $index = 0;
             Item::query()->whereIn('code', $codes)->orderBy('code')->chunk(50, function ($items) use ($context, $locations, $actor, $openingDate, $asOfDate, &$index): void {
                 foreach ($items as $item) {
                     $location = $locations[$item->item_type->value] ?? throw new RuntimeException("No opening-stock location is defined for item type {$item->item_type->value}.");
                     $quantity = $this->plannedQuantity($item, $index++);
                     if (bccomp($quantity, '0', 3) === 0) {
-                        $this->assertNoPriorOpening($item, $location, plannedZero: true);
+                        $this->assertNoPriorOpening($item, plannedZero: true);
+
+                        continue;
+                    }
+
+                    if (! $this->hasDemoOpening($item) && $this->hasExistingInventoryState($item)) {
+                        echo "Preserving existing inventory for {$item->code}; no demo opening movement added.\n";
 
                         continue;
                     }
@@ -123,7 +134,146 @@ final class OpeningStockBalancesLayer extends DemoSeeder
                     });
                 }
             });
+
+            $context->withoutNotifications(fn () => $context->asUser($actor, fn () => $this->ensureProductionBuffers(
+                $context,
+                $codes,
+                $bufferLocations,
+                $actor,
+                $openingDate,
+                $asOfDate,
+            )));
         });
+    }
+
+    /** Add demo opening stock in the production/finished-goods bins through the stock ledger service. */
+    private function ensureProductionBuffers(
+        DemoSeedContext $context,
+        array $codes,
+        array $locations,
+        User $actor,
+        CarbonImmutable $openingDate,
+        string $asOfDate,
+    ): void {
+        Item::query()
+            ->whereIn('code', $codes)
+            ->whereIn('item_type', [ItemType::RawMaterial->value, ItemType::Packaging->value, ItemType::FinishedGood->value])
+            ->orderBy('code')
+            ->chunkById(50, function ($items) use ($context, $locations, $actor, $openingDate, $asOfDate): void {
+                foreach ($items as $item) {
+                    $location = $locations[$item->item_type->value]
+                        ?? throw new RuntimeException("No production-stock location is defined for item type {$item->item_type->value}.");
+                    $unitCost = (string) $item->standard_cost;
+                    if (bccomp($unitCost, '0', 4) <= 0) {
+                        throw new BusinessRuleException("Production buffer item {$item->code} needs a positive standard cost.");
+                    }
+
+                    $this->ensureProductionBufferMovement(
+                        $context,
+                        $item,
+                        $location,
+                        $this->productionTarget($item),
+                        $unitCost,
+                        'OGI-PROD-BUFFER-'.$item->code,
+                        $openingDate,
+                        $asOfDate,
+                        $actor,
+                    );
+                }
+            });
+    }
+
+    private function productionTarget(Item $item): string
+    {
+        $reorderPoint = (string) ($item->reorder_point ?? '0.000');
+        $safetyStock = (string) ($item->safety_stock ?? '0.000');
+        $target = $item->item_type === ItemType::FinishedGood
+            ? $this->greaterOf('500.000', bcmul($reorderPoint, '1.25', 3))
+            : $this->greaterOf(bcmul($reorderPoint, '1.50', 3), bcmul($safetyStock, '2.00', 3));
+
+        if (bccomp($target, '100.000', 3) < 0) {
+            $target = '100.000';
+        }
+
+        return $this->wholeUnitQuantity($item, $target);
+    }
+
+    private function ensureProductionBufferMovement(
+        DemoSeedContext $context,
+        Item $item,
+        WarehouseLocation $location,
+        string $quantity,
+        string $unitCost,
+        string $lotNumber,
+        CarbonImmutable $openingDate,
+        string $asOfDate,
+        User $actor,
+    ): void {
+        $key = 'demo-production-buffer:'.$item->code;
+        $remarks = 'Production buffer at the 18-month history start; planned opening stock for production and fulfillment.';
+        $legacyLotNumber = str_replace('OGI-PROD-BUFFER-', 'DEMO-PROD-BUFFER-', $lotNumber);
+        $legacyRemarks = 'DEMO production buffer at the 18-month history start; synthetic opening stock for manual production and fulfillment demonstrations.';
+        $olderLegacyRemarks = 'production buffer at the 18-month history start; synthetic opening stock for manual production and fulfillment demonstrations.';
+        $fingerprint = hash('sha256', json_encode([
+            $item->id,
+            $location->id,
+            $quantity,
+            bcadd($unitCost, '0', 4),
+            $lotNumber,
+            null,
+            $openingDate->toIso8601String(),
+            $asOfDate,
+            $remarks,
+        ], JSON_THROW_ON_ERROR));
+        $legacyFingerprint = hash('sha256', json_encode([
+            $item->id,
+            $location->id,
+            $quantity,
+            bcadd($unitCost, '0', 4),
+            $legacyLotNumber,
+            null,
+            $openingDate->toIso8601String(),
+            $asOfDate,
+            $legacyRemarks,
+        ], JSON_THROW_ON_ERROR));
+        $existing = StockMovement::query()->where('idempotency_key', $key)->first();
+        if ($existing !== null) {
+            $currentDataMatches = $existing->idempotency_fingerprint === $fingerprint
+                && $existing->lot_number === $lotNumber
+                && $existing->remarks === $remarks;
+            $legacyDataMatches = $existing->idempotency_fingerprint === $legacyFingerprint
+                && in_array($existing->lot_number, [$legacyLotNumber, $lotNumber], true)
+                && in_array($existing->remarks, [$legacyRemarks, $olderLegacyRemarks, $remarks], true);
+            if (! ($currentDataMatches || $legacyDataMatches)
+                || $existing->movement_type !== StockMovementType::Opening
+                || (int) $existing->item_id !== (int) $item->id
+                || (int) $existing->to_location_id !== (int) $location->id
+                || bccomp((string) $existing->quantity, $quantity, 3) !== 0
+                || bccomp((string) $existing->unit_cost, $unitCost, 4) !== 0
+                || $existing->created_at?->toDateString() !== $openingDate->toDateString()) {
+                throw new BusinessRuleException("Production buffer movement {$key} already exists with different data; refusing to alter its ledger history.");
+            }
+
+            $context->records()->remember('inventory.production-buffer.'.$item->code, $existing);
+
+            return;
+        }
+
+        $movement = $this->movements->move(new StockMovementInput(
+            type: StockMovementType::Opening,
+            itemId: (int) $item->id,
+            quantity: $quantity,
+            toLocationId: (int) $location->id,
+            unitCost: $unitCost,
+            referenceType: 'opening',
+            remarks: $remarks,
+            createdBy: (int) $actor->id,
+            lotNumber: $lotNumber,
+            expiryDate: null,
+            idempotencyKey: $key,
+            idempotencyFingerprint: $fingerprint,
+        ));
+        $context->records()->remember('inventory.production-buffer.'.$item->code, $movement);
     }
 
     private function plannedQuantity(Item $item, int $index): string
@@ -175,12 +325,12 @@ final class OpeningStockBalancesLayer extends DemoSeeder
             return [
                 [
                     'quantity' => $nearExpiryQuantity,
-                    'lot_number' => 'DEMO-LOT-RM-005-NEAR',
+                    'lot_number' => 'OGI-LOT-RM-005-NEAR',
                     'expiry_date' => CarbonImmutable::parse($asOfDate, 'Asia/Manila')->addDays(14)->toDateString(),
                 ],
                 [
                     'quantity' => bcsub($quantity, $nearExpiryQuantity, 3),
-                    'lot_number' => 'DEMO-LOT-RM-005-REGULAR',
+                    'lot_number' => 'OGI-LOT-RM-005-REGULAR',
                     'expiry_date' => CarbonImmutable::parse($asOfDate, 'Asia/Manila')->addDays(180)->toDateString(),
                 ],
             ];
@@ -188,7 +338,7 @@ final class OpeningStockBalancesLayer extends DemoSeeder
 
         return [[
             'quantity' => $quantity,
-            'lot_number' => 'DEMO-LOT-'.$item->code.'-OPEN',
+            'lot_number' => 'OGI-LOT-'.$item->code.'-OPEN',
             'expiry_date' => null,
         ]];
     }
@@ -205,8 +355,11 @@ final class OpeningStockBalancesLayer extends DemoSeeder
         string $asOfDate,
         User $actor,
     ): void {
-        $key = 'demo-opening:'.$item->code.':'.$lotNumber;
-        $remarks = self::OPENING_REMARKS_PREFIX.' at the 18-month history start; synthetic demo quantity and cost basis.';
+        $legacyLotNumber = str_replace('OGI-LOT-', 'DEMO-LOT-', $lotNumber);
+        $key = 'demo-opening:'.$item->code.':'.$legacyLotNumber;
+        $remarks = 'Opening inventory at the 18-month history start; planned quantity and cost basis.';
+        $legacyRemarks = self::LEGACY_OPENING_REMARKS_PREFIX.' at the 18-month history start; synthetic demo quantity and cost basis.';
+        $olderLegacyRemarks = 'opening inventory at the 18-month history start; synthetic quantity and cost basis.';
         $fingerprint = hash('sha256', json_encode([
             $item->id,
             $location->id,
@@ -218,15 +371,31 @@ final class OpeningStockBalancesLayer extends DemoSeeder
             $asOfDate,
             $remarks,
         ], JSON_THROW_ON_ERROR));
+        $legacyFingerprint = hash('sha256', json_encode([
+            $item->id,
+            $location->id,
+            $quantity,
+            bcadd($unitCost, '0', 4),
+            $legacyLotNumber,
+            $expiryDate,
+            $openingDate->toIso8601String(),
+            $asOfDate,
+            $legacyRemarks,
+        ], JSON_THROW_ON_ERROR));
         $existing = StockMovement::query()->where('idempotency_key', $key)->first();
         if ($existing !== null) {
-            if ($existing->idempotency_fingerprint !== $fingerprint
+            $currentDataMatches = $existing->idempotency_fingerprint === $fingerprint
+                && $existing->lot_number === $lotNumber
+                && $existing->remarks === $remarks;
+            $legacyDataMatches = $existing->idempotency_fingerprint === $legacyFingerprint
+                && in_array($existing->lot_number, [$legacyLotNumber, $lotNumber], true)
+                && in_array($existing->remarks, [$legacyRemarks, $olderLegacyRemarks, $remarks], true);
+            if (! ($currentDataMatches || $legacyDataMatches)
                 || $existing->movement_type !== StockMovementType::Opening
                 || (int) $existing->item_id !== (int) $item->id
                 || (int) $existing->to_location_id !== (int) $location->id
                 || bccomp((string) $existing->quantity, $quantity, 3) !== 0
                 || bccomp((string) $existing->unit_cost, $unitCost, 4) !== 0
-                || $existing->lot_number !== $lotNumber
                 || $existing->expiry_date?->toDateString() !== $expiryDate
                 || $existing->created_at?->toDateString() !== $openingDate->toDateString()) {
                 throw new BusinessRuleException("Opening movement {$key} already exists with different data; refusing to alter its ledger history.");
@@ -237,7 +406,7 @@ final class OpeningStockBalancesLayer extends DemoSeeder
             return;
         }
 
-        $this->assertNoPriorOpening($item, $location);
+        $this->assertNoPriorOpening($item);
         $movement = $this->movements->move(new StockMovementInput(
             type: StockMovementType::Opening,
             itemId: (int) $item->id,
@@ -255,29 +424,42 @@ final class OpeningStockBalancesLayer extends DemoSeeder
         $context->records()->remember('inventory.opening.'.$key, $movement);
     }
 
-    private function assertNoPriorOpening(Item $item, WarehouseLocation $location, bool $plannedZero = false): void
+    private function assertNoPriorOpening(Item $item, bool $plannedZero = false): void
     {
-        $hasOwnOpening = StockMovement::query()
-            ->where('item_id', $item->id)
-            ->where('idempotency_key', 'like', 'demo-opening:'.$item->code.':%')
-            ->exists();
         if ($plannedZero) {
-            if ($hasOwnOpening) {
+            if ($this->hasDemoOpening($item)) {
                 throw new BusinessRuleException("Opening stock plan for {$item->code} changed after its demo opening movement was created.");
             }
 
             return;
         }
 
-        if ($hasOwnOpening) {
+        if ($this->hasDemoOpening($item)) {
             return;
         }
 
-        $hasLevel = StockLevel::query()->where('item_id', $item->id)->where('location_id', $location->id)->exists();
-        $hasHistory = StockMovement::query()->where('item_id', $item->id)->exists();
-        if ($hasLevel || $hasHistory) {
+        if ($this->hasExistingInventoryState($item)) {
             throw new BusinessRuleException("Item {$item->code} already has stock or movement history without this demo opening key; refusing to add opening quantity on top.");
         }
+    }
+
+    private function hasDemoOpening(Item $item): bool
+    {
+        return StockMovement::query()
+            ->where('item_id', $item->id)
+            ->where('idempotency_key', 'like', 'demo-opening:'.$item->code.':%')
+            ->exists();
+    }
+
+    private function hasExistingInventoryState(Item $item): bool
+    {
+        $hasOnHand = StockLevel::query()
+            ->where('item_id', $item->id)
+            ->where(fn ($query) => $query->where('quantity', '<>', '0')->orWhere('reserved_quantity', '<>', '0'))
+            ->exists();
+        $hasHistory = StockMovement::query()->where('item_id', $item->id)->exists();
+
+        return $hasOnHand || $hasHistory;
     }
 
     private function activeLocation(string $code): WarehouseLocation

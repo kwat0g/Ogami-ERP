@@ -34,6 +34,16 @@ class PayrollAdjustmentResource extends JsonResource
                 'full_name' => $this->employee->full_name,
             ]),
             'original_payroll_id' => $this->whenLoaded('originalPayroll', fn () => $this->originalPayroll?->hash_id),
+            'source_leave_request' => $this->whenLoaded('sourceLeaveRequest', fn () => $this->sourceLeaveRequest ? [
+                'id' => $this->sourceLeaveRequest->hash_id,
+                'leave_request_no' => $this->sourceLeaveRequest->leave_request_no,
+                'start_date' => $this->sourceLeaveRequest->start_date?->toDateString(),
+                'end_date' => $this->sourceLeaveRequest->end_date?->toDateString(),
+            ] : null),
+            'target_period' => $this->whenLoaded('targetPeriod', fn () => $this->targetPeriod ? [
+                'id' => $this->targetPeriod->hash_id,
+                'label' => $this->targetPeriod->label(),
+            ] : null),
             'type' => $this->type?->value,
             'type_label' => $this->type?->label(),
             'amount' => $this->amount,

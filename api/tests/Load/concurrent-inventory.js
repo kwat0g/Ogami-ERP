@@ -35,7 +35,7 @@ const ITEM_CODE_PREFIXES = [
 
 // Guests share a 60-request/minute IP cap during setup; 50 logins leave headroom.
 // At the default 200 VUs this shares four read-only sessions per user, below
-// the authenticated 300-request/minute per-user limit.
+// the authenticated 1200-request/minute per-user limit.
 const SESSION_COUNT = 50;
 
 /** Return a random integer between min and max (inclusive). */

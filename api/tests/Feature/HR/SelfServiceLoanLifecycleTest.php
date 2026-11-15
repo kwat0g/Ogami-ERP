@@ -33,7 +33,7 @@ class SelfServiceLoanLifecycleTest extends TestCase
         $response = $this->actingAs($user)
             ->postJson('/api/v1/hr/self-service/loans', [
                 'loan_type' => 'cash_advance',
-                'amount' => 5000,
+                'amount' => 2000,
                 'periods' => 5,
                 'reason' => 'Emergency household expense.',
             ])
@@ -45,8 +45,11 @@ class SelfServiceLoanLifecycleTest extends TestCase
         $this->assertSame($loan->hash_id, $response->json('data.id'));
         $this->assertSame(LoanStatus::Pending, $loan->status);
         $this->assertNotNull($loan->loan_no);
-        $this->assertSame('5000.00', (string) $loan->balance);
-        $this->assertCount(3, $loan->approvalRecords);
+        $this->assertSame('2000.00', (string) $loan->balance);
+        $this->assertSame(['hr_officer', 'finance_officer'], $loan->approvalRecords->pluck('role_slug')->all());
+        $optionsResponse = $this->actingAs($user)->getJson('/api/v1/hr/self-service/loans')->assertOk();
+        $cashAdvance = collect($optionsResponse->json('data.loan_types'))->firstWhere('value', 'cash_advance');
+        $this->assertSame(['HR Officer', 'Finance Officer'], $cashAdvance['approval_chain']);
         $this->assertDatabaseHas('event_outbox', [
             'event_type' => LoanSubmitted::class,
         ]);
@@ -60,7 +63,7 @@ class SelfServiceLoanLifecycleTest extends TestCase
         $this->actingAs($user)
             ->postJson('/api/v1/hr/self-service/loans', [
                 'loan_type' => 'cash_advance',
-                'amount' => 5000,
+                'amount' => 2000,
                 'periods' => 5,
                 'reason' => 'List-shape regression.',
             ])
@@ -75,7 +78,7 @@ class SelfServiceLoanLifecycleTest extends TestCase
             ->assertJsonPath('data.active.0.periods_remaining', 5)
             ->assertJsonPath('data.active.0.repayment_months', 5)
             ->assertJsonPath('data.active.0.remaining_repayment_months', 5)
-            ->assertJsonPath('data.active.0.outstanding_balance', '5000.00');
+            ->assertJsonPath('data.active.0.outstanding_balance', '2000.00');
     }
 
     public function test_duplicate_self_service_loan_type_is_rejected_without_a_second_row(): void
@@ -84,7 +87,7 @@ class SelfServiceLoanLifecycleTest extends TestCase
         $user = User::factory()->create(['employee_id' => $employee->id]);
         $payload = [
             'loan_type' => 'cash_advance',
-            'amount' => 5000,
+            'amount' => 2000,
             'periods' => 5,
             'reason' => 'Duplicate request regression.',
         ];
@@ -109,7 +112,7 @@ class SelfServiceLoanLifecycleTest extends TestCase
         $this->actingAs($user)
             ->postJson('/api/v1/hr/self-service/loans', [
                 'loan_type' => 'cash_advance',
-                'amount' => 5000,
+                'amount' => 2000,
                 'periods' => 5,
                 'reason' => 'Withdrawal regression.',
             ])
@@ -143,7 +146,7 @@ class SelfServiceLoanLifecycleTest extends TestCase
         $this->actingAs($ownerUser)
             ->postJson('/api/v1/hr/self-service/loans', [
                 'loan_type' => 'cash_advance',
-                'amount' => 5000,
+                'amount' => 2000,
                 'periods' => 5,
                 'reason' => 'Owner-only withdrawal regression.',
             ])

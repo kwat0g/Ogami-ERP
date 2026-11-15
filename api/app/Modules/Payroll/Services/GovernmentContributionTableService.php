@@ -8,7 +8,9 @@ use App\Common\Exceptions\BusinessRuleException;
 use App\Common\Support\CacheGeneration;
 use App\Common\Support\FailOpenCache;
 use App\Modules\Payroll\Enums\ContributionAgency;
+use App\Modules\Payroll\Enums\GovernmentScheduleVersionStatus;
 use App\Modules\Payroll\Models\GovernmentContributionTable;
+use App\Modules\Payroll\Models\GovernmentScheduleVersion;
 use Closure;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
@@ -23,7 +25,7 @@ class GovernmentContributionTableService
 
     private const CACHE_VERSION_TTL = 604800;
 
-    private const CACHE_FORMAT_VERSION = 2;
+    private const CACHE_FORMAT_VERSION = 3;
 
     /**
      * Active brackets for an agency, ordered by bracket_min asc.
@@ -42,16 +44,21 @@ class GovernmentContributionTableService
             fn () => GovernmentContributionTable::query()
                 ->agency($key)
                 ->active()
+                ->where(function ($query): void {
+                    $query->whereNull('schedule_version_id')
+                        ->orWhereIn('schedule_version_id', GovernmentScheduleVersion::query()
+                            ->published()->select('id'));
+                })
                 ->orderBy('bracket_min')
                 ->get(),
         );
     }
 
     /**
-     * Brackets in force on a given date: the rows whose effective_date is the
-     * latest <= $date for the agency. Falls back to the active set when no
-     * dated rows are on/before $date (preserves legacy behaviour for agencies
-     * seeded without history).
+     * Brackets in force on a date. Published versions are authoritative;
+     * unversioned rows remain available only as a compatibility path for code
+     * and fixtures that predate schedule versioning. Backfilled
+     * legacy_unverified rows are never selected as current statutory evidence.
      *
      * @return Collection<int, GovernmentContributionTable>
      */
@@ -64,20 +71,34 @@ class GovernmentContributionTableService
         return $this->rememberBrackets(
             "gov_table:{$key}:rows-v".self::CACHE_FORMAT_VERSION.":v{$ver}:eff:{$on}",
             function () use ($key, $on) {
+                $version = GovernmentScheduleVersion::query()
+                    ->published()
+                    ->where('agency', $key)
+                    ->whereDate('effective_date', '<=', $on)
+                    ->orderByDesc('effective_date')
+                    ->orderByDesc('version_number')
+                    ->first();
+
+                if ($version) {
+                    return $this->rowsForVersion($version->id);
+                }
+
                 $effective = GovernmentContributionTable::query()
                     ->agency($key)
                     ->active()
+                    ->whereNull('schedule_version_id')
                     ->whereDate('effective_date', '<=', $on)
                     ->max('effective_date');
 
                 if ($effective === null) {
                     return GovernmentContributionTable::query()
-                        ->agency($key)->active()->orderBy('bracket_min')->get();
+                        ->agency($key)->active()->whereNull('schedule_version_id')->orderBy('bracket_min')->get();
                 }
 
                 return GovernmentContributionTable::query()
                     ->agency($key)
                     ->active()
+                    ->whereNull('schedule_version_id')
                     ->whereDate('effective_date', $effective)
                     ->orderBy('bracket_min')
                     ->get();
@@ -94,6 +115,7 @@ class GovernmentContributionTableService
 
         return GovernmentContributionTable::query()
             ->agency($key)
+            ->with('scheduleVersion')
             ->orderBy('is_active', 'desc')
             ->orderBy('effective_date', 'desc')
             ->orderBy('bracket_min')
@@ -104,6 +126,12 @@ class GovernmentContributionTableService
     {
         return DB::transaction(function () use ($row, $data) {
             $locked = GovernmentContributionTable::query()->lockForUpdate()->findOrFail($row->id);
+            $this->assertMutable($locked);
+            if (array_key_exists('ec_amount', $data)
+                && $locked->agency !== ContributionAgency::Sss
+                && bccomp((string) $data['ec_amount'], '0', 4) !== 0) {
+                throw new BusinessRuleException('EC contributions can only be set on SSS schedules.');
+            }
             $locked->fill($data);
             if ($locked->is_active) {
                 $this->assertNoOverlap($locked);
@@ -119,6 +147,7 @@ class GovernmentContributionTableService
     {
         return DB::transaction(function () use ($row) {
             $locked = GovernmentContributionTable::query()->lockForUpdate()->findOrFail($row->id);
+            $this->assertMutable($locked);
             $locked->is_active = false;
             $locked->save();
             $this->stageChange($locked->agency, 'status_changed', $locked->updated_at?->format('Y-m-d\TH:i:s.uP'));
@@ -131,6 +160,7 @@ class GovernmentContributionTableService
     {
         return DB::transaction(function () use ($row) {
             $locked = GovernmentContributionTable::query()->lockForUpdate()->findOrFail($row->id);
+            $this->assertMutable($locked);
             $locked->is_active = true;
             $this->assertNoOverlap($locked);
             $locked->save();
@@ -144,6 +174,7 @@ class GovernmentContributionTableService
     {
         DB::transaction(function () use ($row): void {
             $locked = GovernmentContributionTable::query()->lockForUpdate()->findOrFail($row->id);
+            $this->assertMutable($locked);
             $agency = $locked->agency;
             $locked->delete();
             $this->stageChange($agency, 'deleted', now()->format('Y-m-d\TH:i:s.uP'));
@@ -156,6 +187,7 @@ class GovernmentContributionTableService
             $locked = GovernmentContributionTable::withTrashed()
                 ->lockForUpdate()
                 ->findOrFail($row->id);
+            $this->assertMutable($locked);
             $locked->restore();
             $this->stageChange($locked->agency, 'updated', $locked->updated_at?->format('Y-m-d\TH:i:s.uP'));
 
@@ -172,6 +204,35 @@ class GovernmentContributionTableService
         }
 
         return $rotated;
+    }
+
+    public function invalidateAgency(ContributionAgency|string $agency): bool
+    {
+        return $this->bust($agency);
+    }
+
+    /** @return Collection<int, GovernmentContributionTable> */
+    public function bracketsForVersion(int $versionId, ?ContributionAgency $expectedAgency = null): Collection
+    {
+        $version = GovernmentScheduleVersion::query()->find($versionId);
+        if (! $version || ! in_array($version->status, [
+            GovernmentScheduleVersionStatus::Published,
+            GovernmentScheduleVersionStatus::Superseded,
+        ], true) || ($expectedAgency !== null && $version->agency !== $expectedAgency)) {
+            return collect();
+        }
+
+        return $this->rowsForVersion($versionId);
+    }
+
+    /** @return Collection<int, GovernmentContributionTable> */
+    private function rowsForVersion(int $versionId): Collection
+    {
+        return GovernmentContributionTable::query()
+            ->where('schedule_version_id', $versionId)
+            ->whereNull('deleted_at')
+            ->orderBy('bracket_min')
+            ->get();
     }
 
     private function assertNoOverlap(GovernmentContributionTable $candidate): void
@@ -204,6 +265,15 @@ class GovernmentContributionTableService
                 $agency,
                 $effectiveDate,
             ));
+        }
+    }
+
+    private function assertMutable(GovernmentContributionTable $row): void
+    {
+        if ($row->schedule_version_id !== null) {
+            throw new BusinessRuleException(
+                'Imported schedule brackets are immutable. Import a corrected schedule version and publish it after review.',
+            );
         }
     }
 

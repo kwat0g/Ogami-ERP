@@ -56,8 +56,8 @@ final class ProductionHistoryLayer extends DemoSeeder
     protected function seedDemoData(DemoSeedContext $context): void
     {
         $asOf = $context->options->asOf->setTimezone('Asia/Manila')->startOfDay();
-        $ppc = $this->account('ppc.head@accounts.ogami-demo.test', 'production.wo.create');
-        $productionManager = $this->account('production.manager@accounts.ogami-demo.test', 'production.wo.assign');
+        $ppc = $this->account('siang.ace@gmail.com', 'production.wo.create');
+        $productionManager = $this->account('arsolon.ace@gmail.com', 'production.wo.assign');
         $product = Product::query()->where('part_number', 'FC-001')->where('is_active', true)->first();
         if (! $product instanceof Product) {
             throw new RuntimeException('Production history requires the active FC-001 fuse-box cover product.');
@@ -197,7 +197,7 @@ final class ProductionHistoryLayer extends DemoSeeder
             'minimum_workers' => 1,
             'maximum_workers' => 2,
             'expected_crew_id' => null,
-            'reason' => 'Synthetic demo crew for the scheduled FC-001 stock-production run.',
+            'reason' => 'Production crew assigned for the scheduled FC-001 stock run.',
         ], $actor);
     }
 

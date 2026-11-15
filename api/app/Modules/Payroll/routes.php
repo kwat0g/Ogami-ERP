@@ -22,6 +22,10 @@ use Illuminate\Support\Facades\Route;
 Route::middleware('auth:sanctum')->prefix('admin/gov-tables')->group(function () {
     Route::get('/options', [GovernmentTableController::class, 'options'])
         ->middleware('permission:admin.gov_tables.manage');
+    Route::get('/versions', [GovernmentTableController::class, 'versions'])
+        ->middleware('permission:admin.gov_tables.manage');
+    Route::post('/versions/{version}/publish', [GovernmentTableController::class, 'publish'])
+        ->middleware('permission:admin.gov_tables.manage');
     Route::get('/', [GovernmentTableController::class, 'index'])
         ->middleware('permission:admin.gov_tables.manage');
     Route::put('/{govTable}', [GovernmentTableController::class, 'update'])
@@ -109,6 +113,7 @@ if (class_exists(PayrollPeriodController::class)) {
 
         Route::prefix('payroll-adjustments')->group(function () {
             Route::get('/options', [PayrollAdjustmentController::class, 'options'])->middleware('permission:payroll.adjustments.view');
+            Route::get('/unpaid-absence-options', [PayrollAdjustmentController::class, 'unpaidAbsenceOptions'])->middleware('permission:payroll.adjustments.create');
             Route::get('/', [PayrollAdjustmentController::class, 'index'])->middleware('permission:payroll.adjustments.view');
             Route::post('/', [PayrollAdjustmentController::class, 'store'])->middleware('permission:payroll.adjustments.create');
             Route::get('/{adjustment}', [PayrollAdjustmentController::class, 'show'])->middleware('permission:payroll.adjustments.view');
@@ -129,6 +134,8 @@ if (class_exists(PayrollPeriodController::class)) {
         // ─── Payroll anomaly flags (Task A9) ─────────────────────
         Route::prefix('payroll-periods/{period}/anomalies')->group(function () {
             Route::get('/', [PayrollAnomalyController::class, 'index'])
+                ->middleware('permission:payroll.anomalies.review');
+            Route::patch('/resolve-all', [PayrollAnomalyController::class, 'resolveAll'])
                 ->middleware('permission:payroll.anomalies.review');
         });
         Route::patch('/payroll-anomalies/{flag}/resolve', [PayrollAnomalyController::class, 'resolve'])

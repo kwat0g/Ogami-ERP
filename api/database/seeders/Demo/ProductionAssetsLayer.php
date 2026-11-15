@@ -151,7 +151,7 @@ final class ProductionAssetsLayer extends DemoSeeder
 
         return [
             'name' => $machineCode.' — '.$definition['name'],
-            'description' => "Demo operational asset for machine {$machineCode}. Acquisition value is a synthetic planning estimate.",
+            'description' => "Operational asset for machine {$machineCode}. Acquisition value is a planning estimate.",
             'category' => AssetCategory::Machine->value,
             'department_id' => $departmentId,
             'acquisition_date' => $this->acquisitionDate($context, $index)->toDateString(),
@@ -206,7 +206,7 @@ final class ProductionAssetsLayer extends DemoSeeder
                     'acquisition_cost' => (string) $definition['asset_cost'],
                     'estimated_replacement_cost' => (string) round($definition['asset_cost'] * 1.4),
                     'commissioned_at' => $this->acquisitionDate($context, $index + 2)->toDateString(),
-                    'drawing_number' => 'DEMO-DRW-'.$definition['mold_code'].'-R0',
+                    'drawing_number' => 'OGI-DRW-'.$definition['mold_code'].'-R0',
                     'storage_location' => 'TOOL-CRIB-A-'.str_pad((string) (($index % 24) + 1), 2, '0', STR_PAD_LEFT),
                 ]);
             } elseif ($mold->trashed()) {
@@ -220,7 +220,7 @@ final class ProductionAssetsLayer extends DemoSeeder
                 $departmentId,
                 [
                     'name' => $definition['mold_code'].' — '.$definition['name'],
-                    'description' => "Demo operational asset for mold {$definition['mold_code']}. Acquisition value is a synthetic planning estimate.",
+                    'description' => "Operational asset for mold {$definition['mold_code']}. Acquisition value is a planning estimate.",
                     'category' => AssetCategory::Mold->value,
                     'department_id' => $departmentId,
                     'acquisition_date' => $this->acquisitionDate($context, $index + 2)->toDateString(),
@@ -426,7 +426,7 @@ final class ProductionAssetsLayer extends DemoSeeder
         };
 
         foreach (array_slice(self::AUXILIARY_EQUIPMENT, 0, $count) as $index => $equipment) {
-            $description = "Demo auxiliary equipment asset key {$equipment['code']}. Acquisition value is a synthetic planning estimate.";
+            $description = "Auxiliary equipment asset {$equipment['code']}. Acquisition value is a planning estimate.";
             $asset = Asset::withTrashed()->where('description', $description)->first();
 
             if ($asset === null) {

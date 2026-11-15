@@ -59,7 +59,7 @@ class UpdateEmployeeRequest extends FormRequest
             'middle_name'     => ['sometimes', 'nullable', 'string', 'max:100', "regex:/^[\\p{L}\\s.''\\-]*$/u"],
             'last_name'       => ['sometimes', 'required', 'string', 'max:100', "regex:/^[\\p{L}\\s.''\\-]+$/u"],
             'suffix'          => ['sometimes', 'nullable', 'string', 'max:20'],
-            'birth_date'      => ['sometimes', 'date', 'before:'.now()->subYears(15)->toDateString(), 'after:1900-01-01'],
+            'birth_date'      => ['sometimes', 'bail', 'date', 'before_or_equal:today', 'before:'.now()->subYears(21)->addDay()->toDateString(), 'after:1900-01-01'],
             'gender'          => ['sometimes', Rule::in(Gender::values())],
             'civil_status'    => ['sometimes', Rule::in(CivilStatus::values())],
             'nationality'     => ['sometimes', 'nullable', 'string', 'max:50'],
@@ -116,7 +116,8 @@ class UpdateEmployeeRequest extends FormRequest
             'tin.digits_between'   => 'TIN must be 9 to 12 digits.',
             'zip_code.regex'       => 'ZIP code must be 4 to 10 digits.',
             'bank_account_no.regex'=> 'Account number may only contain letters, digits, spaces, or hyphens.',
-            'birth_date.before'    => 'Employee must be at least 15 years old.',
+            'birth_date.before_or_equal' => 'Birth date cannot be in the future.',
+            'birth_date.before'    => 'Employee must be at least 21 years old.',
             'date_hired.before_or_equal' => 'Hire date cannot be in the future.',
         ];
     }

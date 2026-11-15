@@ -103,7 +103,7 @@ final class MaintenanceMasterDataLayer extends DemoSeeder
         $this->upsertSchedule($context, [
             'maintainable_type' => MaintainableType::Machine->value,
             'maintainable_id' => (int) $machine->getKey(),
-            'description' => "Calendar PM: {$machineCode} hydraulic, heater and safety inspection [DEMO]",
+            'description' => "Calendar PM: {$machineCode} hydraulic, heater and safety inspection",
             'interval_type' => MaintenanceScheduleInterval::Days->value,
             'interval_value' => 30,
             'estimated_duration_minutes' => 120,
@@ -113,7 +113,7 @@ final class MaintenanceMasterDataLayer extends DemoSeeder
         $this->upsertSchedule($context, [
             'maintainable_type' => MaintainableType::Machine->value,
             'maintainable_id' => (int) $machine->getKey(),
-            'description' => "Usage PM: {$machineCode} screw and barrel inspection every 500 running hours [DEMO]",
+            'description' => "Usage PM: {$machineCode} screw and barrel inspection every 500 running hours",
             'interval_type' => MaintenanceScheduleInterval::Hours->value,
             'interval_value' => 500,
             'estimated_duration_minutes' => 180,
@@ -128,7 +128,7 @@ final class MaintenanceMasterDataLayer extends DemoSeeder
         $this->upsertSchedule($context, [
             'maintainable_type' => MaintainableType::Mold->value,
             'maintainable_id' => (int) $mold->getKey(),
-            'description' => "Calendar PM: {$moldCode} clean vents and inspect cooling channels [DEMO]",
+            'description' => "Calendar PM: {$moldCode} clean vents and inspect cooling channels",
             'interval_type' => MaintenanceScheduleInterval::Days->value,
             'interval_value' => 90,
             'estimated_duration_minutes' => 180,
@@ -144,7 +144,7 @@ final class MaintenanceMasterDataLayer extends DemoSeeder
         $this->upsertSchedule($context, [
             'maintainable_type' => MaintainableType::Mold->value,
             'maintainable_id' => (int) $mold->getKey(),
-            'description' => "Usage PM: {$moldCode} inspect and service at {$shotInterval} shots [DEMO]",
+            'description' => "Usage PM: {$moldCode} inspect and service at {$shotInterval} shots",
             'interval_type' => MaintenanceScheduleInterval::Shots->value,
             'interval_value' => $shotInterval,
             'estimated_duration_minutes' => 240,
@@ -212,7 +212,7 @@ final class MaintenanceMasterDataLayer extends DemoSeeder
                 'frequency_days' => $definition['frequency_days'],
                 'status' => $status,
                 'responsible' => 'QC Inspector',
-                'remarks' => "Synthetic demo measuring equipment; schedule status is evaluated by the application as of {$asOfDate}.",
+                'remarks' => "Measuring equipment calibration status evaluated as of {$asOfDate}.",
             ];
 
             $record = CalibrationRecord::query()->where('equipment_code', $definition['code'])->first();

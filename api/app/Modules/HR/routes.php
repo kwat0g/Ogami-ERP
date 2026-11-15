@@ -26,12 +26,10 @@ Route::middleware(['auth:sanctum', 'feature:hr'])->prefix('hr')->group(function 
     // Departments
     Route::prefix('departments')->group(function () {
         Route::get('/tree', [DepartmentController::class, 'tree'])->middleware('permission:hr.departments.view');
-        // Department list doubles as PR-form lookup data (PR create page
-        // renders a department dropdown). Directory holders — e.g.
-        // department_head raising a PR for their department — may read the
-        // org-structure names without gaining the full Departments page
-        // (sidebar still gates on hr.departments.view).
-        Route::get('/', [DepartmentController::class, 'index'])->middleware('permission_any:hr.departments.view,hr.directory.view');
+        // Department list also supplies low-sensitivity lookup choices to
+        // cross-module forms. Budget managers need department names to assign
+        // a budget without gaining the full Departments page.
+        Route::get('/', [DepartmentController::class, 'index'])->middleware('permission_any:hr.departments.view,hr.directory.view,budgeting.manage');
         Route::post('/', [DepartmentController::class, 'store'])->middleware('permission:hr.departments.manage');
         Route::get('/{department}', [DepartmentController::class, 'show'])->middleware('permission:hr.departments.view');
         Route::put('/{department}', [DepartmentController::class, 'update'])->middleware('permission:hr.departments.manage');
@@ -236,6 +234,7 @@ Route::middleware(['auth:sanctum', 'feature:hr'])->prefix('hr')->group(function 
         Route::get('/attendance/options', [SelfServiceController::class, 'attendanceOptions']);
         Route::get('/leave-requests', [SelfServiceController::class, 'leaveRequests']);
         Route::get('/payslips', [SelfServiceController::class, 'payslips']);
+        Route::get('/payslips/{id}', [SelfServiceController::class, 'payslipDetail']);
         Route::get('/payslips/{id}/download', [SelfServiceController::class, 'payslip']);
         Route::get('/loans', [SelfServiceController::class, 'loans']);
         Route::get('/loans/{id}', [SelfServiceController::class, 'loans']);

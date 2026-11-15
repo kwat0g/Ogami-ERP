@@ -49,15 +49,7 @@ use RuntimeException;
 /** Seeds the current PR, RFQ, quote, PO and supplier-response workflows. */
 final class PurchasingHistoryLayer extends DemoSeeder
 {
-    private const MARKER = 'DEMO-PURCHASING:';
-
-    /** @var list<array{name:string,email_prefix:string}> */
-    private const SUPPLIER_CONTACTS = [
-        ['name' => 'Althea Mendoza', 'email_prefix' => 'althea.mendoza'],
-        ['name' => 'Nico Villanueva', 'email_prefix' => 'nico.villanueva'],
-        ['name' => 'Jessa Bautista', 'email_prefix' => 'jessa.bautista'],
-        ['name' => 'Marco Reyes', 'email_prefix' => 'marco.reyes'],
-    ];
+    private const MARKER = 'OGI-PURCHASING:';
 
     public function __construct(
         private readonly PurchaseRequestService $purchaseRequests,
@@ -97,12 +89,15 @@ final class PurchasingHistoryLayer extends DemoSeeder
         $asOf = $context->options->asOf->setTimezone('Asia/Manila')->startOfDay();
         $historyStart = $asOf->subMonthsNoOverflow(18)->startOfDay();
         $actors = [
-            'admin' => $this->account('system.admin@accounts.ogami-demo.test', 'purchasing.pr.create'),
-            'requester' => $this->account('department.head@accounts.ogami-demo.test', 'purchasing.pr.create'),
-            'buyer' => $this->account('purchasing.officer@accounts.ogami-demo.test', 'purchasing.po.create'),
-            'finance' => $this->account('finance.officer@accounts.ogami-demo.test', 'purchasing.pr.approve'),
-            'vp' => $this->account('vice.president@accounts.ogami-demo.test', 'purchasing.pr.approve'),
+            'admin' => $this->account('aballe.aaron@gmail.com', 'purchasing.pr.create'),
+            'requester' => $this->account('rojas.alexis@gmail.com', 'purchasing.pr.create'),
+            'buyer' => $this->account('agnas.shiernalhen@gmail.com', 'purchasing.po.create'),
+            'finance' => $this->account('abarrientos.mae@gmail.com', 'purchasing.pr.approve'),
+            'vp' => $this->account('fernandez.abegail@gmail.com', 'purchasing.pr.approve'),
         ];
+        Vendor::query()->where('is_active', true)->orderBy('id')->each(function (Vendor $vendor) use ($context, $actors, $asOf): void {
+            $this->ensureSupplierPortalUser($context, $vendor, $actors['admin'], $asOf);
+        });
         $item = Item::query()->where('code', 'RM-001')->where('is_active', true)->first();
         if (! $item instanceof Item) {
             throw new RuntimeException('Purchasing history requires the active RM-001 resin catalog item.');
@@ -321,11 +316,21 @@ final class PurchasingHistoryLayer extends DemoSeeder
         $approved = $this->ensureOrderFromRequest($context, 'PO-APPROVED', $actors, $item, $vendor, $lowQty, $asOf->subDays(14));
         $this->submitOrder($context, $approved, $buyer, $asOf->subDays(14)->addHours(1));
         $this->approvePurchaseOrder($context, $approved, $actors, $asOf->subDays(13));
-        $this->assertOrderState($approved, PurchaseOrderStatus::Approved, 'PO-APPROVED');
+        // Approval publishes to active supplier portal contacts. The listener
+        // confirms delivery and advances the PO to `sent` when one exists;
+        // otherwise the approved PO remains parked for manual transmission.
+        $approvedState = SupplierPortalUser::query()
+            ->where('vendor_id', $vendor->id)
+            ->where('is_active', true)
+            ->whereNull('deleted_at')
+            ->exists()
+                ? PurchaseOrderStatus::Sent
+                : PurchaseOrderStatus::Approved;
+        $this->assertOrderState($approved, $approvedState, 'PO-APPROVED');
 
-        // Keep one approved PO parked at the manual-transmission step. The
-        // approval listener correctly auto-publishes to active supplier portal
-        // users, so invite the portal contact only after this scenario is built.
+        // Ensure the vendor contact exists for the supplier-response scenarios
+        // below. Existing active portal contacts are kept because their normal
+        // approval-time dispatch is part of the live process.
         $portalUser = $this->ensureSupplierPortalUser($context, $vendor, $actors['admin'], $asOf);
 
         $sent = $this->ensureOrderFromRequest($context, 'PO-SENT', $actors, $item, $vendor, $lowQty, $asOf->subDays(8));
@@ -587,7 +592,7 @@ final class PurchasingHistoryLayer extends DemoSeeder
         {
             public function hashName($path = null): string
             {
-                $name = 'demo-'.substr(hash('sha256', $this->getClientOriginalName()), 0, 32).'.pdf';
+                $name = 'ogi-'.substr(hash('sha256', $this->getClientOriginalName()), 0, 32).'.pdf';
 
                 return $path === null || $path === '' ? $name : trim((string) $path, '/').'/'.$name;
             }
@@ -609,10 +614,10 @@ final class PurchasingHistoryLayer extends DemoSeeder
     private function placeholderQuotationPdf(string $vendorName, string $quoteMarker): string
     {
         $lines = [
-            'OGAMI DEMO DATA - FICTIONAL SUPPLIER QUOTATION',
+            'Supplier quotation for process walkthrough',
             $vendorName,
             $quoteMarker,
-            'For demonstration only. No commercial offer or real supplier commitment.',
+            'For process walkthrough only. Not a commercial offer or supplier commitment.',
         ];
         $commands = "BT\n/F1 11 Tf\n50 760 Td\n";
         foreach ($lines as $index => $line) {
@@ -726,7 +731,7 @@ final class PurchasingHistoryLayer extends DemoSeeder
             $context->at($instant, fn () => $context->asUser($approver, fn () => $this->purchaseRequests->approve(
                 $pr->fresh(),
                 $approver,
-                'Reviewed against the approved demo department budget and current production requirement.',
+                'Reviewed against the approved department budget and current production requirement.',
             )));
             $cursor++;
         }
@@ -856,7 +861,7 @@ final class PurchasingHistoryLayer extends DemoSeeder
         if ($existing instanceof PurchaseOrderResponse) {
             return;
         }
-        $data = ['type' => $type->value, 'notes' => 'Demo supplier response recorded through its active supplier portal account.'];
+        $data = ['type' => $type->value, 'notes' => 'Supplier response recorded through its active portal account.'];
         if ($type === PurchaseOrderResponseType::Propose) {
             $data['proposed_delivery_date'] = $po->expected_delivery_date?->addDays(3)->toDateString()
                 ?? $at->addDays(20)->toDateString();
@@ -879,31 +884,63 @@ final class PurchasingHistoryLayer extends DemoSeeder
         if ($password === '') {
             throw new RuntimeException('DEMO_ACCOUNT_PASSWORD must be configured before creating supplier portal accounts.');
         }
-        $contact = self::SUPPLIER_CONTACTS[((int) $vendor->id - 1) % count(self::SUPPLIER_CONTACTS)];
-        $email = $contact['email_prefix'].'.'.Str::slug((string) ($vendor->code ?? $vendor->id), '.').'@portal.ogami-demo.test';
+        $contactName = trim((string) $vendor->contact_person);
+        $email = strtolower(trim((string) $vendor->email));
+        if ($contactName === '' || ! preg_match('/^[a-z0-9._%+-]+@gmail\.com$/', $email)) {
+            throw new RuntimeException("Supplier {$vendor->name} needs a contact person and surname.firstname@gmail.com contact email before portal response scenarios can be seeded.");
+        }
+
+        $request = Request::create('/demo-data/purchasing-history/cleanup', 'POST', server: [
+            'HTTP_HOST' => 'localhost',
+            'HTTP_USER_AGENT' => 'Ogami demo data seeder',
+            'REMOTE_ADDR' => '127.0.0.1',
+        ]);
+        SupplierPortalUser::query()
+            ->where('vendor_id', $vendor->id)
+            ->whereRaw('LOWER(email) <> ?', [$email])
+            ->orderBy('id')
+            ->chunkById(100, function ($staleUsers) use ($context, $vendor, $administrator, $request, $asOf): void {
+                foreach ($staleUsers as $staleUser) {
+                    if (! $staleUser->is_active || $staleUser->trashed()) {
+                        continue;
+                    }
+
+                    $context->at($asOf, fn () => $context->asUser($administrator, fn () => $this->portalAccess->deactivate(
+                        $staleUser,
+                        $administrator,
+                        $request,
+                    )));
+                }
+            });
+
         $existing = SupplierPortalUser::withTrashed()->whereRaw('LOWER(email) = ?', [$email])->first();
         if ($existing instanceof SupplierPortalUser) {
             if ($existing->trashed()
                 || (int) $existing->vendor_id !== (int) $vendor->id
                 || ! $existing->is_active
-                || ! $existing->is_authorized_signatory
-                || $existing->must_change_password
-                || ! Hash::check($password, (string) $existing->getRawOriginal('password'))) {
-                throw new RuntimeException("Seed-owned supplier portal account {$email} has drifted; restore the demo snapshot before reseeding.");
+                || ! $existing->is_authorized_signatory) {
+                throw new RuntimeException("Seed-owned supplier portal account {$email} has drifted from its supplier or authorization state; restore the demo snapshot before reseeding.");
+            }
+
+            if ($existing->must_change_password || ! Hash::check($password, (string) $existing->getRawOriginal('password'))) {
+                $context->withoutNotifications(fn () => $context->at($asOf, function () use ($existing, $password, $request): void {
+                    $invitation = $this->passwordResets->issueInvitationToken('supplier', $existing);
+                    $this->passwordResets->reset('supplier', $invitation['token'], $password, $request);
+                }));
+                $existing->refresh();
+            }
+
+            if ($existing->must_change_password || ! Hash::check($password, (string) $existing->getRawOriginal('password'))) {
+                throw new RuntimeException("Supplier portal password reset did not establish the configured demo login for {$email}.");
             }
 
             return $existing;
         }
 
-        return $context->withoutNotifications(fn () => $context->at($asOf, fn (): SupplierPortalUser => DB::transaction(function () use ($context, $vendor, $contact, $email, $administrator, $password): SupplierPortalUser {
-            $request = Request::create('/demo-data/purchasing-history', 'POST', server: [
-                'HTTP_HOST' => 'localhost',
-                'HTTP_USER_AGENT' => 'Ogami demo data seeder',
-                'REMOTE_ADDR' => '127.0.0.1',
-            ]);
+        return $context->withoutNotifications(fn () => $context->at($asOf, fn (): SupplierPortalUser => DB::transaction(function () use ($context, $vendor, $contactName, $email, $administrator, $password, $request): SupplierPortalUser {
             $invited = $context->asUser($administrator, fn (): SupplierPortalUser => $this->portalAccess->inviteSupplier(
                 $vendor,
-                $contact['name'],
+                $contactName,
                 $email,
                 $administrator,
                 $request,
@@ -990,7 +1027,14 @@ final class PurchasingHistoryLayer extends DemoSeeder
     private function assertOrderState(PurchaseOrder $po, PurchaseOrderStatus $expected, string $code): void
     {
         $fresh = $po->fresh();
-        if (! $fresh || $fresh->status !== $expected) {
+        $validDownstreamReceiptProgression = $code === 'PO-ACKNOWLEDGED'
+            && $fresh !== null
+            && in_array($fresh->status, [
+                PurchaseOrderStatus::PartiallyReceived,
+                PurchaseOrderStatus::Received,
+                PurchaseOrderStatus::Closed,
+            ], true);
+        if (! $fresh || ($fresh->status !== $expected && ! $validDownstreamReceiptProgression)) {
             throw new RuntimeException("Purchasing scenario {$code} expected PO status {$expected->value}; found ".($fresh?->status?->value ?? 'missing').'.');
         }
     }

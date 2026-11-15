@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace Database\Seeders;
 
-use App\Modules\Payroll\Models\GovernmentContributionTable;
 use Illuminate\Database\Seeder;
-use Illuminate\Support\Facades\DB;
 
 /**
- * Seeds Philippine government contribution tables (SSS, PhilHealth, Pag-IBIG, BIR).
+ * Seeds Philippine government contribution table fixtures (SSS, PhilHealth, Pag-IBIG, BIR).
+ * These rows are marked legacy_unverified: the seeder has no uploaded source
+ * file hash or independent publication review, so they cannot qualify payroll.
  *
  * Sources:
  *   - SSS schedule of contributions effective January 2024 (~30 brackets)
@@ -27,15 +27,15 @@ class GovernmentTableSeeder extends Seeder
 {
     public function run(): void
     {
-        $sssEffective        = '2024-01-01';
+        $sssEffective = '2024-01-01';
         $philhealthEffective = '2024-01-01';
-        $pagibigEffective    = '2024-01-01';
+        $pagibigEffective = '2024-01-01';
 
         // ─── SSS (2024 schedule, regular employee — combined SS + EC + WISP) ─────────
         // Source: Social Security System contribution schedule effective Jan 2024.
         // Brackets in PHP per month. EE = employee share, ER = employer share.
         $sssBrackets = [
-            [   0.00,  4249.99,  180.00,  390.00],
+            [0.00,  4249.99,  180.00,  390.00],
             [4250.00,  4749.99,  202.50,  437.50],
             [4750.00,  5249.99,  225.00,  485.00],
             [5250.00,  5749.99,  247.50,  532.50],
@@ -91,7 +91,7 @@ class GovernmentTableSeeder extends Seeder
         ];
 
         foreach ($sssBrackets as [$min, $max, $ee, $er]) {
-            GovernmentContributionTable::updateOrCreate(
+            GovernmentScheduleSeederSupport::upsertUnversioned(
                 ['agency' => 'sss', 'bracket_min' => $min, 'effective_date' => $sssEffective],
                 ['bracket_max' => $max, 'ee_amount' => $ee, 'er_amount' => $er, 'is_active' => true],
             );
@@ -100,24 +100,24 @@ class GovernmentTableSeeder extends Seeder
         // ─── PhilHealth 2024 ─────────────────────────────────────────────
         // Single rate-based row. ee_amount and er_amount carry the rates (0.0225 each).
         // basis = clamp(salary, 10000, 100000); total_premium = basis * 0.05; split 50/50.
-        GovernmentContributionTable::updateOrCreate(
+        GovernmentScheduleSeederSupport::upsertUnversioned(
             ['agency' => 'philhealth', 'bracket_min' => 10000.00, 'effective_date' => $philhealthEffective],
             [
                 'bracket_max' => 100000.00,
-                'ee_amount'   => 0.0225,
-                'er_amount'   => 0.0225,
-                'is_active'   => true,
+                'ee_amount' => 0.0225,
+                'er_amount' => 0.0225,
+                'is_active' => true,
             ],
         );
 
         // ─── Pag-IBIG ───────────────────────────────────────────────────
         // Two brackets, rate-based. Max basis 10,000 ⇒ EE max 200, ER max 200.
         $pagibigBrackets = [
-            [   0.00,  1500.00, 0.0100, 0.0200], // EE 1%, ER 2%
+            [0.00,  1500.00, 0.0100, 0.0200], // EE 1%, ER 2%
             [1500.01, 999999.99, 0.0200, 0.0200], // EE 2%, ER 2%
         ];
         foreach ($pagibigBrackets as [$min, $max, $ee, $er]) {
-            GovernmentContributionTable::updateOrCreate(
+            GovernmentScheduleSeederSupport::upsertUnversioned(
                 ['agency' => 'pagibig', 'bracket_min' => $min, 'effective_date' => $pagibigEffective],
                 ['bracket_max' => $max, 'ee_amount' => $ee, 'er_amount' => $er, 'is_active' => true],
             );
@@ -150,23 +150,15 @@ class GovernmentTableSeeder extends Seeder
         ];
 
         foreach ($birSchedules as $effectiveDate => $birBrackets) {
-            DB::table('government_contribution_tables')
-                ->where('agency', 'bir')
-                ->whereDate('effective_date', $effectiveDate)
-                ->delete();
-
             foreach ($birBrackets as [$min, $max, $fixed, $rate]) {
-                GovernmentContributionTable::create([
-                    'agency' => 'bir',
-                    'bracket_min' => $min,
-                    'bracket_max' => $max,
-                    'ee_amount' => $fixed,
-                    'er_amount' => $rate,
-                    'effective_date' => $effectiveDate,
-                    'is_active' => true,
-                ]);
+                GovernmentScheduleSeederSupport::upsertUnversioned(
+                    ['agency' => 'bir', 'bracket_min' => $min, 'effective_date' => $effectiveDate],
+                    ['bracket_max' => $max, 'ee_amount' => $fixed, 'er_amount' => $rate, 'is_active' => true],
+                );
             }
         }
+
+        GovernmentScheduleSeederSupport::markUnverifiedRows();
 
         $this->command?->info('Government contribution tables seeded (SSS '.count($sssBrackets).', PhilHealth 1, Pag-IBIG '.count($pagibigBrackets).', BIR 12).');
     }

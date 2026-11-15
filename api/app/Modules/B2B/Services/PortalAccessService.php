@@ -55,8 +55,8 @@ class PortalAccessService
         $this->applyStatusFilter($query, $filters['status'] ?? null);
 
         return $query
-            ->orderBy('name')
-            ->orderBy('id')
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
             ->paginate(max(1, min((int) ($filters['per_page'] ?? 25), 100)))
             ->withQueryString();
     }
@@ -94,8 +94,8 @@ class PortalAccessService
         $this->applyStatusFilter($query, $filters['status'] ?? null);
 
         return $query
-            ->orderBy('name')
-            ->orderBy('id')
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
             ->paginate(max(1, min((int) ($filters['per_page'] ?? 25), 100)))
             ->withQueryString();
     }

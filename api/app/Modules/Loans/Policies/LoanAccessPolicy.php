@@ -20,14 +20,15 @@ use Illuminate\Support\Collection;
  * which employee rows that action may touch. The two checks must stay
  * separate, especially because department_head has loans.approve.
  *
- * Ladder (2026-09-10 approval-chain audit):
+ * Loan row access:
  *   - system_admin / finance_officer / hr_officer → every loan (company-wide
  *     operators);
- *   - department_head                             → own + their department's;
+ *   - department_head                             → own + their department's
+ *     loans (including legacy requests with a departmental approval step);
  *   - chain participants                          → loans waiting on a
- *     plant-wide step that names one of the caller's roles (including managers
- *     on older submitted company loans and vice_president on executive steps)
- *     — the departmental step is deliberately excluded
+ *     plant-wide step that names one of the caller's roles (including HR and
+ *     Finance on new requests and earlier roles on legacy requests) — the
+ *     departmental step is deliberately excluded
  *     here so a head's reach stays their own department. Without this branch
  *     those steps stalled invisibly: the board hid the card while the badge
  *     still counted it;
@@ -36,10 +37,10 @@ use Illuminate\Support\Collection;
 final class LoanAccessPolicy
 {
     /**
-     * The one loan-chain step that is scoped to a department.
+     * The legacy loan-chain step that is scoped to a department.
      *
-     * Both seeded chains (company_loan, cash_advance) start at the borrower's
-     * department_head; every later step is a company-level office.
+     * New company_loan and cash_advance chains use HR Officer then Finance
+     * Officer. Previously submitted requests keep their department_head step.
      */
     private const DEPARTMENTAL_STEP_ROLE = 'department_head';
 

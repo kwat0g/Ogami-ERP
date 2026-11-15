@@ -20,7 +20,11 @@ export function ShipmentPlanDialog({ delivery, onClose }: { delivery: Delivery; 
   const { can } = usePermission();
   useRealtimeList('vehicle', can('supply_chain.view') ? 'visible' : undefined);
   const photoInput = useRef<HTMLInputElement>(null);
-  const [scheduledDate, setScheduledDate] = useState(delivery.scheduled_date?.slice(0, 10) ?? '');
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const latestDateValue = new Date(`${today}T00:00:00Z`);
+  latestDateValue.setUTCFullYear(latestDateValue.getUTCFullYear() + 1);
+  const latestDate = latestDateValue.toISOString().slice(0, 10);
+  const [scheduledDate, setScheduledDate] = useState(today);
   const [expectedDate, setExpectedDate] = useState(delivery.expected_delivery_date?.slice(0, 10) ?? '');
   const [carrier, setCarrier] = useState(delivery.carrier ?? '');
   const [vehicleId, setVehicleId] = useState(delivery.vehicle?.id ?? '');
@@ -77,9 +81,19 @@ export function ShipmentPlanDialog({ delivery, onClose }: { delivery: Delivery; 
   });
   const error = (save.error as AxiosError<{ message?: string; errors?: Record<string, string[]> }> | null)?.response?.data;
   const fieldError = (field: string) => error?.errors?.[field]?.[0];
-  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   const futureShipment = scheduledDate > today;
-  const datesValid = !scheduledDate || !expectedDate || expectedDate >= scheduledDate;
+  const datesValid = (!scheduledDate || (scheduledDate >= today && scheduledDate <= latestDate))
+    && (!expectedDate || (expectedDate >= (scheduledDate || today) && expectedDate <= latestDate));
+  const scheduledDateError = fieldError('scheduled_date') ?? (scheduledDate < today
+    ? 'Shipment date cannot be in the past.'
+    : scheduledDate > latestDate
+      ? 'Shipment date must be within one year.'
+      : undefined);
+  const expectedDateError = fieldError('expected_delivery_date') ?? (expectedDate && expectedDate < (scheduledDate || today)
+    ? 'Expected arrival must be on or after the shipment date.'
+    : expectedDate && expectedDate > latestDate
+      ? 'Expected arrival must be within one year.'
+      : undefined);
   const selectedVehicle = (vehicles.data?.data ?? []).find((vehicle) => vehicle.id === vehicleId)
     ?? (delivery.vehicle?.id === vehicleId ? delivery.vehicle : undefined);
   const selectedDriver = drivers.data?.find((driver) => driver.id === driverId);
@@ -111,8 +125,8 @@ export function ShipmentPlanDialog({ delivery, onClose }: { delivery: Delivery; 
         {error?.errors && <ul className="mt-1 list-disc pl-5">{Object.entries(error.errors).map(([field, messages]) => <li key={field}>{messages[0]}</li>)}</ul>}
       </div>}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <Input label="Shipment date" type="date" required value={scheduledDate} onChange={(event) => setScheduledDate(event.target.value)} error={fieldError('scheduled_date')} disabled={save.isPending} />
-        <Input label="Expected arrival" type="date" required min={scheduledDate || undefined} value={expectedDate} onChange={(event) => setExpectedDate(event.target.value)} error={fieldError('expected_delivery_date') ?? (!datesValid ? 'Expected arrival must be on or after the shipment date.' : undefined)} disabled={save.isPending} />
+        <Input label="Shipment date" type="date" required min={today} max={expectedDate && expectedDate >= today && expectedDate < latestDate ? expectedDate : latestDate} value={scheduledDate} onChange={(event) => setScheduledDate(event.target.value)} error={scheduledDateError} disabled={save.isPending} />
+        <Input label="Expected arrival" type="date" required min={scheduledDate || today} max={latestDate} value={expectedDate} onChange={(event) => setExpectedDate(event.target.value)} error={expectedDateError} disabled={save.isPending} />
         <Input label="Carrier" required maxLength={100} value={carrier} onChange={(event) => setCarrier(event.target.value)} error={fieldError('carrier')} disabled={save.isPending} containerClassName="sm:col-span-2" />
         <Select label="Vehicle" required value={vehicleId} onChange={(event) => setVehicleId(event.target.value)} error={fieldError('vehicle_id')} disabled={save.isPending || vehicles.isLoading || vehicles.isError || delivery.status === 'loading'}>
           <option value="">{vehicles.isLoading ? 'Loading vehicles…' : 'Select available vehicle'}</option>

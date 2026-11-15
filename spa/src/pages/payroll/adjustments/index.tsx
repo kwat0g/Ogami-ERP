@@ -142,7 +142,18 @@ export default function PayrollAdjustmentsPage() {
       align: 'right',
       cell: (r) => <NumCell className="font-medium">{formatPeso(r.amount)}</NumCell>,
     },
-    { key: 'period', header: 'Period', cell: (r) => r.period?.label ?? '—' },
+    {
+      key: 'period',
+      header: 'Period',
+      cell: (r) => r.type === 'unpaid_absence' ? (
+        <StackedCell
+          primary={r.target_period?.label ?? 'Target cutoff unavailable'}
+          secondary={r.source_leave_request?.leave_request_no
+            ? `Leave ${r.source_leave_request.leave_request_no}`
+            : 'Source leave unavailable'}
+        />
+      ) : r.period?.label ?? '—',
+    },
     {
       key: 'reason',
       header: 'Reason',

@@ -10,6 +10,7 @@ use App\Modules\CRM\Models\SalesOrder;
 use App\Modules\CRM\Services\SalesOrderSupplyService;
 use App\Modules\MRP\Services\MrpEngineService;
 use App\Modules\Production\Models\WorkOrder;
+use App\Modules\Production\Services\WorkOrderService;
 use App\Modules\SupplyChain\Enums\DeliveryStatus;
 use App\Modules\SupplyChain\Models\Delivery;
 use App\Modules\SupplyChain\Services\DeliveryService;
@@ -60,6 +61,7 @@ class SalesOrderFulfillmentController
                 throw new BusinessRuleException('Include each order line exactly once.');
             }
             $draftsToRetire = collect();
+            $workOrdersToReplan = collect();
             foreach ($data['lines'] as $row) {
                 $line = $lines->get($row['id']);
                 if (! $line) {
@@ -77,13 +79,24 @@ class SalesOrderFulfillmentController
                     }
                     $draftsToRetire->put($shipment->id, $shipment);
                 }
-                if (WorkOrder::where('sales_order_item_id', $line->id)->where('status', '!=', 'cancelled')
-                    ->where(fn ($q) => $q->where('status', '!=', 'planned')->orWhereHas('currentProductionSchedule')->orWhereHas('materials', fn ($q) => $q->where('actual_quantity_issued', '>', 0)))->exists()) {
+                $activeWorkOrders = WorkOrder::where('sales_order_item_id', $line->id)
+                    ->where('status', '!=', 'cancelled')->lockForUpdate()->get();
+                if ($row['policy'] === 'stock_first') {
+                    $workOrdersToReplan = $workOrdersToReplan->merge($activeWorkOrders);
+                } elseif ($activeWorkOrders->contains(fn (WorkOrder $workOrder): bool =>
+                    $workOrder->status->value !== 'planned'
+                    || $workOrder->currentProductionSchedule()->exists()
+                    || $workOrder->materials()->where('actual_quantity_issued', '>', 0)->exists()
+                )) {
                     throw new BusinessRuleException('Production or shipment commitments prevent this policy change.');
                 }
             }
             foreach ($draftsToRetire as $shipment) {
                 app(DeliveryService::class)->updateStatus($shipment, DeliveryStatus::Cancelled);
+            }
+            $workOrderService = app(WorkOrderService::class);
+            foreach ($workOrdersToReplan->unique('id') as $workOrder) {
+                $workOrderService->cancelForFulfillmentReplan($workOrder);
             }
             foreach ($data['lines'] as $row) {
                 if ($row['policy'] === 'produce_new') {

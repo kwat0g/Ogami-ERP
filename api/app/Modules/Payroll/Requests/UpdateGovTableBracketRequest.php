@@ -20,6 +20,7 @@ class UpdateGovTableBracketRequest extends FormRequest
             'bracket_max'    => ['sometimes', 'numeric', 'min:0', 'max:9999999.99', 'gte:bracket_min'],
             'ee_amount'      => ['sometimes', 'numeric', 'min:0', 'max:9999999.9999'],
             'er_amount'      => ['sometimes', 'numeric', 'min:0', 'max:9999999.9999'],
+            'ec_amount'      => ['sometimes', 'numeric', 'min:0', 'max:9999999.9999'],
             'effective_date' => ['sometimes', 'date'],
             'is_active'      => ['sometimes', 'boolean'],
         ];

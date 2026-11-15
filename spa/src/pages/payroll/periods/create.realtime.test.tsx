@@ -82,4 +82,83 @@ describe('Payroll Period create freshness', () => {
       .toEqual(createdPeriod));
     queryClient.clear();
   });
+
+  it('rejects a shortened first-half range as regular payroll', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/payroll/periods/create']}>
+          <Routes>
+            <Route path="/payroll/periods/create" element={<CreatePayrollPeriodPage />} />
+            <Route path="/payroll/periods/:id" element={<span>Payroll period detail route</span>} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.change(document.querySelector<HTMLInputElement>('input[name="period_start"]')!, {
+      target: { value: '2026-11-03' },
+    });
+    fireEvent.change(document.querySelector<HTMLInputElement>('input[name="period_end"]')!, {
+      target: { value: '2026-11-15' },
+    });
+    fireEvent.change(document.querySelector<HTMLInputElement>('input[name="payroll_date"]')!, {
+      target: { value: '2026-11-20' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create period' }));
+
+    expect(await screen.findByText(/A regular first-half payroll must run from day 1 through 15/)).toBeVisible();
+    expect(periodsApi.create).not.toHaveBeenCalled();
+    queryClient.clear();
+  });
+
+  it('selects and clears all departments from the scope controls', async () => {
+    vi.mocked(periodsApi.options).mockResolvedValue({
+      statuses: [],
+      period_types: [],
+      half_types: [],
+      employment_types: [],
+      pay_types: [
+        { value: 'monthly', label: 'Monthly' },
+        { value: 'semi_monthly', label: 'Semi-monthly' },
+      ],
+      departments: [
+        { value: 'department-admin', label: 'Administration' },
+        { value: 'department-production', label: 'Production' },
+      ],
+    });
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/payroll/periods/create']}>
+          <Routes>
+            <Route path="/payroll/periods/create" element={<CreatePayrollPeriodPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText('0 of 2 departments selected')).toBeVisible();
+    expect(screen.getByText(/Monthly pay is split across the two half-month cutoff runs/)).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select all departments' }));
+
+    expect(screen.getByRole('checkbox', { name: 'Administration' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Production' })).toBeChecked();
+    expect(screen.getByText('2 of 2 departments selected')).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear department selection' }));
+
+    expect(screen.getByRole('checkbox', { name: 'Administration' })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Production' })).not.toBeChecked();
+    expect(screen.getByText('0 of 2 departments selected')).toBeVisible();
+    queryClient.clear();
+  });
 });

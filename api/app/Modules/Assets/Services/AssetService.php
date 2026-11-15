@@ -65,7 +65,9 @@ class AssetService
                 ->orWhere('name', SearchOperator::like(), $term));
         }
 
-        return $q->orderBy('asset_code')->paginate(min((int) ($filters['per_page'] ?? 20), 100));
+        return $q->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->paginate(min((int) ($filters['per_page'] ?? 20), 100));
     }
 
     public function show(Asset $asset): Asset

@@ -603,6 +603,8 @@ export const realtimeInvalidationMap: Record<RealtimeEntityType, EntityInvalidat
       ['crm', 'products'],
       ['quality'],
       ['inventory', 'dashboard'],
+      ['warehouse', 'map'],
+      ['warehouse', 'bin'],
       ['dashboard'],
       ['dashboards'],
     ],

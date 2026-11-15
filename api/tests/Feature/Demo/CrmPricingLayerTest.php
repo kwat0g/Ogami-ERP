@@ -88,7 +88,7 @@ class CrmPricingLayerTest extends TestCase
             ->sortKeys()
             ->all());
 
-        $salesRejected = $requests->first(fn (PriceRequest $request): bool => str_starts_with((string) $request->notes, 'DEMO-CRM-PRICING:SALES-REJECTED'));
+        $salesRejected = $requests->first(fn (PriceRequest $request): bool => str_starts_with((string) $request->notes, 'OGI-CRM-PRICING:SALES-REJECTED'));
         $this->assertInstanceOf(PriceRequest::class, $salesRejected);
         $this->assertTrue(Money::lt((string) $salesRejected->requested_price, (string) $salesRejected->product->minimum_selling_price));
         $portalUserIds = CustomerPortalUser::query()->pluck('id')->map(static fn ($id): int => (int) $id)->all();
@@ -101,7 +101,7 @@ class CrmPricingLayerTest extends TestCase
             } else {
                 $this->assertSame($asOf->toDateString(), $request->created_at->toDateString());
             }
-            $this->assertStringContainsString('DEMO-CRM-PRICING:', $request->notes);
+            $this->assertStringContainsString('OGI-CRM-PRICING:', $request->notes);
         }
 
         foreach (PriceAgreement::query()->with(['customer', 'product'])->get() as $agreement) {

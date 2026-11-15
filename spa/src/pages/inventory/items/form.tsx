@@ -29,6 +29,13 @@ import { usePermission } from '@/hooks/usePermission';
 const quantity = z
   .string()
   .regex(/^\d+(\.\d{1,3})?$/, 'Use a non-negative quantity with up to 3 decimals.');
+const weightKgPerUnit = z
+  .string()
+  .regex(/^\d+(\.\d{1,6})?$/, 'Use a weight with up to 6 decimals.')
+  .refine((value) => Number(value) > 0, 'Weight must be greater than zero.')
+  .refine((value) => Number(value) <= 999999.999999, 'Weight exceeds the allowed maximum.')
+  .optional()
+  .or(z.literal(''));
 const schema = z.object({
   code: z
     .string()
@@ -41,6 +48,7 @@ const schema = z.object({
   description: z.string().max(1000).optional(),
   category_id: z.string().min(1, 'Select a category.'),
   unit_of_measure: z.string().min(1, 'Select a base unit.').max(20),
+  weight_kg_per_unit: weightKgPerUnit,
   standard_cost: z
     .string()
     .regex(/^\d+(\.\d{1,4})?$/, 'Use a non-negative cost with up to 4 decimals.'),
@@ -92,6 +100,7 @@ export default function ItemFormPage({ mode }: { mode: 'create' | 'edit' }) {
       description: '',
       category_id: '',
       unit_of_measure: '',
+      weight_kg_per_unit: '',
       standard_cost: '',
       reorder_method: '',
       reorder_point: '0',
@@ -123,6 +132,7 @@ export default function ItemFormPage({ mode }: { mode: 'create' | 'edit' }) {
       unit_of_measure:
         uoms.data.find((unit) => unit.code.toUpperCase() === existing.unit_of_measure.toUpperCase())
           ?.code ?? existing.unit_of_measure,
+      weight_kg_per_unit: existing.weight_kg_per_unit ?? '',
       standard_cost: existing.standard_cost,
       reorder_method: existing.reorder_method,
       reorder_point: existing.reorder_point,
@@ -135,6 +145,7 @@ export default function ItemFormPage({ mode }: { mode: 'create' | 'edit' }) {
     initialized.current = existing.id;
   }, [existingQuery.data, uoms.data, reset]);
   const values = watch();
+  const isKgBaseUnit = values.unit_of_measure.trim().toLowerCase() === 'kg';
   const selectedCategory = categories.data?.find((category) => category.id === values.category_id);
   const classificationLabel =
     selectedCategory?.item_type_label ??
@@ -157,6 +168,7 @@ export default function ItemFormPage({ mode }: { mode: 'create' | 'edit' }) {
       const { minimum_order_quantity: minimumOrderQuantity, ...itemData } = data;
       const payload: CreateItemData = {
         ...itemData,
+        weight_kg_per_unit: isKgBaseUnit ? null : data.weight_kg_per_unit || null,
         reorder_method: isFinishedGood ? 'fixed_quantity' : (data.reorder_method as ReorderMethod),
         description: data.description || undefined,
         ...(isFinishedGood
@@ -395,6 +407,25 @@ navigate(`/inventory/items/${item.id}`);
                   className="font-mono tabular-nums"
                   error={errors.standard_cost?.message}
                 />
+                {isKgBaseUnit ? (
+                  <p className="self-center text-sm text-muted">
+                    Warehouse capacity uses the stock quantity directly for kg items.
+                  </p>
+                ) : (
+                  <Input
+                    label="Gross weight per base unit (kg)"
+                    fieldSize="lg"
+                    {...register('weight_kg_per_unit')}
+                    {...numberInputProps()}
+                    min={0.000001}
+                    max={999999.999999}
+                    step="0.000001"
+                    suffix={values.unit_of_measure ? `kg / ${values.unit_of_measure}` : 'kg / base unit'}
+                    helper="Include packaging that rests on the rack. Leave blank if unknown; the warehouse map will flag unweighted stock."
+                    className="font-mono tabular-nums"
+                    error={errors.weight_kg_per_unit?.message}
+                  />
+                )}
               </div>
               {values.standard_cost !== '' && Number(values.standard_cost) === 0 && (
                 <p className="mt-4 text-sm text-warning-fg">

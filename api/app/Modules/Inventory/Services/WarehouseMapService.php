@@ -30,12 +30,28 @@ class WarehouseMapService
 
         foreach ($warehouses as $warehouse) {
             foreach ($warehouse->zones as $zone) {
+                $zoneOccupiedKg = '0.000000000';
+                $zoneUntrackedLineCount = 0;
+
                 foreach ($zone->locations as $location) {
+                    $occupiedKg = $this->locationSummary->occupiedKg($location->stockLevels);
+                    $untrackedLineCount = $this->locationSummary->untrackedCapacityLineCount($location->stockLevels);
                     $location->setAttribute(
                         'inventory_summary',
                         $this->locationSummary->summarize($location->stockLevels),
                     );
+                    $location->setAttribute('capacity_used_kg', $occupiedKg);
+                    $location->setAttribute('capacity_untracked_line_count', $untrackedLineCount);
+                    $location->setAttribute(
+                        'capacity_untracked_items',
+                        $this->locationSummary->untrackedCapacityItems($location->stockLevels),
+                    );
+                    $zoneOccupiedKg = bcadd($zoneOccupiedKg, $occupiedKg, 9);
+                    $zoneUntrackedLineCount += $untrackedLineCount;
                 }
+
+                $zone->setAttribute('capacity_used_kg', $zoneOccupiedKg);
+                $zone->setAttribute('capacity_untracked_line_count', $zoneUntrackedLineCount);
             }
         }
 
@@ -73,9 +89,13 @@ class WarehouseMapService
                 'full_code' => $loc->full_code,
                 'rack' => $loc->rack,
                 'bin' => $loc->bin,
+                'is_active' => $loc->is_active,
                 'is_blocked' => $loc->is_blocked,
                 'blocked_reason' => $loc->blocked_reason,
                 'capacity_kg' => $loc->capacity_kg,
+                'capacity_status' => $loc->capacity_status,
+                'capacity_used_kg' => $this->locationSummary->occupiedKg($stockLevels),
+                'capacity_untracked_line_count' => $this->locationSummary->untrackedCapacityLineCount($stockLevels),
                 'current_item' => $summary['current_item'] ? [
                     'id' => $summary['current_item']->hash_id,
                     'code' => $summary['current_item']->code,
@@ -105,6 +125,7 @@ class WarehouseMapService
                 'reserved' => $sl->reserved_quantity,
                 'available' => $sl->available,
                 'unit_of_measure' => $sl->item?->unit_of_measure,
+                'weight_kg_per_unit' => $sl->item?->weight_kg_per_unit,
                 'usable_quantity' => $this->locationSummary->availability(collect([$sl]))['usable_quantity'],
                 'unit_cost' => $sl->weighted_avg_cost,
                 'total_value' => $sl->total_value,

@@ -67,7 +67,7 @@ class QualityHistoryLayerTest extends TestCase
 
         $runner->run($options);
 
-        $complaints = CustomerComplaint::query()->where('description', 'like', 'DEMO-QUALITY:%');
+        $complaints = CustomerComplaint::query()->where('description', 'like', 'OGI-QUALITY:%');
         $statuses = (clone $complaints)->select('status', DB::raw('count(*) as aggregate'))
             ->groupBy('status')->pluck('aggregate', 'status')->all();
         foreach ([ComplaintStatus::Open, ComplaintStatus::Resolved, ComplaintStatus::Closed] as $status) {
@@ -75,8 +75,8 @@ class QualityHistoryLayerTest extends TestCase
         }
 
         $asOf = CarbonImmutable::parse('2026-12-01 00:00:00', 'Asia/Manila');
-        $withinClock = (clone $complaints)->where('description', 'like', 'DEMO-QUALITY:OPEN-WITHIN-CLOCK%')->firstOrFail();
-        $overdue = (clone $complaints)->where('description', 'like', 'DEMO-QUALITY:OPEN-OVERDUE%')->firstOrFail();
+        $withinClock = (clone $complaints)->where('description', 'like', 'OGI-QUALITY:OPEN-WITHIN-CLOCK%')->firstOrFail();
+        $overdue = (clone $complaints)->where('description', 'like', 'OGI-QUALITY:OPEN-OVERDUE%')->firstOrFail();
         $this->assertTrue($withinClock->d3_due_at->greaterThan($asOf));
         $this->assertTrue($overdue->d3_due_at->lessThan($asOf));
         $overdueCreatedAt = CarbonImmutable::parse($overdue->created_at)->setTimezone('Asia/Manila');
@@ -85,12 +85,12 @@ class QualityHistoryLayerTest extends TestCase
         $this->assertFalse(Holiday::query()->where('is_recurring', true)
             ->whereRaw("to_char(date, 'MM-DD') = ?", [$overdueCreatedAt->format('m-d')])->exists());
 
-        $resolvedComplaint = (clone $complaints)->where('description', 'like', 'DEMO-QUALITY:RESOLVED%')->firstOrFail();
+        $resolvedComplaint = (clone $complaints)->where('description', 'like', 'OGI-QUALITY:RESOLVED%')->firstOrFail();
         $this->assertSame(ComplaintStatus::Resolved, $resolvedComplaint->status);
         $this->assertSame(NcrStatus::Closed, $resolvedComplaint->ncr->status);
         $this->assertNotNull($resolvedComplaint->eightDReport->finalized_at);
 
-        $closedComplaint = (clone $complaints)->where('description', 'like', 'DEMO-QUALITY:CLOSED%')->firstOrFail();
+        $closedComplaint = (clone $complaints)->where('description', 'like', 'OGI-QUALITY:CLOSED%')->firstOrFail();
         $this->assertSame(NcrStatus::Closed, $closedComplaint->ncr->status);
         $this->assertNotNull($closedComplaint->eightDReport->finalized_at);
 
@@ -101,11 +101,11 @@ class QualityHistoryLayerTest extends TestCase
         }
         $this->assertTrue($overdueNcr->actions()->where('due_date', '<', $asOf->toDateString())->whereNull('verified_at')->exists());
 
-        $partialGrn = GoodsReceiptNote::query()->where('remarks', 'DEMO-RECEIVING:GRN-PARTIAL-ACCEPT')->firstOrFail();
+        $partialGrn = GoodsReceiptNote::query()->where('remarks', 'OGI-RECEIVING:GRN-PARTIAL-ACCEPT')->firstOrFail();
         $incomingInspection = Inspection::query()->where('stage', 'incoming')->where('entity_type', 'grn')
             ->where('entity_id', $partialGrn->id)->firstOrFail();
         $incomingNcr = NonConformanceReport::query()->where('inspection_id', $incomingInspection->id)->firstOrFail();
-        foreach ($incomingNcr->actions()->where('description', 'like', 'DEMO-QUALITY:INCOMING:%')->get() as $action) {
+        foreach ($incomingNcr->actions()->where('description', 'like', 'OGI-QUALITY:INCOMING:%')->get() as $action) {
             $this->assertGreaterThanOrEqual($incomingNcr->created_at, $action->performed_at);
         }
 
@@ -122,7 +122,7 @@ class QualityHistoryLayerTest extends TestCase
     /** @return array<string, array<int, array<string, mixed>>> */
     private function fingerprint(): array
     {
-        $complaintIds = CustomerComplaint::query()->where('description', 'like', 'DEMO-QUALITY:%')->select('id');
+        $complaintIds = CustomerComplaint::query()->where('description', 'like', 'OGI-QUALITY:%')->select('id');
         $ncrIds = NonConformanceReport::query()->whereIn('complaint_id', $complaintIds)->select('id');
 
         return [

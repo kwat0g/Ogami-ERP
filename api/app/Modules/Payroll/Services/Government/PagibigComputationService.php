@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Payroll\Services\Government;
 
+use App\Common\Exceptions\BusinessRuleException;
 use App\Common\Services\SettingsService;
 use App\Modules\Payroll\Enums\ContributionAgency;
 use App\Modules\Payroll\Services\GovernmentContributionTableService;
@@ -28,7 +29,7 @@ class PagibigComputationService
     /**
      * @return array{ee: string, er: string}
      */
-    public function compute(string|float|int $monthlySalary, ?Carbon $effectiveDate = null): array
+    public function compute(string|float|int $monthlySalary, ?Carbon $effectiveDate = null, ?int $scheduleVersionId = null): array
     {
         $salary = (string) $monthlySalary;
         if (bccomp($salary, '0', 2) <= 0) {
@@ -38,18 +39,21 @@ class PagibigComputationService
         // Cap salary at the project ceiling.
         $ceilingValue = $this->settings->get('payroll.pagibig.compensation_ceiling');
         if (! is_numeric($ceilingValue) || (float) $ceilingValue <= 0) {
-            throw new \App\Common\Exceptions\BusinessRuleException('Required payroll setting payroll.pagibig.compensation_ceiling is missing or invalid.');
+            throw new BusinessRuleException('Required payroll setting payroll.pagibig.compensation_ceiling is missing or invalid.');
         }
         $ceiling = (string) $ceilingValue;
         $basis = bccomp($salary, $ceiling, 2) > 0 ? $ceiling : $salary;
 
-        $brackets = $this->tables->bracketsEffectiveOn(ContributionAgency::Pagibig, $effectiveDate ?? now());
+        $brackets = $scheduleVersionId === null
+            ? $this->tables->bracketsEffectiveOn(ContributionAgency::Pagibig, $effectiveDate ?? now())
+            : $this->tables->bracketsForVersion($scheduleVersionId, ContributionAgency::Pagibig);
         foreach ($brackets as $row) {
             $min = (string) $row->bracket_min;
             $max = (string) $row->bracket_max;
             if (bccomp($basis, $min, 2) >= 0 && bccomp($basis, $max, 2) <= 0) {
                 $ee = bcmul($basis, (string) $row->ee_amount, 4);
                 $er = bcmul($basis, (string) $row->er_amount, 4);
+
                 return [
                     'ee' => self::round2($ee),
                     'er' => self::round2($er),
@@ -65,6 +69,7 @@ class PagibigComputationService
         $sign = bccomp($v, '0', 4) >= 0 ? '1' : '-1';
         $abs = ltrim($v, '-');
         $rounded = bcadd($abs, '0.005', 2);
+
         return $sign === '-1' ? bcmul($rounded, '-1', 2) : bcadd($rounded, '0', 2);
     }
 }

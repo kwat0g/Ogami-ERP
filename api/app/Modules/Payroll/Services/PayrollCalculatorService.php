@@ -14,12 +14,12 @@ use App\Modules\HR\Enums\PayType;
 use App\Modules\HR\Models\Employee;
 use App\Modules\HR\Models\EmployeeSalaryHistory;
 use App\Modules\HR\Models\SalaryAdjustment;
+use App\Modules\Leave\Enums\LeaveRequestStatus;
 use App\Modules\Loans\Enums\LoanStatus;
 use App\Modules\Loans\Enums\LoanType;
 use App\Modules\Loans\Models\EmployeeLoan;
 use App\Modules\Loans\Models\LoanPayment;
 use App\Modules\Loans\Services\LoanService;
-use App\Modules\Payroll\Enums\ContributionAgency;
 use App\Modules\Payroll\Enums\DeductionType;
 use App\Modules\Payroll\Enums\PayrollAdjustmentStatus;
 use App\Modules\Payroll\Enums\PayrollAdjustmentType;
@@ -29,6 +29,7 @@ use App\Modules\Payroll\Models\Payroll;
 use App\Modules\Payroll\Models\PayrollAdjustment;
 use App\Modules\Payroll\Models\PayrollCycleClaim;
 use App\Modules\Payroll\Models\PayrollDeductionDetail;
+use App\Modules\Payroll\Models\PayrollLoanRecoveryAllocation;
 use App\Modules\Payroll\Models\PayrollPeriod;
 use App\Modules\Payroll\Services\Government\BirTaxComputationService;
 use App\Modules\Payroll\Services\Government\PagibigComputationService;
@@ -75,10 +76,11 @@ class PayrollCalculatorService
         private readonly PhilhealthComputationService $philhealth,
         private readonly PagibigComputationService $pagibig,
         private readonly BirTaxComputationService $bir,
-        private readonly GovernmentContributionTableService $govTables,
+        private readonly GovernmentSchedulePinService $schedulePins,
         private readonly DeMinimisService $deMinimis,
         private readonly ThirteenthMonthService $thirteenthMonth,
         private readonly SettingsService $settings,
+        private readonly DeductionAllocationService $deductionAllocator,
         private readonly PayrollPeriodService $periods,
         private readonly EmploymentProrationService $proration,
     ) {}
@@ -106,18 +108,18 @@ class PayrollCalculatorService
 
         // isLocked() alone left two holes for externally-triggered recomputes:
         //
-        //   Approved   — a checker has already signed off on these amounts.
+        //   Approved   — an approver has already signed off on these amounts.
         //                Rewriting a row here changed approved payroll with no
-        //                re-approval, defeating maker-checker (REC-04).
+        //                re-approval, bypassing the approval gate.
         //   Processing — the batch job owns the period; a concurrent single-row
         //                recompute races it and can be overwritten mid-flight
         //                (or double-apply loan deductions and adjustments).
         //
         // The batch job passes internal: true because its own claim is exactly
         // what puts the period into Processing.
-        $this->assertGovernmentTablesEffective($period);
+        $scheduleVersionIds = $this->assertGovernmentTablesEffective($period);
 
-        return DB::transaction(function () use ($period, $employee, $internal, $claimToken) {
+        $computed = DB::transaction(function () use ($period, $employee, $internal, $claimToken, $scheduleVersionIds) {
             // Lock the period claim for the whole employee transaction. If a
             // stale worker was taken over after its previous employee, it must
             // stop before deleting/replacing or writing any row for this one.
@@ -130,6 +132,12 @@ class PayrollCalculatorService
                 // loan, adjustment, or accrual data is changed.
                 $period = PayrollPeriod::query()->lockForUpdate()->findOrFail($period->id);
                 $this->assertEmployeeComputeAllowed($period, false);
+            }
+
+            if ($period->computation_policy_version !== PayrollComputationFingerprintService::POLICY_VERSION) {
+                $period->forceFill([
+                    'computation_policy_version' => PayrollComputationFingerprintService::POLICY_VERSION,
+                ])->save();
             }
 
             // Wipe any prior rows for this employee+period (clean recompute).
@@ -243,15 +251,16 @@ class PayrollCalculatorService
                 $monthlySalary,
                 $this->employedDayFraction($employee, $period),
             ));
-            $sssEe = $sssEr = $phEe = $phEr = $pgEe = $pgEr = $wht = '0.00';
+            $sssEe = $sssEr = $sssEc = $phEe = $phEr = $pgEe = $pgEr = $wht = '0.00';
 
             if ($period->is_first_half && ! $period->is_thirteenth_month) {
                 $effectiveOn = $period->payroll_date;
-                $sssR = $this->sss->compute($govBasis, $effectiveOn);
-                $phR = $this->philhealth->compute($govBasis, $effectiveOn);
-                $pgR = $this->pagibig->compute($govBasis, $effectiveOn);
+                $sssR = $this->sss->compute($govBasis, $effectiveOn, $scheduleVersionIds['sss'] ?? null);
+                $phR = $this->philhealth->compute($govBasis, $effectiveOn, $scheduleVersionIds['philhealth'] ?? null);
+                $pgR = $this->pagibig->compute($govBasis, $effectiveOn, $scheduleVersionIds['pagibig'] ?? null);
                 $sssEe = $sssR['ee'];
                 $sssEr = $sssR['er'];
+                $sssEc = $sssR['ec'];
                 $phEe = $phR['ee'];
                 $phEr = $phR['er'];
                 $pgEe = $pgR['ee'];
@@ -272,7 +281,12 @@ class PayrollCalculatorService
                     $taxable = Money::zero();
                 }
 
-                $wht = $this->bir->compute($taxable, 'semi_monthly', $period->payroll_date);
+                $wht = $this->bir->compute(
+                    $taxable,
+                    'semi_monthly',
+                    $period->payroll_date,
+                    $scheduleVersionIds['bir'] ?? null,
+                );
             }
 
             // ─── Persist payroll row (without deductions yet) ────
@@ -292,7 +306,7 @@ class PayrollCalculatorService
                 'tardiness_deduction' => $tardiness,
                 'undertime_deduction' => $undertime,
                 'gross_pay' => $grossPay,
-                'sss_ee' => $sssEe, 'sss_er' => $sssEr,
+                'sss_ee' => $sssEe, 'sss_er' => $sssEr, 'sss_ec' => $sssEc,
                 'philhealth_ee' => $phEe, 'philhealth_er' => $phEr,
                 'pagibig_ee' => $pgEe, 'pagibig_er' => $pgEr,
                 'withholding_tax' => $wht,
@@ -330,11 +344,28 @@ class PayrollCalculatorService
             $this->addDeductionDetail($payroll, DeductionType::Pagibig, 'Pag-IBIG Employee Share', $pgEe);
             $this->addDeductionDetail($payroll, DeductionType::WithholdingTax, 'BIR Withholding Tax', $wht);
 
-            // ─── Loan auto-deductions ────────────────────────────
-            $loanTotal = $this->applyLoanDeductions($payroll, $employee, $period);
-
-            // ─── Adjustment carry-over ───────────────────────────
+            // ─── Approved adjustments before voluntary recovery ──
             $adjAmount = $this->applyApprovedAdjustments($payroll, $employee, $period);
+
+            // Mandatory employee deductions and approved negative adjustments
+            // reduce the pay available for voluntary loan/cash-advance recovery.
+            // Positive adjustments do not increase that capacity. Any loan
+            // installment that does not fit remains outstanding and is carried
+            // forward by the payment ledger; only the cash actually withheld is
+            // recorded as a LoanPayment.
+            $loanCapacity = Money::sub(
+                $grossPay,
+                Money::add($sssEe, $phEe, $pgEe, $wht),
+            );
+            if (Money::lt($adjAmount, '0.00')) {
+                $loanCapacity = Money::add($loanCapacity, $adjAmount);
+            }
+            if (Money::lt($loanCapacity, '0.00')) {
+                $loanCapacity = Money::zero();
+            }
+
+            // ─── Loan auto-deductions ────────────────────────────
+            $loanTotal = $this->applyLoanDeductions($payroll, $employee, $period, $loanCapacity);
 
             // ─── Totals ──────────────────────────────────────────
             $totalDeductions = Money::add($sssEe, $phEe, $pgEe, $wht, $loanTotal);
@@ -376,6 +407,30 @@ class PayrollCalculatorService
 
             return $freshPayroll;
         });
+
+        if (! $internal) {
+            $this->evaluatePeriodAnomalies($period);
+        }
+
+        return $computed;
+    }
+
+    /**
+     * The batch worker evaluates once after all employee rows are complete.
+     * A direct employee recompute has no such worker handoff, so refresh the
+     * full-period anomaly set before returning the updated row.
+     */
+    private function evaluatePeriodAnomalies(PayrollPeriod $period): void
+    {
+        try {
+            app(PayrollAnomalyService::class)->detect($period->fresh() ?? $period);
+        } catch (\Throwable $exception) {
+            $period->forceFill(['anomaly_detection_failed' => true])->save();
+
+            throw $exception;
+        }
+
+        $period->forceFill(['anomaly_detection_failed' => false])->save();
     }
 
     private function assertEmployeeComputeAllowed(PayrollPeriod $period, bool $internal): void
@@ -923,34 +978,18 @@ class PayrollCalculatorService
      * agency. Second-half and 13th-month periods take no gov deductions, so
      * they are exempt — exactly like the computation branch below.
      */
-    private function assertGovernmentTablesEffective(PayrollPeriod $period): void
+    /** @return array<string, int> Agency value to immutable schedule-version ID. */
+    private function assertGovernmentTablesEffective(PayrollPeriod $period): array
     {
         if (! $period->is_first_half || $period->is_thirteenth_month) {
-            return;
+            return [];
         }
 
-        $missing = [];
-        foreach (ContributionAgency::cases() as $agency) {
-            if ($this->govTables->bracketsEffectiveOn($agency, $period->payroll_date)->isEmpty()) {
-                $missing[] = $agency->label();
-            }
-        }
-
-        if ($missing === []) {
-            return;
-        }
-
-        Log::error('Government contribution table(s) missing; payroll computation blocked', [
-            'period_id' => $period->id,
-            'payroll_date' => $period->payroll_date->toDateString(),
-            'missing' => $missing,
-        ]);
-
-        throw new BusinessRuleException(sprintf(
-            'Payroll computation is blocked because no %s contribution table is effective on %s. Add or activate bracket rows effective on or before the payroll date, then recompute.',
-            implode(', ', $missing),
-            $period->payroll_date->format('Y-m-d'),
-        ));
+        return $this->schedulePins->pinForPeriod($period)
+            ->mapWithKeys(static fn ($pin): array => [
+                $pin->agency->value => (int) $pin->government_schedule_version_id,
+            ])
+            ->all();
     }
 
     /**
@@ -1020,8 +1059,12 @@ class PayrollCalculatorService
      * Splits company_loan amortization across both halves; full amortization
      * for cash_advance to clear it faster (CA defaults to short tenure).
      */
-    private function applyLoanDeductions(Payroll $payroll, Employee $employee, PayrollPeriod $period): string
-    {
+    private function applyLoanDeductions(
+        Payroll $payroll,
+        Employee $employee,
+        PayrollPeriod $period,
+        string $availableNet,
+    ): string {
         if ($period->is_thirteenth_month) {
             return '0.00';
         }
@@ -1042,7 +1085,7 @@ class PayrollCalculatorService
             ->lockForUpdate()
             ->get();
 
-        $total = '0.00';
+        $requests = [];
         foreach ($loans as $loan) {
             $amort = (string) $loan->monthly_amortization;
             // Cash advance: full amount per period (drains in 1-2 periods).
@@ -1050,11 +1093,33 @@ class PayrollCalculatorService
             $perPeriod = $loan->loan_type === LoanType::CashAdvance
                 ? $amort
                 : Money::div($amort, '2', 4);
-
-            // Don't take more than the outstanding balance.
-            $deduction = Money::lt((string) $loan->balance, $perPeriod)
+            $requested = Money::lt((string) $loan->balance, $perPeriod)
                 ? Money::round2((string) $loan->balance)
                 : Money::round2($perPeriod);
+            if (! Money::isZero($requested)) {
+                $requests[] = ['key' => $loan->id, 'requested' => $requested];
+            }
+        }
+        $allocations = collect($this->deductionAllocator->allocate($availableNet, $requests))->keyBy('key');
+
+        $total = '0.00';
+        foreach ($loans as $loan) {
+            $allocation = $allocations->get($loan->id);
+            if (! $allocation) {
+                continue;
+            }
+            $requested = $allocation['requested'];
+            $deduction = $allocation['withheld'];
+            $deferred = $allocation['deferred'];
+            PayrollLoanRecoveryAllocation::query()->create([
+                'payroll_id' => $payroll->id,
+                'employee_loan_id' => $loan->id,
+                'requested_amount' => $requested,
+                'withheld_amount' => $deduction,
+                'deferred_amount' => $deferred,
+                'deferred_reason' => Money::isZero($deferred) ? null : 'insufficient_net_pay',
+            ]);
+
             if (Money::isZero($deduction)) {
                 continue;
             }
@@ -1166,6 +1231,12 @@ class PayrollCalculatorService
             ->where('employee_id', $employee->id)
             ->where('status', PayrollAdjustmentStatus::Approved->value)
             ->whereNull('applied_at')
+            ->where(function ($query) use ($period): void {
+                // Legacy adjustments apply to the next payroll as before;
+                // source-linked absence deductions are bound to one cutoff.
+                $query->whereNull('target_payroll_period_id')
+                    ->orWhere('target_payroll_period_id', $period->id);
+            })
             // Two payroll periods may compute the same employee concurrently.
             // Claim approved adjustments in a deterministic order so only one
             // transaction can read an unapplied row before marking it Applied.
@@ -1175,6 +1246,21 @@ class PayrollCalculatorService
 
         $signedTotal = '0.00';
         foreach ($adjustments as $adj) {
+            if ($adj->type === PayrollAdjustmentType::UnpaidAbsence) {
+                $leaveStillQualifies = $adj->sourceLeaveRequest()
+                    ->lockForUpdate()
+                    ->where('status', LeaveRequestStatus::Approved->value)
+                    ->whereHas('leaveType', fn ($query) => $query->where('is_paid', false))
+                    ->whereDate('start_date', '<=', $period->period_end->toDateString())
+                    ->whereDate('end_date', '>=', $period->period_start->toDateString())
+                    ->exists();
+                if (! $leaveStillQualifies) {
+                    // A leave request can be cancelled or corrected after an
+                    // adjustment is approved. Never deduct from a stale source.
+                    continue;
+                }
+            }
+
             $sign = $adj->type instanceof PayrollAdjustmentType
                 ? $adj->type->signMultiplier()
                 : (PayrollAdjustmentType::from((string) $adj->type)->signMultiplier());

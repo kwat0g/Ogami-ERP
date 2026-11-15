@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature\Payroll;
 
 use App\Common\Exceptions\BusinessRuleException;
+use App\Common\Services\SettingsService;
 use App\Modules\Auth\Models\Role;
 use App\Modules\Auth\Models\User;
 use App\Modules\HR\Enums\EmployeeStatus;
@@ -12,12 +13,12 @@ use App\Modules\HR\Models\Clearance;
 use App\Modules\HR\Models\Department;
 use App\Modules\HR\Models\Employee;
 use App\Modules\HR\Models\Position;
-use App\Modules\Payroll\Models\PayrollCycleClaim;
+use App\Modules\HR\Services\EmployeeService;
 use App\Modules\Payroll\Models\Payroll;
+use App\Modules\Payroll\Models\PayrollCycleClaim;
 use App\Modules\Payroll\Models\PayrollPeriod;
 use App\Modules\Payroll\Services\PayrollCalculatorService;
 use App\Modules\Payroll\Services\PayrollPeriodService;
-use App\Modules\HR\Services\EmployeeService;
 use Database\Seeders\GovernmentTableSeeder;
 use Database\Seeders\RolePermissionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -41,8 +42,11 @@ class PayrollPeriodScopeTest extends TestCase
     use RefreshDatabase;
 
     private PayrollPeriodService $periods;
+
     private PayrollCalculatorService $calc;
+
     private Department $production;
+
     private Department $admin;
 
     protected function setUp(): void
@@ -52,10 +56,10 @@ class PayrollPeriodScopeTest extends TestCase
         $this->seed(GovernmentTableSeeder::class);
 
         $this->periods = app(PayrollPeriodService::class);
-        $this->calc    = app(PayrollCalculatorService::class);
+        $this->calc = app(PayrollCalculatorService::class);
 
         $this->production = Department::create(['name' => 'Production', 'code' => 'PRD']);
-        $this->admin      = Department::create(['name' => 'Admin', 'code' => 'ADM']);
+        $this->admin = Department::create(['name' => 'Admin', 'code' => 'ADM']);
     }
 
     private function hrUser(): User
@@ -68,14 +72,14 @@ class PayrollPeriodScopeTest extends TestCase
         $pos = Position::create(['title' => 'Staff '.uniqid(), 'department_id' => $dept->id]);
 
         return Employee::factory()->create([
-            'department_id'         => $dept->id,
-            'position_id'           => $pos->id,
-            'employment_type'       => $employmentType,
-            'pay_type'              => $payType,
-            'basic_monthly_salary'  => $payType === 'monthly' ? '20000.00' : null,
-            'semi_monthly_rate'     => $payType === 'semi_monthly' ? '10000.00' : null,
-            'date_hired'            => '2025-01-01',
-            'status'                => 'active',
+            'department_id' => $dept->id,
+            'position_id' => $pos->id,
+            'employment_type' => $employmentType,
+            'pay_type' => $payType,
+            'basic_monthly_salary' => $payType === 'monthly' ? '20000.00' : null,
+            'semi_monthly_rate' => $payType === 'semi_monthly' ? '10000.00' : null,
+            'date_hired' => '2025-01-01',
+            'status' => 'active',
         ]);
     }
 
@@ -83,9 +87,9 @@ class PayrollPeriodScopeTest extends TestCase
     private function makePeriod(array $scope = [], string $start = '2026-04-01', string $end = '2026-04-15'): PayrollPeriod
     {
         return $this->periods->create(array_merge([
-            'period_start'  => $start,
-            'period_end'    => $end,
-            'payroll_date'  => $end,
+            'period_start' => $start,
+            'period_end' => $end,
+            'payroll_date' => $end,
             'is_first_half' => true,
         ], $scope), $this->hrUser());
     }
@@ -126,6 +130,8 @@ class PayrollPeriodScopeTest extends TestCase
         Payroll::factory()->create([
             'payroll_period_id' => $period->id,
             'employee_id' => Employee::query()->firstOrFail()->id,
+            // Approval requires every row to come from a post-cutoff compute.
+            'computed_at' => '2026-04-16 00:00:00',
         ]);
 
         $this->expectException(BusinessRuleException::class);
@@ -143,22 +149,22 @@ class PayrollPeriodScopeTest extends TestCase
         $actor = $this->hrUser();
 
         Clearance::create([
-            'clearance_no'      => 'CLR-FUT-'.substr(uniqid(), -5),
-            'employee_id'       => $futureLeaver->id,
-            'separation_date'   => '2026-04-10',
+            'clearance_no' => 'CLR-FUT-'.substr(uniqid(), -5),
+            'employee_id' => $futureLeaver->id,
+            'separation_date' => '2026-04-10',
             'separation_reason' => 'resigned',
-            'clearance_items'   => [],
-            'status'            => 'in_progress',
-            'initiated_by'      => $actor->id,
+            'clearance_items' => [],
+            'status' => 'in_progress',
+            'initiated_by' => $actor->id,
         ]);
         Clearance::create([
-            'clearance_no'      => 'CLR-OLD-'.substr(uniqid(), -5),
-            'employee_id'       => $pastLeaver->id,
-            'separation_date'   => '2026-03-31',
+            'clearance_no' => 'CLR-OLD-'.substr(uniqid(), -5),
+            'employee_id' => $pastLeaver->id,
+            'separation_date' => '2026-03-31',
             'separation_reason' => 'resigned',
-            'clearance_items'   => [],
-            'status'            => 'in_progress',
-            'initiated_by'      => $actor->id,
+            'clearance_items' => [],
+            'status' => 'in_progress',
+            'initiated_by' => $actor->id,
         ]);
 
         $period = $this->makePeriod([], '2026-04-01', '2026-04-15');
@@ -189,7 +195,7 @@ class PayrollPeriodScopeTest extends TestCase
 
     public function test_employment_type_scope_narrows_the_batch(): void
     {
-        $regular      = $this->employee($this->production, 'regular');
+        $regular = $this->employee($this->production, 'regular');
         $probationary = $this->employee($this->production, 'probationary');
         $this->employee($this->production, 'contractual');
 
@@ -232,7 +238,7 @@ class PayrollPeriodScopeTest extends TestCase
 
         $period = $this->makePeriod([
             'scope_employment_types' => ['probationary'],
-            'scope_department_ids'   => [$this->production->hash_id],
+            'scope_department_ids' => [$this->production->hash_id],
         ]);
 
         $this->assertSame([$target->id], $this->periods->availableEmployees($period)->pluck('id')->all());
@@ -255,7 +261,7 @@ class PayrollPeriodScopeTest extends TestCase
         $this->employee($this->production, 'probationary');
         $this->employee($this->production, 'contractual');
 
-        $first  = $this->makePeriod(['scope_employment_types' => ['probationary']]);
+        $first = $this->makePeriod(['scope_employment_types' => ['probationary']]);
         $second = $this->makePeriod(['scope_employment_types' => ['contractual']]);
 
         $this->assertNotSame($first->id, $second->id);
@@ -331,10 +337,10 @@ class PayrollPeriodScopeTest extends TestCase
         // path that skips that validation — a seeder, a fixture, a future
         // endpoint.
         $byDept = PayrollPeriod::factory()->create([
-            'period_start'         => '2026-04-01',
-            'period_end'           => '2026-04-15',
-            'payroll_date'         => '2026-04-15',
-            'is_first_half'        => true,
+            'period_start' => '2026-04-01',
+            'period_end' => '2026-04-15',
+            'payroll_date' => '2026-04-15',
+            'is_first_half' => true,
             'scope_department_ids' => [$this->production->id],
         ]);
         $byDept->forceFill(['status' => 'draft'])->save();
@@ -355,9 +361,9 @@ class PayrollPeriodScopeTest extends TestCase
         $this->calc->computeForEmployee($first, $employee);
 
         $second = PayrollPeriod::factory()->create([
-            'period_start'  => '2026-04-01',
-            'period_end'    => '2026-04-15',
-            'payroll_date'  => '2026-04-15',
+            'period_start' => '2026-04-01',
+            'period_end' => '2026-04-15',
+            'payroll_date' => '2026-04-15',
             'is_first_half' => true,
         ]);
         $second->forceFill(['status' => 'draft'])->save();
@@ -378,7 +384,7 @@ class PayrollPeriodScopeTest extends TestCase
     public function test_recomputing_the_same_period_is_not_blocked_by_its_own_claim(): void
     {
         $employee = $this->employee($this->production, 'regular');
-        $period   = $this->makePeriod();
+        $period = $this->makePeriod();
 
         $first = $this->calc->computeForEmployee($period, $employee);
         $again = $this->calc->computeForEmployee($period, $employee);
@@ -396,9 +402,9 @@ class PayrollPeriodScopeTest extends TestCase
         $this->calc->computeForEmployee($firstHalf, $employee);
 
         $secondHalf = $this->periods->create([
-            'period_start'  => '2026-04-16',
-            'period_end'    => '2026-04-30',
-            'payroll_date'  => '2026-04-30',
+            'period_start' => '2026-04-16',
+            'period_end' => '2026-04-30',
+            'payroll_date' => '2026-04-30',
             'is_first_half' => false,
         ], $this->hrUser());
 
@@ -412,7 +418,7 @@ class PayrollPeriodScopeTest extends TestCase
     public function test_voiding_a_period_releases_its_cycle_claims(): void
     {
         $employee = $this->employee($this->production, 'regular');
-        $period   = $this->makePeriod();
+        $period = $this->makePeriod();
         $this->calc->computeForEmployee($period, $employee);
 
         $this->assertSame(1, PayrollCycleClaim::where('employee_id', $employee->id)->count());
@@ -440,9 +446,9 @@ class PayrollPeriodScopeTest extends TestCase
     public function test_the_half_is_derived_from_the_dates_not_the_submitted_flag(): void
     {
         $secondHalfDates = $this->periods->create([
-            'period_start'  => '2026-08-16',
-            'period_end'    => '2026-08-31',
-            'payroll_date'  => '2026-08-31',
+            'period_start' => '2026-08-16',
+            'period_end' => '2026-08-31',
+            'payroll_date' => '2026-08-31',
             'is_first_half' => true, // a lie — must be ignored
         ], $this->hrUser());
 
@@ -450,9 +456,9 @@ class PayrollPeriodScopeTest extends TestCase
         $this->assertSame('2026-08-H2', $secondHalfDates->cycleKey());
 
         $firstHalfDates = $this->periods->create([
-            'period_start'  => '2026-08-01',
-            'period_end'    => '2026-08-15',
-            'payroll_date'  => '2026-08-15',
+            'period_start' => '2026-08-01',
+            'period_end' => '2026-08-15',
+            'payroll_date' => '2026-08-15',
             'is_first_half' => false, // also a lie
         ], $this->hrUser());
 
@@ -470,9 +476,9 @@ class PayrollPeriodScopeTest extends TestCase
         // Same window, mislabelled the other way. Before the fix this produced
         // cycle key 2026-08-H2 and sailed straight past the guard.
         $impostor = PayrollPeriod::factory()->create([
-            'period_start'  => '2026-08-01',
-            'period_end'    => '2026-08-15',
-            'payroll_date'  => '2026-08-15',
+            'period_start' => '2026-08-01',
+            'period_end' => '2026-08-15',
+            'payroll_date' => '2026-08-15',
             'is_first_half' => false,
         ]);
         $impostor->forceFill(['status' => 'draft'])->save();
@@ -492,9 +498,9 @@ class PayrollPeriodScopeTest extends TestCase
         // Second-half window mislabelled as the first half. Gov contributions
         // must NOT be withheld here — they belong to the genuine first half.
         $period = $this->periods->create([
-            'period_start'  => '2026-08-16',
-            'period_end'    => '2026-08-31',
-            'payroll_date'  => '2026-08-31',
+            'period_start' => '2026-08-16',
+            'period_end' => '2026-08-31',
+            'payroll_date' => '2026-08-31',
             'is_first_half' => true,
         ], $this->hrUser());
 
@@ -521,11 +527,27 @@ class PayrollPeriodScopeTest extends TestCase
         $this->makePeriod([], '2026-08-20', '2026-09-10');
     }
 
+    public function test_a_regular_first_half_must_cover_the_canonical_date_range(): void
+    {
+        $this->expectException(BusinessRuleException::class);
+        $this->expectExceptionMessage('must cover the full first half');
+
+        $this->makePeriod([], '2026-11-03', '2026-11-15');
+    }
+
+    public function test_a_regular_second_half_must_cover_the_canonical_date_range(): void
+    {
+        $this->expectException(BusinessRuleException::class);
+        $this->expectExceptionMessage('must cover the full second half');
+
+        $this->makePeriod([], '2026-11-17', '2026-11-30');
+    }
+
     public function test_both_halves_of_a_month_can_still_be_created(): void
     {
         $this->employee($this->production, 'regular');
 
-        $first  = $this->makePeriod([], '2026-08-01', '2026-08-15');
+        $first = $this->makePeriod([], '2026-08-01', '2026-08-15');
         $second = $this->makePeriod([], '2026-08-16', '2026-08-31');
 
         $this->assertSame('2026-08-H1', $first->cycleKey());
@@ -548,7 +570,7 @@ class PayrollPeriodScopeTest extends TestCase
 
         $this->periods->create([
             'period_start' => '2026-08-01',
-            'period_end'   => '2026-08-15',
+            'period_end' => '2026-08-15',
             'payroll_date' => '2031-01-31',
         ], $this->hrUser());
     }
@@ -560,7 +582,7 @@ class PayrollPeriodScopeTest extends TestCase
 
         $this->periods->create([
             'period_start' => '2026-08-01',
-            'period_end'   => '2026-08-15',
+            'period_end' => '2026-08-15',
             'payroll_date' => '2026-07-01',
         ], $this->hrUser());
     }
@@ -570,7 +592,7 @@ class PayrollPeriodScopeTest extends TestCase
         // Paid a fortnight after the cutoff closed — routine, must not be blocked.
         $period = $this->periods->create([
             'period_start' => '2026-08-01',
-            'period_end'   => '2026-08-15',
+            'period_end' => '2026-08-15',
             'payroll_date' => '2026-08-31',
         ], $this->hrUser());
 
@@ -579,14 +601,14 @@ class PayrollPeriodScopeTest extends TestCase
 
     public function test_the_grace_window_is_configurable(): void
     {
-        app(\App\Common\Services\SettingsService::class)->set('payroll.payroll_date.max_days_after_period_end', 5);
+        app(SettingsService::class)->set('payroll.payroll_date.max_days_after_period_end', 5);
 
         $this->expectException(BusinessRuleException::class);
         $this->expectExceptionMessage('more than 5 days');
 
         $this->periods->create([
             'period_start' => '2026-08-01',
-            'period_end'   => '2026-08-15',
+            'period_end' => '2026-08-15',
             'payroll_date' => '2026-08-25', // 10 days — inside the default 45, outside the configured 5
         ], $this->hrUser());
     }
@@ -614,8 +636,8 @@ class PayrollPeriodScopeTest extends TestCase
         $this->calc->computeForEmployee($period, $paid);
 
         $preview = $this->periods->scopePreview([
-            'period_start'  => '2026-04-01',
-            'period_end'    => '2026-04-15',
+            'period_start' => '2026-04-01',
+            'period_end' => '2026-04-15',
             'is_first_half' => true,
         ]);
 

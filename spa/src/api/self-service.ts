@@ -54,6 +54,11 @@ export const selfServiceApi = {
  .get<PaginatedResponse<Payroll>>('/hr/self-service/payslips', { params })
  .then((r) => r.data),
 
+ payslip: (id: string) =>
+ client
+ .get<{ data: Payroll }>(`/hr/self-service/payslips/${id}`)
+ .then((r) => r.data.data),
+
  training: (id: string) =>
  client.get<{ data: EmployeeTraining }>(`/hr/self-service/trainings/${id}`).then((r) => r.data.data),
 

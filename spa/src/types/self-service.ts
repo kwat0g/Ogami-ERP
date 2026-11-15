@@ -60,7 +60,8 @@ export interface SelfServiceLoan {
 export interface SelfServiceLoansResponse {
  active: SelfServiceLoan[];
  history: SelfServiceLoan[];
- loan_types: Array<{ value: string; label: string; interest_rate: string; interest_rate_percent?: string; approval_steps: number; vp_approval_threshold?: string | null }>;
+ loan_types: Array<{ value: string; label: string; principal_min?: string; principal_max?: string; interest_rate: string; interest_rate_percent?: string; approval_steps: number; approval_chain?: string[]; vp_approval_threshold?: string | null }>;
+ loan_limits?: Record<string, { principal_min: string; principal_max: string | null; limit_error?: string }>;
  max_pay_periods: number;
 }
 

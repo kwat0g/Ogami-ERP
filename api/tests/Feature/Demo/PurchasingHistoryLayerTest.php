@@ -68,27 +68,27 @@ class PurchasingHistoryLayerTest extends TestCase
 
         $runner->run($options);
 
-        $this->assertContains('draft', array_keys($this->demoStatuses(PurchaseRequest::query()->where('reason', 'like', 'DEMO-PURCHASING:%'))));
+        $this->assertContains('draft', array_keys($this->demoStatuses(PurchaseRequest::query()->where('reason', 'like', 'OGI-PURCHASING:%'))));
         foreach (['pending', 'approved', 'rejected', 'converted', 'cancelled'] as $status) {
-            $this->assertArrayHasKey($status, $this->demoStatuses(PurchaseRequest::query()->where('reason', 'like', 'DEMO-PURCHASING:%')));
+            $this->assertArrayHasKey($status, $this->demoStatuses(PurchaseRequest::query()->where('reason', 'like', 'OGI-PURCHASING:%')));
         }
 
-        $demoRequestIds = PurchaseRequest::query()->where('reason', 'like', 'DEMO-PURCHASING:%')->select('id');
+        $demoRequestIds = PurchaseRequest::query()->where('reason', 'like', 'OGI-PURCHASING:%')->select('id');
         $poStatuses = $this->demoStatuses(PurchaseOrder::query()->whereIn('purchase_request_id', $demoRequestIds));
         foreach (['draft', 'pending_approval', 'approved', 'sent', 'acknowledged', 'supplier_proposed', 'supplier_declined', 'cancelled'] as $status) {
             $this->assertArrayHasKey($status, $poStatuses);
         }
 
-        $rfqStatuses = $this->demoStatuses(RequestForQuote::query()->where('title', 'like', 'DEMO-PURCHASING:%'));
+        $rfqStatuses = $this->demoStatuses(RequestForQuote::query()->where('title', 'like', 'OGI-PURCHASING:%'));
         foreach (['draft', 'open', 'closed', 'awarded', 'cancelled'] as $status) {
             $this->assertArrayHasKey($status, $rfqStatuses);
         }
 
-        $quoteStatuses = $this->demoStatuses(SupplierQuote::query()->where('notes', 'like', 'DEMO-PURCHASING:%'));
+        $quoteStatuses = $this->demoStatuses(SupplierQuote::query()->where('notes', 'like', 'OGI-PURCHASING:%'));
         foreach (['draft', 'submitted', 'awarded'] as $status) {
             $this->assertArrayHasKey($status, $quoteStatuses);
         }
-        if (SupplierQuote::query()->where('notes', 'like', 'DEMO-PURCHASING:QUOTE:RFQ-AWARDED:ALTERNATE')->exists()) {
+        if (SupplierQuote::query()->where('notes', 'like', 'OGI-PURCHASING:QUOTE:RFQ-AWARDED:ALTERNATE')->exists()) {
             $this->assertArrayHasKey('not_awarded', $quoteStatuses);
         }
 
@@ -101,7 +101,7 @@ class PurchasingHistoryLayerTest extends TestCase
             '%PDF-1.4',
         )));
 
-        $approvedPr = PurchaseRequest::query()->where('reason', 'DEMO-PURCHASING:PO-PR:PO-APPROVED')->firstOrFail();
+        $approvedPr = PurchaseRequest::query()->where('reason', 'OGI-PURCHASING:PO-PR:PO-APPROVED')->firstOrFail();
         $approvedPo = PurchaseOrder::query()->where('purchase_request_id', $approvedPr->id)->firstOrFail();
         $this->assertSame('manual_required', DB::table('supplier_order_dispatches')->where('purchase_order_id', $approvedPo->id)->value('status'));
 
@@ -126,12 +126,12 @@ class PurchasingHistoryLayerTest extends TestCase
     private function fingerprint(): array
     {
         return [
-            'requests' => DB::table('purchase_requests')->where('reason', 'like', 'DEMO-PURCHASING:%')->orderBy('id')->get()->map(static fn ($row): array => (array) $row)->all(),
-            'request_lines' => DB::table('purchase_request_items')->whereIn('purchase_request_id', PurchaseRequest::query()->where('reason', 'like', 'DEMO-PURCHASING:%')->select('id'))->orderBy('id')->get()->map(static fn ($row): array => (array) $row)->all(),
-            'orders' => DB::table('purchase_orders')->whereIn('purchase_request_id', PurchaseRequest::query()->where('reason', 'like', 'DEMO-PURCHASING:PO-PR:%')->select('id'))->orderBy('id')->get()->map(static fn ($row): array => (array) $row)->all(),
-            'order_lines' => DB::table('purchase_order_items')->whereIn('purchase_order_id', PurchaseOrder::query()->whereIn('purchase_request_id', PurchaseRequest::query()->where('reason', 'like', 'DEMO-PURCHASING:PO-PR:%')->select('id'))->select('id'))->orderBy('id')->get()->map(static fn ($row): array => (array) $row)->all(),
-            'rfqs' => DB::table('request_for_quotes')->where('title', 'like', 'DEMO-PURCHASING:%')->orderBy('id')->get()->map(static fn ($row): array => (array) $row)->all(),
-            'quotes' => DB::table('supplier_quotes')->where('notes', 'like', 'DEMO-PURCHASING:%')->orderBy('id')->get()->map(static fn ($row): array => (array) $row)->all(),
+            'requests' => DB::table('purchase_requests')->where('reason', 'like', 'OGI-PURCHASING:%')->orderBy('id')->get()->map(static fn ($row): array => (array) $row)->all(),
+            'request_lines' => DB::table('purchase_request_items')->whereIn('purchase_request_id', PurchaseRequest::query()->where('reason', 'like', 'OGI-PURCHASING:%')->select('id'))->orderBy('id')->get()->map(static fn ($row): array => (array) $row)->all(),
+            'orders' => DB::table('purchase_orders')->whereIn('purchase_request_id', PurchaseRequest::query()->where('reason', 'like', 'OGI-PURCHASING:PO-PR:%')->select('id'))->orderBy('id')->get()->map(static fn ($row): array => (array) $row)->all(),
+            'order_lines' => DB::table('purchase_order_items')->whereIn('purchase_order_id', PurchaseOrder::query()->whereIn('purchase_request_id', PurchaseRequest::query()->where('reason', 'like', 'OGI-PURCHASING:PO-PR:%')->select('id'))->select('id'))->orderBy('id')->get()->map(static fn ($row): array => (array) $row)->all(),
+            'rfqs' => DB::table('request_for_quotes')->where('title', 'like', 'OGI-PURCHASING:%')->orderBy('id')->get()->map(static fn ($row): array => (array) $row)->all(),
+            'quotes' => DB::table('supplier_quotes')->where('notes', 'like', 'OGI-PURCHASING:%')->orderBy('id')->get()->map(static fn ($row): array => (array) $row)->all(),
             'quote_documents' => DB::table('rfq_documents')->where('document_type', 'quotation_pdf')->orderBy('id')->get()->map(static fn ($row): array => (array) $row)->all(),
             'supplier_responses' => DB::table('purchase_order_responses')->orderBy('id')->get()->map(static fn ($row): array => (array) $row)->all(),
             'dispatches' => DB::table('supplier_order_dispatches')->orderBy('id')->get()->map(static fn ($row): array => (array) $row)->all(),

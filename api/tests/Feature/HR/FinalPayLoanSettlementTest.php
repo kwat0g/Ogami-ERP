@@ -219,6 +219,31 @@ class FinalPayLoanSettlementTest extends TestCase
         $this->assertSame('409.09', $recomputed->final_pay_breakdown['net']);
     }
 
+    public function test_partial_final_pay_recompute_does_not_settle_more_than_the_payout(): void
+    {
+        $employee = $this->makeEmployee();
+        $clearance = $this->makeClearance($employee);
+        $this->seedDisbursedPayrollPeriod($employee);
+        $this->seedAttendanceDay($employee);
+        $loan = $this->makeActiveLoan($employee, '1000.00');
+
+        $service = app(FinalPayService::class);
+        $service->compute($clearance);
+        $recomputed = $service->compute($clearance->fresh());
+
+        $paymentTotal = (string) LoanPayment::query()->where('loan_id', $loan->id)->sum('amount');
+        $this->assertSame('909.09', $paymentTotal);
+        $this->assertSame('90.91', (string) $loan->fresh()->balance);
+        $this->assertSame('909.09', $recomputed->final_pay_breakdown['loan_recovery_withheld']);
+        $this->assertSame('90.91', $recomputed->final_pay_breakdown['loan_recovery_deferred']);
+        $this->assertSame(2, DB::table('payroll_loan_recovery_allocations')
+            ->where('clearance_id', $clearance->id)->count());
+        $this->assertSame('0.00', (string) DB::table('payroll_loan_recovery_allocations')
+            ->where('clearance_id', $clearance->id)
+            ->orderByDesc('id')
+            ->value('withheld_amount'));
+    }
+
     public function test_cash_advance_is_also_settled_from_final_pay(): void
     {
         $employee  = $this->makeEmployee();

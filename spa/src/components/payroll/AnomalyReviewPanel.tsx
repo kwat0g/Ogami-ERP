@@ -15,7 +15,6 @@ import { Textarea } from '@/components/ui/Textarea';
 import { LinkButton } from '@/components/ui/LinkButton';
 import { usePermission } from '@/hooks/usePermission';
 import { useQueryRecordTarget } from '@/hooks/useQueryRecordTarget';
-import { useAuthStore } from '@/stores/authStore';
 import { formatDateTime } from '@/lib/formatDate';
 import { invalidateRealtimeChange } from '@/lib/realtime/invalidationMap';
 import type { PayrollAnomalyFlag, PayrollAnomalyType, PayrollPeriodStatus } from '@/types/payroll';
@@ -32,20 +31,23 @@ const TYPE_VARIANT: Record<PayrollAnomalyType, 'danger' | 'warning' | 'info'> = 
  first_payroll: 'info',
  zero_pay: 'danger',
  open_attendance: 'warning',
+ unpaid_absence: 'warning',
 };
 
 interface Props {
  periodId: string;
  periodStatus: PayrollPeriodStatus;
- makerIds: Array<string | null | undefined>;
+ /** Kept optional for older call sites; creator identity does not block a permitted review. */
+ makerIds?: Array<string | null | undefined>;
 }
 
-export function AnomalyReviewPanel({ periodId, periodStatus, makerIds }: Props) {
+export function AnomalyReviewPanel({ periodId, periodStatus }: Props) {
  const queryClient = useQueryClient();
  const { can } = usePermission();
- const actorId = useAuthStore((state) => state.user?.id);
  const [showResolved, setShowResolved] = useState(false);
  const [remarks, setRemarks] = useState('');
+ const [showBulkReview, setShowBulkReview] = useState(false);
+ const [bulkRemarks, setBulkRemarks] = useState('');
 
  const { data, isLoading, isFetching, isError } = useQuery({
  queryKey: ['payroll', periodId, 'anomalies', { resolved: showResolved }],
@@ -84,13 +86,43 @@ export function AnomalyReviewPanel({ periodId, periodStatus, makerIds }: Props) 
  },
  });
 
- if (!can('payroll.anomalies.review')) return null;
+ const resolveAll = useMutation({
+  mutationFn: () => payrollAnomaliesApi.resolveAll(periodId, bulkRemarks.trim()),
+  onSuccess: ({ resolved_count: resolvedCount }) => {
+   toast.success(`${resolvedCount} anomaly ${resolvedCount === 1 ? 'finding' : 'findings'} marked as reviewed`);
+   queryClient.setQueryData<AnomalyPage>(
+    ['payroll', periodId, 'anomalies', { resolved: false }],
+    (page) => page ? { ...page, data: [], meta: { ...page.meta, total: 0 } } : page,
+   );
+   void queryClient.invalidateQueries({ queryKey: ['payroll', periodId, 'anomalies'] });
+   void invalidateRealtimeChange(
+    queryClient,
+    { entityType: 'payroll_anomaly', entityId: periodId },
+    [['payroll-period', periodId]],
+   );
+   setShowBulkReview(false);
+   setBulkRemarks('');
+  },
+  onError: (e) => {
+   void queryClient.invalidateQueries({ queryKey: ['payroll', periodId, 'anomalies'] });
+   const msg = e instanceof AxiosError ? e.response?.data?.message : undefined;
+   toast.error(msg ?? 'Failed to review all anomalies');
+  },
+ });
+
+ if (!can('payroll.anomalies.review')) {
+  return (
+   <Panel title="Anomaly review">
+    <p role="note" className="text-sm text-warning-fg">
+     Your role cannot review payroll anomalies. Ask an authorized reviewer to review the findings.
+    </p>
+   </Panel>
+  );
+ }
 
  const total = data?.meta.total ?? 0;
- const hasUnresolved = flags.some((flag) => !flag.is_resolved);
- const blockedReason = makerIds.includes(actorId)
-  ? 'You created or computed this payroll. A different authorized reviewer must resolve its anomaly flags.'
-  : !['computed', 'approved'].includes(periodStatus)
+ const hasUnresolved = !showResolved && total > 0;
+ const blockedReason = !['computed', 'approved'].includes(periodStatus)
    ? 'Anomalies can only be reviewed while the period is computed or approved.'
    : null;
 
@@ -100,15 +132,27 @@ export function AnomalyReviewPanel({ periodId, periodStatus, makerIds }: Props) 
  meta={total > 0 ? `${total} ${showResolved ? 'resolved' : 'unresolved'}` : undefined}
  noPadding
  >
- <div className="px-3 pt-2 pb-2 flex items-center justify-between text-xs">
+ <div className="px-3 pt-2 pb-2 flex flex-col gap-2 text-xs sm:flex-row sm:items-center sm:justify-between">
  <span className="text-muted">
  {showResolved
  ? 'Showing resolved anomalies (audit trail).'
- : 'Unresolved anomalies must be reviewed before payroll can be finalised.'}
+ : 'Unresolved anomalies must be reviewed before payroll can be approved or finalized.'}
  </span>
+ <div className="flex flex-wrap items-center justify-between gap-2">
+ {!showResolved && total > 0 && (
+  <Button
+   variant="secondary"
+   size="sm"
+   onClick={() => setShowBulkReview(true)}
+   disabled={Boolean(blockedReason) || resolveAll.isPending || isFetching || isError}
+  >
+   Mark all as reviewed ({total})
+  </Button>
+ )}
  <LinkButton tone="muted" onClick={() => setShowResolved((v) => !v)}>
  {showResolved ? 'Show unresolved' : 'Show resolved'}
  </LinkButton>
+ </div>
  </div>
 
  {isLoading && !data && <div className="px-3 pb-3"><SkeletonTable columns={1} rows={3} /></div>}
@@ -130,7 +174,7 @@ export function AnomalyReviewPanel({ periodId, periodStatus, makerIds }: Props) 
  description={
  showResolved
  ? 'Resolved anomalies appear here for audit trail.'
- : 'The payroll computation for this period passed all anomaly checks.'
+ : 'No unresolved anomalies remain for this payroll period.'
  }
  />
  </div>
@@ -172,6 +216,13 @@ export function AnomalyReviewPanel({ periodId, periodStatus, makerIds }: Props) 
  <p className="text-xs text-muted mt-0.5">
  <span className="text-subtle">Remarks:</span> {f.resolution_remarks}
  </p>
+ )}
+ {f.flag_type === 'first_payroll' && (
+  <p className="mt-0.5 text-xs text-muted">
+   {typeof f.details.explanation === 'string'
+    ? f.details.explanation
+    : 'The earlier detector checked only the same half of the month. This may be a false positive if the employee has payroll for the other half; verify payroll history before accepting it.'}
+  </p>
  )}
  {f.is_resolved && f.resolved_at && (
  <p className="text-2xs text-subtle font-mono tabular-nums mt-0.5">
@@ -250,6 +301,39 @@ export function AnomalyReviewPanel({ periodId, periodStatus, makerIds }: Props) 
  </div>
  </div>
  </Modal>
+ )}
+
+ {showBulkReview && (
+  <Modal isOpen onClose={() => { if (!resolveAll.isPending) setShowBulkReview(false); }} size="md" title="Mark all anomalies as reviewed">
+   <div className="px-5 py-4 space-y-3">
+    <p className="text-sm text-primary">
+     This will mark all <strong>{total}</strong> currently unresolved findings for this payroll period as reviewed, including findings that are not visible on this page. The same reason will be saved to each finding.
+    </p>
+    <p className="text-xs text-warning-fg">
+     Review the findings and supporting records first. Marking a finding as reviewed records your decision; it does not change the payroll amounts or correct the underlying data.
+    </p>
+    {blockedReason && <p role="alert" className="text-sm text-warning-fg">{blockedReason}</p>}
+    <Textarea
+     label="Reason for reviewing all findings"
+     value={bulkRemarks}
+     onChange={(e) => setBulkRemarks(e.target.value)}
+     placeholder="Describe what was checked and why the findings are accepted."
+     rows={4}
+    />
+    <div className="flex items-center justify-end gap-2 pt-2 border-t border-default">
+     <Button variant="secondary" size="sm" onClick={() => setShowBulkReview(false)} disabled={resolveAll.isPending}>Cancel</Button>
+     <Button
+      variant="primary"
+      size="sm"
+      onClick={() => resolveAll.mutate()}
+     disabled={resolveAll.isPending || Boolean(blockedReason) || isFetching || isError || total === 0 || bulkRemarks.trim().length < 3}
+      loading={resolveAll.isPending}
+     >
+      Mark {total} as reviewed
+     </Button>
+    </div>
+   </div>
+  </Modal>
  )}
  </Panel>
  );

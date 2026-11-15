@@ -7,7 +7,9 @@ namespace App\Modules\Payroll\Services;
 use App\Common\Exceptions\BusinessRuleException;
 use App\Common\Support\CacheGeneration;
 use App\Modules\Payroll\Enums\ContributionAgency;
+use App\Modules\Payroll\Enums\GovernmentScheduleVersionStatus;
 use App\Modules\Payroll\Models\GovernmentContributionTable;
+use App\Modules\Payroll\Models\GovernmentScheduleVersion;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -25,21 +27,39 @@ class GovernmentContributionTableImportService
      * Validate the complete file before changing a single row. A statutory
      * schedule is one versioned set: partially importing it leaves payroll
      * with a mixture of old and new brackets that can produce wrong statutory
-     * deductions while still looking active in the admin screen.
+     * deductions while still looking active in the admin screen. Imports are
+     * immutable drafts; publication is a separate reviewed operation.
      *
      * @return array{
      *   total: int, imported: int, updated: int, skipped: int,
-     *   deactivated_prior: int,
+     *   deactivated_prior: int, version_id: int|null, version_number: int|null,
+     *   status: string|null, effective_date: string|null, source_file_sha256: string|null,
+     *   idempotent: bool,
      *   errors: array<int, array{row:int, message:string}>
      * }
      */
     public function importFromPath(
         ContributionAgency $agency,
         string $path,
-        bool $deactivatePrior = true,
+        string $sourceTitle,
+        string $sourceUrl,
+        ?int $importedBy = null,
+        ?string $sourceFileName = null,
     ): array {
         if (! is_readable($path)) {
             throw new BusinessRuleException("CSV not readable at {$path}.");
+        }
+        $sourceTitle = trim($sourceTitle);
+        $sourceUrl = trim($sourceUrl);
+        if ($sourceTitle === '' || mb_strlen($sourceTitle) > 200) {
+            throw new BusinessRuleException('Source title is required and must be 200 characters or fewer.');
+        }
+        if (! filter_var($sourceUrl, FILTER_VALIDATE_URL) || ! str_starts_with(strtolower($sourceUrl), 'https://')) {
+            throw new BusinessRuleException('Source URL must be a valid HTTPS link.');
+        }
+        $sourceHash = hash_file('sha256', $path);
+        if (! is_string($sourceHash)) {
+            throw new BusinessRuleException('Could not calculate the uploaded source file hash.');
         }
 
         $stream = fopen($path, 'r');
@@ -55,6 +75,9 @@ class GovernmentContributionTableImportService
 
             $header = array_map(static fn ($value): string => strtolower(trim((string) $value)), $header);
             $missing = array_diff(self::REQUIRED_HEADER, $header);
+            if ($agency === ContributionAgency::Sss && ! in_array('ec_amount', $header, true)) {
+                $missing[] = 'ec_amount';
+            }
             if ($missing) {
                 return $this->blankResult([
                     'row' => 1,
@@ -85,7 +108,7 @@ class GovernmentContributionTableImportService
                 try {
                     $rows[] = [
                         'row' => $rowNum,
-                        'payload' => $this->normalizeRow($row, $idx),
+                            'payload' => $this->normalizeRow($row, $idx, $agency),
                     ];
                 } catch (Throwable $e) {
                     $errors[] = ['row' => $rowNum, 'message' => $e->getMessage()];
@@ -108,68 +131,82 @@ class GovernmentContributionTableImportService
                     'updated' => 0,
                     'skipped' => $total,
                     'deactivated_prior' => 0,
+                    'version_id' => null,
+                    'version_number' => null,
+                    'status' => null,
+                    'effective_date' => null,
+                    'source_file_sha256' => null,
+                    'idempotent' => false,
                     'errors' => $errors,
                 ];
             }
 
-            $maxEffective = null;
-            foreach ($rows as $entry) {
-                $date = $entry['payload']['effective_date'];
-                if ($maxEffective === null || strcmp($date, $maxEffective) > 0) {
-                    $maxEffective = $date;
-                }
-            }
-
+            $effectiveDate = $rows[0]['payload']['effective_date'];
             $result = DB::transaction(function () use (
                 $agency,
                 $rows,
-                $deactivatePrior,
-                $maxEffective,
+                $effectiveDate,
+                $sourceTitle,
+                $sourceUrl,
+                $sourceHash,
+                $sourceFileName,
+                $importedBy,
+                $path,
             ): array {
-                $imported = 0;
-                $updated = 0;
+                // Lock this agency's version range before allocating the next
+                // sequence number. The unique key remains the final race guard.
+                GovernmentScheduleVersion::query()
+                    ->where('agency', $agency->value)
+                    ->whereDate('effective_date', $effectiveDate)
+                    ->lockForUpdate()
+                    ->get(['id']);
+
+                $sameFile = GovernmentScheduleVersion::query()
+                    ->where('agency', $agency->value)
+                    ->whereDate('effective_date', $effectiveDate)
+                    ->where('source_file_sha256', $sourceHash)
+                    ->first();
+                if ($sameFile) {
+                    if ($sameFile->source_title !== $sourceTitle || $sameFile->source_url !== $sourceUrl) {
+                        throw new BusinessRuleException('This exact source file was already imported with different source metadata. Review the existing version instead of creating a duplicate.');
+                    }
+
+                    return [
+                        'imported' => 0,
+                        'updated' => 0,
+                        'version' => $sameFile,
+                        'idempotent' => true,
+                    ];
+                }
+
+                $versionNumber = ((int) GovernmentScheduleVersion::query()
+                    ->where('agency', $agency->value)
+                    ->whereDate('effective_date', $effectiveDate)
+                    ->max('version_number')) + 1;
+
+                $version = GovernmentScheduleVersion::query()->create([
+                    'agency' => $agency->value,
+                    'effective_date' => $effectiveDate,
+                    'version_number' => $versionNumber,
+                    'status' => GovernmentScheduleVersionStatus::Draft,
+                    'source_title' => $sourceTitle,
+                    'source_url' => $sourceUrl,
+                    'source_file_name' => $sourceFileName ? mb_substr($sourceFileName, 0, 255) : basename($path),
+                    'source_file_sha256' => $sourceHash,
+                    'row_count' => count($rows),
+                    'imported_by' => $importedBy,
+                    'imported_at' => now(),
+                ]);
 
                 foreach ($rows as $entry) {
                     $payload = $entry['payload'];
-                    $existing = GovernmentContributionTable::query()
-                        ->where('agency', $agency->value)
-                        ->where('bracket_min', $payload['bracket_min'])
-                        ->where('bracket_max', $payload['bracket_max'])
-                        ->where('effective_date', $payload['effective_date'])
-                        ->lockForUpdate()
-                        ->first();
-
-                    if ($existing) {
-                        $existing->update([
-                            'ee_amount' => $payload['ee_amount'],
-                            'er_amount' => $payload['er_amount'],
-                            'is_active' => true,
-                        ]);
-                        $updated++;
-                    } else {
-                        GovernmentContributionTable::create([
-                            ...$payload,
-                            'agency' => $agency->value,
-                            'is_active' => true,
-                        ]);
-                        $imported++;
-                    }
+                    GovernmentContributionTable::query()->create([
+                        ...$payload,
+                        'agency' => $agency->value,
+                        'schedule_version_id' => $version->id,
+                        'is_active' => true,
+                    ]);
                 }
-
-                $deactivatedPrior = 0;
-                if ($deactivatePrior && $maxEffective !== null) {
-                    $deactivatedPrior = GovernmentContributionTable::query()
-                        ->where('agency', $agency->value)
-                        ->where('effective_date', '<', $maxEffective)
-                        ->where('is_active', true)
-                        ->update(['is_active' => false]);
-                }
-
-                $result = [
-                    'imported' => $imported,
-                    'updated' => $updated,
-                    'deactivated_prior' => $deactivatedPrior,
-                ];
 
                 DB::afterCommit(function () use ($agency): void {
                     try {
@@ -184,11 +221,16 @@ class GovernmentContributionTableImportService
                     }
                 });
                 app(GovernmentTableRealtimeService::class)->stage(
-                    'updated',
-                    now()->format('Y-m-d\TH:i:s.uP'),
+                    'imported',
+                    (string) $version->version_number,
                 );
 
-                return $result;
+                return [
+                    'imported' => count($rows),
+                    'updated' => 0,
+                    'version' => $version,
+                    'idempotent' => false,
+                ];
             });
 
             return [
@@ -196,7 +238,13 @@ class GovernmentContributionTableImportService
                 'imported' => $result['imported'],
                 'updated' => $result['updated'],
                 'skipped' => 0,
-                'deactivated_prior' => $result['deactivated_prior'],
+                'deactivated_prior' => 0,
+                'version_id' => $result['version']->id,
+                'version_number' => $result['version']->version_number,
+                'status' => $result['version']->status->value,
+                'effective_date' => $result['version']->effective_date->toDateString(),
+                'source_file_sha256' => $result['version']->source_file_sha256,
+                'idempotent' => $result['idempotent'],
                 'errors' => [],
             ];
         } finally {
@@ -207,9 +255,9 @@ class GovernmentContributionTableImportService
     /**
      * @param  array<int, mixed>  $row
      * @param  array<string, int>  $idx
-     * @return array{bracket_min:string, bracket_max:string, ee_amount:string, er_amount:string, effective_date:string}
+     * @return array{bracket_min:string, bracket_max:string, ee_amount:string, er_amount:string, ec_amount:string, effective_date:string}
      */
-    private function normalizeRow(array $row, array $idx): array
+    private function normalizeRow(array $row, array $idx, ContributionAgency $agency): array
     {
         foreach (self::REQUIRED_HEADER as $field) {
             if (! array_key_exists($idx[$field], $row)) {
@@ -221,6 +269,17 @@ class GovernmentContributionTableImportService
         $bracketMax = $this->decimal($row[$idx['bracket_max']], 2, 'bracket_max');
         $eeAmount = $this->decimal($row[$idx['ee_amount']], 4, 'ee_amount');
         $erAmount = $this->decimal($row[$idx['er_amount']], 4, 'er_amount');
+        if ($agency === ContributionAgency::Sss
+            && (! array_key_exists('ec_amount', $idx) || ! array_key_exists($idx['ec_amount'], $row))) {
+            throw new BusinessRuleException('Missing value for ec_amount.');
+        }
+        $ecAmount = array_key_exists('ec_amount', $idx) && array_key_exists($idx['ec_amount'], $row)
+            ? $this->decimal($row[$idx['ec_amount']], 4, 'ec_amount')
+            : '0.0000';
+
+        if ($agency !== ContributionAgency::Sss && bccomp($ecAmount, '0', 4) !== 0) {
+            throw new BusinessRuleException('ec_amount is only valid for SSS schedules.');
+        }
 
         if (bccomp($bracketMax, $bracketMin, 2) < 0) {
             throw new BusinessRuleException('bracket_max < bracket_min');
@@ -244,12 +303,13 @@ class GovernmentContributionTableImportService
             'bracket_max' => $bracketMax,
             'ee_amount' => $eeAmount,
             'er_amount' => $erAmount,
+            'ec_amount' => $ecAmount,
             'effective_date' => $effectiveDate,
         ];
     }
 
     /**
-     * @param  array<int, array{row:int, payload:array{bracket_min:string, bracket_max:string, ee_amount:string, er_amount:string, effective_date:string}}>  $rows
+     * @param  array<int, array{row:int, payload:array{bracket_min:string, bracket_max:string, ee_amount:string, er_amount:string, ec_amount:string, effective_date:string}}>  $rows
      * @param  array<int, array{row:int, message:string}>  $errors
      */
     private function validateSchedule(array $rows, ContributionAgency $agency, array &$errors): void
@@ -273,6 +333,13 @@ class GovernmentContributionTableImportService
             }
             $seen[$identity] = true;
             $byDate[$payload['effective_date']][] = $entry;
+        }
+
+        if (count($byDate) > 1) {
+            $errors[] = [
+                'row' => 1,
+                'message' => 'A schedule version must contain exactly one effective_date. Split the file into one import per date.',
+            ];
         }
 
         foreach ($byDate as $dateRows) {
@@ -334,7 +401,7 @@ class GovernmentContributionTableImportService
         Cache::forget("gov_table:{$key}:active");
     }
 
-    /** @return array{total:int, imported:int, updated:int, skipped:int, deactivated_prior:int, errors:array<int, array{row:int, message:string}>} */
+    /** @return array{total:int, imported:int, updated:int, skipped:int, deactivated_prior:int, version_id:null, version_number:null, status:null, effective_date:null, source_file_sha256:null, idempotent:false, errors:array<int, array{row:int, message:string}>} */
     private function blankResult(array $error): array
     {
         return [
@@ -343,6 +410,12 @@ class GovernmentContributionTableImportService
             'updated' => 0,
             'skipped' => 0,
             'deactivated_prior' => 0,
+            'version_id' => null,
+            'version_number' => null,
+            'status' => null,
+            'effective_date' => null,
+            'source_file_sha256' => null,
+            'idempotent' => false,
             'errors' => [$error],
         ];
     }

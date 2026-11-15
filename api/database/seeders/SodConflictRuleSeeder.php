@@ -9,9 +9,10 @@ use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 
 /**
- * REC-01 — seed the known Segregation-of-Duties conflicts. Each pair is a
- * classic maker-vs-checker / create-vs-control incompatibility that no single
- * (non-admin) user should hold at once.
+ * REC-01 — seed the known Segregation-of-Duties conflicts. Payroll compute and
+ * approval are intentionally omitted because small organizations may have one
+ * authorized Finance Officer complete the lifecycle; every step remains
+ * permission-gated and individually audited.
  */
 class SodConflictRuleSeeder extends Seeder
 {
@@ -51,14 +52,6 @@ class SodConflictRuleSeeder extends Seeder
                 'rationale'=> 'Drafting and posting a journal entry lets one user move money to the GL with no checker.',
             ],
             [
-                'code'     => 'payroll_compute_vs_approve',
-                'name'     => 'Compute Payroll vs Approve Payroll',
-                'a'        => 'payroll.periods.compute',
-                'b'        => 'payroll.periods.approve',
-                'severity' => 'high',
-                'rationale'=> 'Running and approving the same payroll removes the maker-checker control over disbursement.',
-            ],
-            [
                 'code'     => 'salary_request_vs_act',
                 'name'     => 'Request Salary Adjustment vs Approve it',
                 'a'        => 'hr.salary_adjustments.request',
@@ -92,5 +85,13 @@ class SodConflictRuleSeeder extends Seeder
                 ],
             );
         }
+
+        // Keep the former conflict row for audit history, but stop reporting
+        // it as active under the supported single-officer payroll workflow.
+        DB::table('sod_conflict_rules')->where('code', 'payroll_compute_vs_approve')->update([
+            'active' => false,
+            'rationale' => 'Inactive: authorized users may complete multiple payroll lifecycle stages in a single-officer workflow. Each action still requires its permission and creates an audit record.',
+            'updated_at' => now(),
+        ]);
     }
 }

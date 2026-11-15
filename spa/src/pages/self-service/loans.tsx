@@ -47,6 +47,7 @@ const schema = z.object({
 });
 
 type FormValues = z.infer<typeof schema>;
+type LoanLimit = { principal_min: string; principal_max: string | null; limit_error?: string };
 
 function loanColumns(
  loanTypeLabels: ReadonlyMap<string, string>,
@@ -251,6 +252,7 @@ export default function SelfServiceLoansPage() {
  onSubmit={(v) => { if (data && !isError && !hasActiveLoan) apply.mutate(v); }}
  pending={apply.isPending}
  loanTypes={data?.loan_types ?? []}
+ loanLimits={data?.loan_limits ?? {}}
  maxPayPeriods={data?.max_pay_periods}
  />}
 
@@ -274,6 +276,7 @@ function ApplyLoanModal({
  onSubmit,
  pending,
  loanTypes,
+ loanLimits,
  maxPayPeriods,
 }: {
  isOpen: boolean;
@@ -281,6 +284,7 @@ function ApplyLoanModal({
  onSubmit: (v: FormValues) => void;
  pending: boolean;
  loanTypes: SelfServiceLoansResponse['loan_types'];
+ loanLimits: Record<string, LoanLimit>;
  maxPayPeriods?: number;
 }) {
  const {
@@ -289,6 +293,7 @@ function ApplyLoanModal({
  formState: { errors },
  reset,
  watch,
+ setError,
  } = useForm<z.input<typeof schema>, unknown, FormValues>({
  resolver: zodResolver(schema),
  // The permitted period count is returned by the live loan-limits query;
@@ -305,6 +310,13 @@ function ApplyLoanModal({
  const watchedAmount = watch('amount');
  const watchedLoanType = watch('loan_type');
  const selectedType = loanTypes.find((type) => type.value === watchedLoanType);
+ const selectedLimit = loanLimits[watchedLoanType];
+ const minimumPrincipal = selectedLimit?.principal_min ?? selectedType?.principal_min;
+ const maximumPrincipal = selectedLimit?.principal_max ?? null;
+ const validPrincipalRange = Boolean(
+  selectedLimit && !selectedLimit.limit_error && minimumPrincipal && maximumPrincipal &&
+  Number(maximumPrincipal) >= Number(minimumPrincipal),
+ );
  const watchedPeriods = watch('periods');
  const debouncedAmount = useDebounce(watchedAmount, 500);
  const debouncedPeriods = useDebounce(watchedPeriods, 300);
@@ -320,6 +332,26 @@ function ApplyLoanModal({
  staleTime: 0,
  });
 
+ const submitRequest = (values: FormValues) => {
+  if (!validPrincipalRange || !selectedLimit || !minimumPrincipal || !maximumPrincipal) {
+   setError('amount', {
+    type: 'validate',
+    message: selectedLimit?.limit_error ?? 'A valid loan amount range is not available for this request.',
+   });
+   return;
+  }
+  const amount = Number(values.amount);
+  if (amount < Number(minimumPrincipal)) {
+   setError('amount', { type: 'validate', message: `Minimum amount is ${formatPeso(minimumPrincipal)}.` });
+   return;
+  }
+  if (amount > Number(maximumPrincipal)) {
+   setError('amount', { type: 'validate', message: `Maximum amount is ${formatPeso(maximumPrincipal)}.` });
+   return;
+  }
+  onSubmit(values);
+ };
+
  return (
  <Modal
  isOpen={isOpen}
@@ -330,7 +362,7 @@ function ApplyLoanModal({
  title="Apply for a Loan"
  >
  <form
- onSubmit={handleSubmit((v) => onSubmit(v))}
+ onSubmit={handleSubmit(submitRequest)}
  className="space-y-4 py-4"
  >
  <Select
@@ -341,18 +373,21 @@ function ApplyLoanModal({
  >
  {loanTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
  </Select>
- {selectedType?.vp_approval_threshold && (
- <p className="text-xs text-muted">VP approval required at {formatPeso(selectedType.vp_approval_threshold)} or more.</p>
+ {selectedType?.approval_chain && selectedType.approval_chain.length > 0 && (
+ <p className="text-xs text-muted">Approval chain: {selectedType.approval_chain.join(' → ')}</p>
  )}
  <div className="grid grid-cols-2 gap-3">
  <Input
  label="Amount"
  type="number"
  step="0.01"
+ min={minimumPrincipal}
+ max={maximumPrincipal ?? undefined}
  {...register('amount')}
  error={errors.amount?.message}
  prefix="₱"
  className="font-mono"
+ helper={validPrincipalRange ? `Allowed: ${formatPeso(minimumPrincipal!)}–${formatPeso(maximumPrincipal!)}` : undefined}
  required
  />
  <Input
@@ -364,6 +399,15 @@ function ApplyLoanModal({
  required
  />
  </div>
+ {!validPrincipalRange && (
+ <p role={selectedLimit?.limit_error ? 'alert' : 'status'} className="text-xs text-danger-fg">
+ {selectedLimit?.limit_error
+  ? selectedLimit.limit_error
+  : selectedLimit && minimumPrincipal && maximumPrincipal && Number(maximumPrincipal) < Number(minimumPrincipal)
+   ? `The salary-based maximum of ${formatPeso(maximumPrincipal)} is below the minimum of ${formatPeso(minimumPrincipal)}. You cannot submit this request.`
+   : 'A valid loan amount range is unavailable. Contact HR before submitting a request.'}
+ </p>
+ )}
  {/* Amortization preview */}
  {previewFailed && <div role="alert" className="text-sm text-danger-fg">
  Amortization preview could not be loaded. You can still submit; the server calculates the schedule. <Button variant="secondary" size="sm" onClick={() => void refetchPreview()}>Retry preview</Button>
@@ -416,7 +460,7 @@ function ApplyLoanModal({
  <Button type="button" variant="secondary" onClick={() => { reset(); onClose(); }} disabled={pending}>
  Cancel
  </Button>
- <Button type="submit" variant="primary" disabled={pending} loading={pending}>
+ <Button type="submit" variant="primary" disabled={pending || !validPrincipalRange} loading={pending}>
  {pending ? 'Submitting…' : 'Submit request'}
  </Button>
  </ModalFooter>

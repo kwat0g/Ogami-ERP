@@ -68,7 +68,7 @@ class ThirteenthMonthService
 
             $newTotal = Money::add((string) $accrual->total_basic_earned, (string) $payroll->basic_pay);
             $accrual->total_basic_earned = $newTotal;
-            $accrual->accrued_amount     = Money::div($newTotal, '12', 2); // running estimate
+            $accrual->accrued_amount = Money::div($newTotal, '12', 2); // running estimate
             $accrual->save();
 
             return $accrual;
@@ -114,7 +114,7 @@ class ThirteenthMonthService
                 $newTotal = Money::zero();
             }
             $accrual->total_basic_earned = $newTotal;
-            $accrual->accrued_amount     = Money::div($newTotal, '12', 2);
+            $accrual->accrued_amount = Money::div($newTotal, '12', 2);
             $accrual->save();
 
             return $accrual;
@@ -141,7 +141,7 @@ class ThirteenthMonthService
      *
      * The run applies the effective ₱90,000 exemption and reconciles annual
      * withholding against the BIR Annex D/E schedule before it reaches the
-     * maker-checker approval boundary.
+     * approval boundary.
      */
     public function computeAndPay(int $year, User $triggeredBy, ?string $payrollDate = null): PayrollPeriod
     {
@@ -151,6 +151,29 @@ class ThirteenthMonthService
                 // the read/decide/create sequence deterministic for concurrent
                 // callers on PostgreSQL; SQLite test connections deliberately no-op.
                 $this->lockThirteenthMonthYear($year);
+
+                $currentYear = (int) CarbonImmutable::now()->format('Y');
+                if ($year > $currentYear) {
+                    throw new BusinessRuleException(sprintf(
+                        'A 13th-month payroll cannot be computed for future year %d.',
+                        $year,
+                    ));
+                }
+
+                if ($year < $currentYear) {
+                    $hasVoidedAnnualRun = PayrollPeriod::query()
+                        ->where('is_thirteenth_month', true)
+                        ->where('status', PayrollPeriodStatus::Voided->value)
+                        ->whereYear('period_start', $year)
+                        ->exists();
+
+                    if (! $hasVoidedAnnualRun) {
+                        throw new BusinessRuleException(sprintf(
+                            'Historical 13th-month payroll for %d requires a previously voided annual run as correction authorization.',
+                            $year,
+                        ));
+                    }
+                }
 
                 $payDay = $this->settings->requiredInt('payroll.thirteenth_month.default_pay_day', 1, 31);
                 $payDate = $payrollDate
@@ -169,6 +192,8 @@ class ThirteenthMonthService
                         $latestPayDate->toDateString(),
                     ));
                 }
+
+                $this->assertRegularSourcePeriodsClosed($year);
 
                 // Re-read after the advisory lock. Do not select a voided period:
                 // voiding is the explicit lifecycle operation that permits a
@@ -218,6 +243,7 @@ class ThirteenthMonthService
                 $period->forceFill([
                     'thirteenth_month_run_token' => (string) Str::uuid(),
                     'thirteenth_month_run_state' => 'computing',
+                    'computation_policy_version' => PayrollComputationFingerprintService::POLICY_VERSION,
                 ])->save();
 
                 // Wipe any partial run so this is idempotent.
@@ -269,7 +295,9 @@ class ThirteenthMonthService
                         ->whereIn('prior_period.status', [PayrollPeriodStatus::Finalized->value, PayrollPeriodStatus::Disbursed->value])
                         ->sum('payrolls.gross_pay');
                     $taxableExcess = Money::sub(Money::add($priorBenefit, $amount), $exemption);
-                    if (Money::lt($taxableExcess, '0')) $taxableExcess = Money::zero();
+                    if (Money::lt($taxableExcess, '0')) {
+                        $taxableExcess = Money::zero();
+                    }
 
                     // Annualize the employee's YTD taxable compensation using
                     // the same cent-precise basis as regular payroll: gross
@@ -308,7 +336,7 @@ class ThirteenthMonthService
                         'night_diff_pay' => '0.00',
                         'holiday_pay' => '0.00',
                         'gross_pay' => $amount,
-                        'sss_ee' => '0.00', 'sss_er' => '0.00',
+                        'sss_ee' => '0.00', 'sss_er' => '0.00', 'sss_ec' => '0.00',
                         'philhealth_ee' => '0.00', 'philhealth_er' => '0.00',
                         'pagibig_ee' => '0.00', 'pagibig_er' => '0.00',
                         'withholding_tax' => $correctionDelta,
@@ -344,8 +372,8 @@ class ThirteenthMonthService
                     // checker had seen it — and nothing downstream would ever pay it
                     // again, since accrue() skips a paid accrual. Payment is now
                     // recognised only when the period is finalized (see
-                    // markAccrualsPaidOnFinalize), which is the same maker-checker
-                    // gate REC-04 puts on every other material batch.
+                    // markAccrualsPaidOnFinalize), which keeps payout recognition
+                    // behind the payroll approval and finalization gates.
                     $accrual->accrued_amount = $amount;
                     $accrual->payroll_id = $payroll->id;
                     $accrual->save();
@@ -361,12 +389,19 @@ class ThirteenthMonthService
                 // one — the same conflation the status split removed for the
                 // semi-monthly pipeline.
                 $period->forceFill([
-                    'status'      => PayrollPeriodStatus::Computed->value,
+                    'status' => PayrollPeriodStatus::Computed->value,
                     'computed_by' => $triggeredBy->id,
                     'thirteenth_month_run_state' => 'computed',
                     'tax_reconciliation_hash' => hash('sha256', $period->id.':'.$year.':'.Payroll::where('payroll_period_id', $period->id)->sum('thirteenth_month_correction_delta')),
                     'tax_reconciliation_signed_at' => now(),
                 ])->save();
+
+                // Annual runs use a distinct payout basis, but still need a
+                // completed anomaly scan before they can cross the approval
+                // and finalization gates. The detector skips regular-period
+                // and attendance comparisons for this run type.
+                app(PayrollAnomalyService::class)->detect($period);
+                $period->forceFill(['anomaly_detection_failed' => false])->save();
 
                 app(PayrollPeriodService::class)->notifyPendingApproval(
                     $period,
@@ -434,6 +469,7 @@ class ThirteenthMonthService
         }
 
         $excess = bcsub($taxableCompensation, (string) $bracket->bracket_min, 4);
+
         return Money::round2(bcadd((string) $bracket->fixed_tax, bcmul($excess, (string) $bracket->rate_on_excess, 4), 4));
     }
 
@@ -443,6 +479,30 @@ class ThirteenthMonthService
 
         return in_array((string) $exception->getCode(), ['23505', '23000'], true)
             && str_contains($message, 'payroll_periods_thirteenth_month_year_unique');
+    }
+
+    private function assertRegularSourcePeriodsClosed(int $year): void
+    {
+        $unfinished = PayrollPeriod::query()
+            ->where('is_thirteenth_month', false)
+            ->whereYear('period_start', $year)
+            ->whereNotIn('status', [
+                PayrollPeriodStatus::Finalized->value,
+                PayrollPeriodStatus::Disbursed->value,
+                PayrollPeriodStatus::Voided->value,
+            ])
+            ->orderBy('period_start')
+            ->orderBy('id')
+            ->first();
+
+        if ($unfinished) {
+            throw new BusinessRuleException(sprintf(
+                'Cannot compute 13th month: unfinished regular payroll period %s–%s is still %s. Finalize or void every regular source period before running the annual payroll.',
+                $unfinished->period_start->toDateString(),
+                $unfinished->period_end->toDateString(),
+                strtolower($unfinished->status?->label() ?? 'unknown'),
+            ));
+        }
     }
 
     /**
@@ -467,8 +527,8 @@ class ThirteenthMonthService
             ->whereNotNull('payroll_id')
             ->whereIn('payroll_id', Payroll::where('payroll_period_id', $period->id)->select('id'))
             ->update([
-                'is_paid'    => true,
-                'paid_date'  => $paidDate instanceof \DateTimeInterface
+                'is_paid' => true,
+                'paid_date' => $paidDate instanceof \DateTimeInterface
                     ? $paidDate->format('Y-m-d')
                     : (string) $paidDate,
                 'updated_at' => now(),
@@ -507,10 +567,10 @@ class ThirteenthMonthService
         }
 
         PayrollCycleClaim::create([
-            'employee_id'       => $employee->id,
-            'payroll_id'        => $payroll->id,
+            'employee_id' => $employee->id,
+            'payroll_id' => $payroll->id,
             'payroll_period_id' => $period->id,
-            'cycle_key'         => $cycleKey,
+            'cycle_key' => $cycleKey,
         ]);
     }
 }

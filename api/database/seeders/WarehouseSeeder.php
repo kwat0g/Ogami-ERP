@@ -11,6 +11,8 @@ use Illuminate\Database\Seeder;
 
 class WarehouseSeeder extends Seeder
 {
+    private const ESTIMATED_BIN_CAPACITY_KG = 250;
+
     public function run(): void
     {
         $wh = Warehouse::firstOrCreate(
@@ -29,14 +31,33 @@ class WarehouseSeeder extends Seeder
         foreach ($zones as $z) {
             $zone = WarehouseZone::firstOrCreate(
                 ['warehouse_id' => $wh->id, 'code' => $z['code']],
-                ['name' => $z['name'], 'zone_type' => $z['zone_type']],
+                [
+                    'name' => $z['name'],
+                    'zone_type' => $z['zone_type'],
+                    'capacity_kg' => $z['count'] * self::ESTIMATED_BIN_CAPACITY_KG,
+                    'capacity_status' => 'derived',
+                ],
             );
+
             for ($i = 1; $i <= $z['count']; $i++) {
                 $code = sprintf('%s-%02d', $z['code'], $i);
                 WarehouseLocation::firstOrCreate(
                     ['code' => $code],
-                    ['zone_id' => $zone->id, 'is_active' => true],
+                    [
+                        'zone_id' => $zone->id,
+                        'is_active' => true,
+                        'capacity_kg' => self::ESTIMATED_BIN_CAPACITY_KG,
+                        'capacity_status' => 'estimated',
+                    ],
                 );
+            }
+
+            if ($zone->capacity_status === 'derived') {
+                $zoneCapacityKg = $zone->locations()->where('is_active', true)->sum('capacity_kg');
+                $zone->update([
+                    'capacity_kg' => $zoneCapacityKg > 0 ? $zoneCapacityKg : null,
+                    'capacity_status' => 'derived',
+                ]);
             }
         }
 

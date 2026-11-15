@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useOutletContext, useParams } from 'react-router-dom';
+import { addDays, parseISO } from 'date-fns';
 import toast from 'react-hot-toast';
 import { useState } from 'react';
 import {
@@ -31,7 +32,7 @@ import { Textarea } from '@/components/ui/Textarea';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { StatCard } from '@/components/ui/StatCard';
 import { formatPeso, formatQuantity } from '@/lib/formatNumber';
-import { formatDate, localIsoDate } from '@/lib/formatDate';
+import { formatDate, localIsoDate, manilaIsoDate } from '@/lib/formatDate';
 import { overDispatchedLines, remainingDispatchQuantities } from '@/lib/supplierDispatch';
 import { reportMutationError } from '@/lib/formErrors';
 import { Chip, chipVariantForStatus } from '@/components/ui/Chip';
@@ -42,6 +43,7 @@ import { billStatusVariant, grnStatusVariant, purchaseOrderStatusVariant } from 
 import { invalidateRealtimeSignal } from '@/lib/realtime/invalidationMap';
 
 const DECIMAL_RE = /^\d+(\.\d{1,2})?$/;
+const MAX_ESTIMATED_ARRIVAL_DAYS = 90;
 
 const responseTypeLabel: Record<PurchaseOrderResponseType, string> = {
   accept: 'Accepted',
@@ -96,6 +98,10 @@ export default function SupplierPurchaseOrderDetailPage() {
   const [shippedDate, setShippedDate] = useState('');
   const [carrier, setCarrier] = useState('');
   const [estimatedArrival, setEstimatedArrival] = useState('');
+  const [vehicle, setVehicle] = useState('');
+  const [driverName, setDriverName] = useState('');
+  const [driverPhone, setDriverPhone] = useState('');
+  const [plateNumber, setPlateNumber] = useState('');
   const [shipmentNotes, setShipmentNotes] = useState('');
   const [shipmentQuantities, setShipmentQuantities] = useState<Record<string, string>>({});
   const [dispatchPhoto, setDispatchPhoto] = useState<File | null>(null);
@@ -120,6 +126,8 @@ export default function SupplierPurchaseOrderDetailPage() {
   >({});
   const [lineErrors, setLineErrors] = useState<Record<string, string>>({});
   const [proposeError, setProposeError] = useState<string | null>(null);
+  const today = manilaIsoDate();
+  const latestEstimatedArrival = localIsoDate(addDays(parseISO(today), MAX_ESTIMATED_ARRIVAL_DAYS));
 
   const {
     data: po,
@@ -140,6 +148,13 @@ export default function SupplierPurchaseOrderDetailPage() {
     ? (selectedInvoicePortions.reduce((sum, portion) => sum + Math.round(Number(portion.gross_total) * 100), 0) / 100).toFixed(2)
     : '';
   const draftGrnCount = po?.goods_receipt_notes.filter((grn) => grn.status === 'draft').length ?? 0;
+  const editingShipmentRecord = po?.shipments.find((shipment) => shipment.id === editingShipmentId);
+  const preservesLegacyEta = Boolean(
+    editingShipmentRecord
+      && estimatedArrival === (editingShipmentRecord.estimated_arrival ?? '')
+      && estimatedArrival
+      && (estimatedArrival < today || estimatedArrival > latestEstimatedArrival),
+  );
 
   const { data: shippingDocs, isError: shippingDocsFailed, refetch: refetchDocs } = useQuery({
     queryKey: ['portal', 'supplier', 'po', vendorHashId, id, 'shipping-documents'],
@@ -180,6 +195,10 @@ export default function SupplierPurchaseOrderDetailPage() {
         shipped_date: editing && shippedDate === (editing.shipped_date ?? '') ? undefined : shippedDate || undefined,
         carrier: carrier.trim() || undefined,
         tracking_number: trackingNumber.trim() || undefined,
+        vehicle: editing && vehicle === (editing.vehicle ?? '') ? undefined : vehicle.trim() || null,
+        driver_name: editing && driverName === (editing.driver_name ?? '') ? undefined : driverName.trim() || null,
+        driver_phone: editing && driverPhone === (editing.driver_phone ?? '') ? undefined : driverPhone.trim() || null,
+        plate_number: editing && plateNumber === (editing.plate_number ?? '') ? undefined : plateNumber.trim() || null,
         estimated_arrival: editing && estimatedArrival === (editing.estimated_arrival ?? '') ? undefined : estimatedArrival || undefined,
         notes: shipmentNotes.trim() || undefined,
       };
@@ -196,6 +215,10 @@ export default function SupplierPurchaseOrderDetailPage() {
         form.append('estimated_arrival', estimatedArrival);
         if (payload.carrier) form.append('carrier', payload.carrier);
         if (payload.tracking_number) form.append('tracking_number', payload.tracking_number);
+        if (payload.vehicle) form.append('vehicle', payload.vehicle);
+        if (payload.driver_name) form.append('driver_name', payload.driver_name);
+        if (payload.driver_phone) form.append('driver_phone', payload.driver_phone);
+        if (payload.plate_number) form.append('plate_number', payload.plate_number);
         if (payload.notes) form.append('notes', payload.notes);
         if (replacementReturnId) form.append('return_request_id', replacementReturnId);
         Object.entries(shipmentQuantities)
@@ -370,10 +393,14 @@ export default function SupplierPurchaseOrderDetailPage() {
   };
 
   const openAddShipmentForm = () => {
-    setShippedDate(localIsoDate());
+    setShippedDate(manilaIsoDate());
     setCarrier('');
     setTrackingNumber('');
     setEstimatedArrival('');
+    setVehicle('');
+    setDriverName('');
+    setDriverPhone('');
+    setPlateNumber('');
     setShipmentNotes('');
     setShipmentQuantities({});
     setDispatchPhoto(null);
@@ -388,6 +415,10 @@ export default function SupplierPurchaseOrderDetailPage() {
     setCarrier(shipment.carrier ?? '');
     setTrackingNumber(shipment.tracking_number ?? '');
     setEstimatedArrival(shipment.estimated_arrival ?? '');
+    setVehicle(shipment.vehicle ?? '');
+    setDriverName(shipment.driver_name ?? '');
+    setDriverPhone(shipment.driver_phone ?? '');
+    setPlateNumber(shipment.plate_number ?? '');
     setShipmentNotes(shipment.notes ?? '');
     setEditingShipmentId(shipment.id);
     setShowShipmentForm(true);
@@ -696,6 +727,7 @@ export default function SupplierPurchaseOrderDetailPage() {
                         <tr className={theadTrCls}>
                           <Th>Shipped date</Th>
                           <Th>Carrier</Th>
+                          <Th>Vehicle / driver</Th>
                           <Th>Tracking</Th>
                           <Th>ETA</Th>
                           <Th>Dispatched</Th>
@@ -713,6 +745,11 @@ export default function SupplierPurchaseOrderDetailPage() {
                               {shipment.shipped_date ? formatDate(shipment.shipped_date) : '—'}
                             </Td>
                             <Td>{shipment.carrier ?? '—'}</Td>
+                            <Td>
+                              <div>{shipment.vehicle ?? '—'}</div>
+                              {shipment.plate_number && <div className="text-xs text-muted">Plate {shipment.plate_number}</div>}
+                              {shipment.driver_name && <div className="text-xs text-muted">Driver {shipment.driver_name}{shipment.driver_phone ? ` · ${shipment.driver_phone}` : ''}</div>}
+                            </Td>
                             <Td mono className="text-muted">
                               {shipment.tracking_number ?? '—'}
                             </Td>
@@ -807,6 +844,12 @@ export default function SupplierPurchaseOrderDetailPage() {
                 <form
                   onSubmit={(e) => {
                     e.preventDefault();
+                    const editing = po?.shipments.find((shipment) => shipment.id === editingShipmentId);
+                    const changedEta = !editing || estimatedArrival !== (editing.estimated_arrival ?? '');
+                    if (changedEta && (!estimatedArrival || estimatedArrival < today || estimatedArrival > latestEstimatedArrival)) {
+                      toast.error(`Choose an estimated arrival date from today through ${formatDate(latestEstimatedArrival)}.`);
+                      return;
+                    }
                     if (recordingQuantities) {
                       const entered = Object.entries(shipmentQuantities).filter(([, quantity]) => quantity.trim() !== '');
                       if (!entered.some(([, quantity]) => DECIMAL_RE.test(quantity) && Number(quantity) > 0)) {
@@ -864,7 +907,47 @@ export default function SupplierPurchaseOrderDetailPage() {
                       type="date"
                       required={!editingShipmentId}
                       value={estimatedArrival}
-                      onChange={(e) => setEstimatedArrival(e.target.value)}
+                      min={preservesLegacyEta ? undefined : today}
+                      max={preservesLegacyEta ? undefined : latestEstimatedArrival}
+                      onChange={(e) => {
+                        const nextDate = e.target.value;
+                        const preservesExistingEta = editingShipmentRecord
+                          && nextDate === (editingShipmentRecord.estimated_arrival ?? '');
+                        if (nextDate && !preservesExistingEta && (nextDate < today || nextDate > latestEstimatedArrival)) {
+                          toast.error(`Choose an estimated arrival date from today through ${formatDate(latestEstimatedArrival)}.`);
+                          return;
+                        }
+                        setEstimatedArrival(nextDate);
+                      }}
+                      helper={`Choose today through ${formatDate(latestEstimatedArrival)} when entering or changing the estimate.`}
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <Input
+                      label="Vehicle (optional)"
+                      placeholder="Type or model, e.g. 10-wheeler"
+                      value={vehicle}
+                      onChange={(e) => setVehicle(e.target.value)}
+                      maxLength={120}
+                    />
+                    <Input
+                      label="Driver name (optional)"
+                      value={driverName}
+                      onChange={(e) => setDriverName(e.target.value)}
+                      maxLength={120}
+                    />
+                    <Input
+                      label="Driver contact (optional)"
+                      type="tel"
+                      value={driverPhone}
+                      onChange={(e) => setDriverPhone(e.target.value)}
+                      maxLength={40}
+                    />
+                    <Input
+                      label="Plate number (optional)"
+                      value={plateNumber}
+                      onChange={(e) => setPlateNumber(e.target.value)}
+                      maxLength={32}
                     />
                   </div>
                   {recordingQuantities && <div className="space-y-2">

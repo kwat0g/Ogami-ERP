@@ -18,6 +18,8 @@ class WarehouseZoneResource extends JsonResource
             'code'         => $this->code,
             'zone_type'    => (string) $this->zone_type?->value,
             'zone_type_label' => $this->zone_type?->label(),
+            'capacity_kg'  => $this->capacity_kg,
+            'capacity_status' => $this->capacity_status,
             'locations'    => WarehouseLocationResource::collection($this->whenLoaded('locations')),
             'deleted_at'    => optional($this->deleted_at)?->toIso8601String(),
         ];

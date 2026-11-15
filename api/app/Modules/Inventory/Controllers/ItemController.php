@@ -59,14 +59,20 @@ class ItemController
 
     public function index(Request $request): AnonymousResourceCollection
     {
-        $request->validate(['signal' => ['nullable', Rule::in(['low_stock', 'out_of_stock'])]]);
+        $request->validate([
+            'signal' => ['nullable', Rule::in(['low_stock', 'out_of_stock'])],
+            'exclude_item_type' => ['nullable', Rule::in(ItemType::values())],
+        ]);
 
         return ItemResource::collection($this->service->list($request->query()));
     }
 
     public function catalog(Request $request): AnonymousResourceCollection
     {
-        $request->validate(['signal' => ['nullable', Rule::in(['low_stock', 'out_of_stock'])]]);
+        $request->validate([
+            'signal' => ['nullable', Rule::in(['low_stock', 'out_of_stock'])],
+            'exclude_item_type' => ['nullable', Rule::in(ItemType::values())],
+        ]);
 
         return ItemCatalogOptionResource::collection($this->service->list($request->query()));
     }

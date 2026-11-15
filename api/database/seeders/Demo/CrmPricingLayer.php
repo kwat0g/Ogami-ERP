@@ -32,22 +32,20 @@ use RuntimeException;
 /** Creates cost-reviewed product prices and realistic customer negotiations. */
 final class CrmPricingLayer extends DemoSeeder
 {
-    private const MARKER = 'DEMO-CRM-PRICING:';
+    private const MARKER = 'OGI-CRM-PRICING:';
 
-    /** @var list<array{name:string,email_prefix:string}> */
-    private const CUSTOMER_CONTACTS = [
-        ['name' => 'Mikaela Santos', 'email_prefix' => 'mikaela.santos'],
-        ['name' => 'Paolo Bautista', 'email_prefix' => 'paolo.bautista'],
-        ['name' => 'Angelica Dizon', 'email_prefix' => 'angelica.dizon'],
-        ['name' => 'Rafael Mendoza', 'email_prefix' => 'rafael.mendoza'],
-        ['name' => 'Camille Reyes', 'email_prefix' => 'camille.reyes'],
-        ['name' => 'Noel Garcia', 'email_prefix' => 'noel.garcia'],
-        ['name' => 'Teresa Navarro', 'email_prefix' => 'teresa.navarro'],
-        ['name' => 'Miguel Aquino', 'email_prefix' => 'miguel.aquino'],
-        ['name' => 'Leah Mercado', 'email_prefix' => 'leah.mercado'],
-        ['name' => 'Daniel Villanueva', 'email_prefix' => 'daniel.villanueva'],
-        ['name' => 'Rina Flores', 'email_prefix' => 'rina.flores'],
-        ['name' => 'Emmanuel Cruz', 'email_prefix' => 'emmanuel.cruz'],
+    /** @var list<string> */
+    private const DEMO_CUSTOMER_NAMES = [
+        'Mitsuba Philippines Corp. Plant 3',
+        'Mitsuba Philippines Corp. Plant 2',
+        'Mitsuba Philippines Corp. Plant 1',
+        'Hiblow Philippines Inc.',
+        'Sanac Philippines Inc.',
+        'Yazaki EDS Manufacturing, Inc.',
+        'Yazaki-Torres Manufacturing Inc.',
+        'YGP PTE. LTD. Yazaki Global Purchasing',
+        'OGAMI CORPORATION JAPAN',
+        'Honda Philippines Inc.',
     ];
 
     public function __construct(
@@ -77,9 +75,9 @@ final class CrmPricingLayer extends DemoSeeder
     protected function seedDemoData(DemoSeedContext $context): void
     {
         $asOf = $context->options->asOf->setTimezone('Asia/Manila')->startOfDay();
-        $sales = $this->account($context, 'sales.officer@accounts.ogami-demo.test', 'crm.price_agreements.propose');
-        $finance = $this->account($context, 'finance.officer@accounts.ogami-demo.test', 'crm.price_agreements.approve');
-        $portalAdministrator = $this->account($context, 'system.admin@accounts.ogami-demo.test', 'b2b.portal_access.manage');
+        $sales = $this->account($context, 'abiera.shiela@gmail.com', 'crm.price_agreements.propose');
+        $finance = $this->account($context, 'abarrientos.mae@gmail.com', 'crm.price_agreements.approve');
+        $portalAdministrator = $this->account($context, 'aballe.aaron@gmail.com', 'b2b.portal_access.manage');
         if ((int) $sales->id === (int) $finance->id) {
             throw new RuntimeException('CRM pricing requires separate Sales and Finance users for its proposal and review steps.');
         }
@@ -90,9 +88,17 @@ final class CrmPricingLayer extends DemoSeeder
         }
         $this->ensureSellingPrices($context, $catalog, $sales, $asOf);
 
-        $customers = Customer::query()->active()->orderBy('code')->get();
+        $customers = Customer::query()->active()
+            ->whereIn('name', self::DEMO_CUSTOMER_NAMES)
+            ->orderBy('code')
+            ->get();
         if ($customers->count() < 3) {
             throw new RuntimeException('CRM price-request scenarios require at least three active demo customers.');
+        }
+        foreach ($customers as $customer) {
+            if (! is_string($customer->code) || trim($customer->code) === '') {
+                throw new RuntimeException("Active demo customer {$customer->name} needs an ERP customer code before pricing scenarios can be seeded.");
+            }
         }
         $portalUsers = $this->ensurePortalUsers($context, $customers, $portalAdministrator, $asOf);
         $pairs = $this->customerProductPairs($customers, $catalog, $portalUsers);
@@ -138,10 +144,17 @@ final class CrmPricingLayer extends DemoSeeder
                 $minimum = Money::mul((string) $review['cost'], '1.20');
                 $base = Money::mul((string) $review['cost'], '1.50');
                 if ($product->minimum_selling_price !== null || $product->base_selling_price !== null) {
-                    if ((string) $product->minimum_selling_price !== $minimum || (string) $product->base_selling_price !== $base) {
-                        throw new RuntimeException("Seed-owned selling prices for {$product->part_number} differ from the documented CRM pricing assumptions.");
+                    if ($product->minimum_selling_price === null
+                        || $product->base_selling_price === null
+                        || Money::lt((string) $product->minimum_selling_price, (string) $review['cost'])
+                        || Money::lte((string) $product->base_selling_price, (string) $review['cost'])
+                        || Money::lt((string) $product->base_selling_price, (string) $product->minimum_selling_price)) {
+                        throw new RuntimeException("Existing selling prices for {$product->part_number} are incomplete or below reviewed cost; refusing to overwrite them.");
                     }
 
+                    // Existing valid product prices are customer-facing master data.
+                    // Preserve them; the illustrative cost multipliers below only
+                    // initialize products that have no price master yet.
                     continue;
                 }
 
@@ -164,30 +177,62 @@ final class CrmPricingLayer extends DemoSeeder
         }
 
         $users = [];
+        $customerIds = $customers->modelKeys();
+        $request = Request::create('/demo-data/crm-pricing/cleanup', 'POST', server: [
+            'HTTP_HOST' => 'localhost',
+            'HTTP_USER_AGENT' => 'Ogami demo data seeder',
+            'REMOTE_ADDR' => '127.0.0.1',
+        ]);
+
+        CustomerPortalUser::query()->whereNotIn('customer_id', $customerIds)->orderBy('id')->chunkById(100, function ($staleUsers) use ($context, $administrator, $request, $asOf): void {
+            foreach ($staleUsers as $staleUser) {
+                $this->deactivateCustomerPortalUser($context, $staleUser, $administrator, $request, $asOf);
+            }
+        });
+
         foreach ($customers as $index => $customer) {
-            $contact = self::CUSTOMER_CONTACTS[$index % count(self::CUSTOMER_CONTACTS)];
-            $email = $contact['email_prefix'].'.'.Str::slug((string) $customer->code, '.').'@portal.ogami-demo.test';
+            $contactName = trim((string) $customer->contact_person);
+            $email = strtolower(trim((string) $customer->email));
+            if ($contactName === '' || ! preg_match('/^[a-z0-9._%+-]+@gmail\.com$/', $email)) {
+                throw new RuntimeException("Customer {$customer->name} needs a contact person and surname.firstname@gmail.com contact email before portal pricing can be seeded.");
+            }
+
+            CustomerPortalUser::query()
+                ->where('customer_id', $customer->id)
+                ->whereRaw('LOWER(email) <> ?', [$email])
+                ->orderBy('id')
+                ->chunkById(100, function ($staleUsers) use ($context, $administrator, $request, $asOf): void {
+                    foreach ($staleUsers as $staleUser) {
+                        $this->deactivateCustomerPortalUser($context, $staleUser, $administrator, $request, $asOf);
+                    }
+                });
+
             $portalUser = CustomerPortalUser::withTrashed()->whereRaw('LOWER(email) = ?', [$email])->first();
 
             if ($portalUser instanceof CustomerPortalUser) {
                 if ($portalUser->trashed()
                     || (int) $portalUser->customer_id !== (int) $customer->id
                     || ! $portalUser->is_active
-                    || ! $portalUser->is_authorized_signatory
-                    || $portalUser->must_change_password
-                    || ! Hash::check($password, (string) $portalUser->getRawOriginal('password'))) {
-                    throw new RuntimeException("Seed-owned customer portal account {$email} has drifted; restore the demo snapshot before reseeding.");
+                    || ! $portalUser->is_authorized_signatory) {
+                    throw new RuntimeException("Seed-owned customer portal account {$email} has drifted from its customer or authorization state; restore the demo snapshot before reseeding.");
+                }
+
+                if ($portalUser->must_change_password || ! Hash::check($password, (string) $portalUser->getRawOriginal('password'))) {
+                    $context->withoutNotifications(fn () => $context->at($asOf, function () use ($portalUser, $password, $request): void {
+                        $invitation = $this->passwordResets->issueInvitationToken('customer', $portalUser);
+                        $this->passwordResets->reset('customer', $invitation['token'], $password, $request);
+                    }));
+                    $portalUser->refresh();
+                }
+
+                if ($portalUser->must_change_password || ! Hash::check($password, (string) $portalUser->getRawOriginal('password'))) {
+                    throw new RuntimeException("Customer portal password reset did not establish the configured demo login for {$email}.");
                 }
             } else {
-                $portalUser = $context->at($asOf, fn (): CustomerPortalUser => DB::transaction(function () use ($context, $customer, $contact, $email, $administrator, $password): CustomerPortalUser {
-                    $request = Request::create('/demo-data/crm-pricing', 'POST', server: [
-                        'HTTP_HOST' => 'localhost',
-                        'HTTP_USER_AGENT' => 'Ogami demo data seeder',
-                        'REMOTE_ADDR' => '127.0.0.1',
-                    ]);
+                $portalUser = $context->at($asOf, fn (): CustomerPortalUser => DB::transaction(function () use ($context, $customer, $contactName, $email, $administrator, $password, $request): CustomerPortalUser {
                     $invited = $context->asUser($administrator, fn (): CustomerPortalUser => $this->portalAccess->inviteCustomer(
                         $customer,
-                        $contact['name'],
+                        $contactName,
                         $email,
                         $administrator,
                         $request,
@@ -205,6 +250,24 @@ final class CrmPricingLayer extends DemoSeeder
         }
 
         return $users;
+    }
+
+    private function deactivateCustomerPortalUser(
+        DemoSeedContext $context,
+        CustomerPortalUser $portalUser,
+        User $administrator,
+        Request $request,
+        CarbonImmutable $asOf,
+    ): void {
+        if (! $portalUser->is_active || $portalUser->trashed()) {
+            return;
+        }
+
+        $context->at($asOf, fn () => $context->asUser($administrator, fn () => $this->portalAccess->deactivateCustomer(
+            $portalUser,
+            $administrator,
+            $request,
+        )));
     }
 
     /**
@@ -269,7 +332,7 @@ final class CrmPricingLayer extends DemoSeeder
             ]));
             $row = $context->at($offeredAt, fn (): PriceRequest => $context->asUser($sales, fn (): PriceRequest => $this->negotiations->offer($row, $sales, $offer, (int) $row->version)));
             $row = $context->at($approvedAt, fn (): PriceRequest => $context->asUser($finance, fn (): PriceRequest => $this->negotiations->approve($row, $finance, [
-                'notes' => 'Reviewed against the current demo BOM cost and illustrative selling-price floor.',
+                'notes' => 'Reviewed against the current BOM cost and selling-price floor.',
                 'version' => (int) $row->version,
                 'cost_signature' => $this->negotiations->reviewCost($product)['signature'],
             ])));
@@ -312,7 +375,7 @@ final class CrmPricingLayer extends DemoSeeder
             'SALES-WITHDRAWN' => 60,
             default => 80,
         });
-        $notes = $marker.' illustrative negotiation history for the CRM demo.';
+        $notes = $marker.' negotiation history for the CRM pricing review.';
 
         $request = $context->withoutNotifications(function () use ($context, $target, $customer, $product, $portal, $sales, $finance, $asOf, $scenarioAt, $cost, $notes): PriceRequest {
             if ($target === PriceRequestStatus::Withdrawn) {
@@ -367,7 +430,7 @@ final class CrmPricingLayer extends DemoSeeder
             $offer = $this->offerTerms($product, $notes, $asOf, $asOf->addMonthsNoOverflow(2));
             $row = $context->at($scenarioAt->addMinutes(3), fn (): PriceRequest => $context->asUser($sales, fn (): PriceRequest => $this->negotiations->offer($row, $sales, $offer, (int) $row->version)));
             $row = $context->at($scenarioAt->addMinutes(6), fn (): PriceRequest => $context->asUser($finance, fn (): PriceRequest => $this->negotiations->approve($row, $finance, [
-                'notes' => 'Reviewed against the costed demo BOM.',
+                'notes' => 'Reviewed against the costed BOM.',
                 'version' => (int) $row->version,
                 'cost_signature' => $this->negotiations->reviewCost($product)['signature'],
             ])));
@@ -407,7 +470,7 @@ final class CrmPricingLayer extends DemoSeeder
         $offer = $this->offerTerms($product, (string) $request->notes, $asOf->addDays(30), $asOf->addMonthsNoOverflow(9), tiered: true);
         $request = $context->at($requestAt->addMinutes(5), fn (): PriceRequest => $context->asUser($sales, fn (): PriceRequest => $this->negotiations->offer($request, $sales, $offer, (int) $request->version)));
         $request = $context->at($requestAt->addMinutes(15), fn (): PriceRequest => $context->asUser($finance, fn (): PriceRequest => $this->negotiations->approve($request, $finance, [
-            'notes' => 'Reviewed against the current demo BOM cost and illustrative selling-price floor.',
+            'notes' => 'Reviewed against the current BOM cost and selling-price floor.',
             'version' => (int) $request->version,
             'cost_signature' => $this->negotiations->reviewCost($product)['signature'],
         ])));

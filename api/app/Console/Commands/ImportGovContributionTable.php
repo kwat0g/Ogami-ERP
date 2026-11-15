@@ -13,7 +13,8 @@ class ImportGovContributionTable extends Command
     protected $signature = 'gov:import-contributions
                             {agency : sss|philhealth|pagibig|bir}
                             {path : Filesystem path to the CSV}
-                            {--no-deactivate-prior : Keep older effective_date rows active}';
+                            {--source-title= : Human-readable citation for the schedule}
+                            {--source-url= : HTTPS URL of the official source}';
 
     protected $description = 'T1.8 — Import a government contribution table CSV.';
 
@@ -23,6 +24,7 @@ class ImportGovContributionTable extends Command
         $agency = ContributionAgency::tryFrom($agencyValue);
         if (! $agency) {
             $this->error("Unknown agency: {$agencyValue}. Use one of: sss, philhealth, pagibig, bir.");
+
             return self::FAILURE;
         }
 
@@ -30,16 +32,25 @@ class ImportGovContributionTable extends Command
             $r = $service->importFromPath(
                 $agency,
                 (string) $this->argument('path'),
-                ! $this->option('no-deactivate-prior'),
+                (string) $this->option('source-title'),
+                (string) $this->option('source-url'),
+                null,
+                basename((string) $this->argument('path')),
             );
         } catch (\Throwable $e) {
             $this->error("Import failed: {$e->getMessage()}");
+
             return self::FAILURE;
         }
 
         $this->info(sprintf(
-            '%s import: total=%d imported=%d updated=%d skipped=%d deactivated_prior=%d',
-            $agency->value, $r['total'], $r['imported'], $r['updated'], $r['skipped'], $r['deactivated_prior'],
+            '%s import: total=%d imported=%d skipped=%d version=%s status=%s',
+            $agency->value,
+            $r['total'],
+            $r['imported'],
+            $r['skipped'],
+            $r['version_number'] ?? 'none',
+            $r['status'] ?? 'rejected',
         ));
         if (! empty($r['errors'])) {
             $this->warn(sprintf('Errors: %d', count($r['errors'])));
@@ -47,6 +58,7 @@ class ImportGovContributionTable extends Command
                 $this->line("  row {$err['row']}: {$err['message']}");
             }
         }
+
         return self::SUCCESS;
     }
 }

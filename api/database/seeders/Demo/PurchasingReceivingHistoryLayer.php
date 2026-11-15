@@ -35,12 +35,13 @@ use App\Modules\Quality\Services\NcrService;
 use Carbon\CarbonImmutable;
 use Closure;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use RuntimeException;
 
 /** Seeds current GRN, incoming-QC, supplier-invoice, AP and payment workflows. */
 final class PurchasingReceivingHistoryLayer extends DemoSeeder
 {
-    private const MARKER = 'DEMO-RECEIVING:';
+    private const MARKER = 'OGI-RECEIVING:';
 
     public function __construct(
         private readonly GrnService $grns,
@@ -71,13 +72,13 @@ final class PurchasingReceivingHistoryLayer extends DemoSeeder
     {
         $asOf = $context->options->asOf->setTimezone('Asia/Manila')->startOfDay();
         $actors = [
-            'receiver' => $this->account('warehouse.staff@accounts.ogami-demo.test', 'inventory.grn.create'),
-            'inspector' => $this->account('qc.inspector@accounts.ogami-demo.test', 'quality.inspections.manage'),
-            'checker' => $this->account('system.admin@accounts.ogami-demo.test', 'quality.inspections.review'),
-            'mrb' => $this->account('system.admin@accounts.ogami-demo.test', 'quality.ncr.manage'),
-            'finance' => $this->account('finance.officer@accounts.ogami-demo.test', 'accounting.bills.pay'),
-            'voider' => $this->account('system.admin@accounts.ogami-demo.test', 'accounting.bills.void_payment'),
-            'buyer' => $this->account('purchasing.officer@accounts.ogami-demo.test', 'purchasing.po.create'),
+            'receiver' => $this->account('villanueva.aira@gmail.com', 'inventory.grn.create'),
+            'inspector' => $this->account('villar.airah@gmail.com', 'quality.inspections.manage'),
+            'checker' => $this->account('aballe.aaron@gmail.com', 'quality.inspections.review'),
+            'mrb' => $this->account('aballe.aaron@gmail.com', 'quality.ncr.manage'),
+            'finance' => $this->account('abarrientos.mae@gmail.com', 'accounting.bills.pay'),
+            'voider' => $this->account('aballe.aaron@gmail.com', 'accounting.bills.void_payment'),
+            'buyer' => $this->account('agnas.shiernalhen@gmail.com', 'purchasing.po.create'),
         ];
         $item = Item::query()->where('code', 'RM-001')->where('is_active', true)->first();
         if (! $item instanceof Item) {
@@ -154,7 +155,7 @@ final class PurchasingReceivingHistoryLayer extends DemoSeeder
 
             if ($cancelDraft) {
                 if ($bill->status !== BillStatus::Cancelled) {
-                    $context->at($date->setTime(10, 0), fn () => $context->asUser($actors['finance'], fn () => $this->bills->cancel($bill->fresh(), $actors['finance'], Carbon::parse($date->toDateString()), 'Demo supplier price review cancelled the unposted draft.')
+                    $context->at($date->setTime(10, 0), fn () => $context->asUser($actors['finance'], fn () => $this->bills->cancel($bill->fresh(), $actors['finance'], Carbon::parse($date->toDateString()), 'Supplier price review cancelled the unposted draft.')
                     ));
                 }
                 $context->records()->remember('purchasing-receiving.bill.'.strtolower($scenario), $bill->fresh());
@@ -173,7 +174,7 @@ final class PurchasingReceivingHistoryLayer extends DemoSeeder
                 if ($payment === 'void' && $paid->status === BillPaymentStatus::Posted) {
                     $context->at($date->setTime(12, 0), fn () => $context->asUser($actors['voider'], fn () => $this->bills->voidPayment($bill->fresh(), $paid->fresh(), [
                         'void_date' => $date->toDateString(),
-                        'reason' => 'Demo bank reconciliation identified a duplicate remittance reference.',
+                        'reason' => 'Bank reconciliation identified a duplicate remittance reference.',
                     ], $actors['voider'])
                     ));
                 }
@@ -210,7 +211,7 @@ final class PurchasingReceivingHistoryLayer extends DemoSeeder
                     '1.000',
                     [
                         'inspected_quantity' => '2.000',
-                        'evidence_reference' => 'DEMO-RH-SORT-PARTIAL-ACCEPT',
+                        'evidence_reference' => 'OGI-RH-SORT-PARTIAL-ACCEPT',
                         'performed_by' => $actors['inspector']->id,
                         'recovery_passed' => true,
                     ],
@@ -296,7 +297,7 @@ final class PurchasingReceivingHistoryLayer extends DemoSeeder
                 'item_id' => (int) $poLine->item_id,
                 'location_id' => (int) $location->id,
                 'quantity_received' => number_format($quantity, 3, '.', ''),
-                'lot_number' => 'DEMO-RH-LOT-'.$key,
+                'lot_number' => 'OGI-RH-LOT-'.$key,
                 'supplier_lot_reference' => 'SUP-RH-LOT-'.$key,
                 'remarks' => 'Supplier delivery reference for '.$scenario.'.',
             ]],
@@ -328,6 +329,16 @@ final class PurchasingReceivingHistoryLayer extends DemoSeeder
             throw new RuntimeException("Incoming inspection {$inspection->inspection_number} has no criteria.");
         }
         $submitted = $context->at($at, fn () => $context->asUser($actors['inspector'], function () use ($inspection, $rows, $actors) {
+            if (is_array($inspection->counted_capture)) {
+                return $this->inspections->recordBatchResult($inspection->fresh(), [
+                    'expected_result_version' => (int) $inspection->result_version,
+                    'coverage_confirmed' => true,
+                    'inspected_quantity' => max(1, (int) ($inspection->counted_capture['required_quantity'] ?? $inspection->sample_size)),
+                    'physical_defects_confirmed' => false,
+                    'requirement_problem' => false,
+                    'measurements' => $this->sizeMeasurements($rows),
+                ], $actors['inspector']);
+            }
             if ($inspection->usesChecklistCapture()) {
                 return $this->inspections->recordBatchResult($inspection->fresh(), [
                     'expected_result_version' => (int) $inspection->result_version,
@@ -336,7 +347,7 @@ final class PurchasingReceivingHistoryLayer extends DemoSeeder
                     'items' => $rows->map(fn (InspectionMeasurement $row): array => [
                         'id' => (int) $row->id,
                         'result' => 'passed',
-                        ...($row->requiresSizeReading() ? ['measured_value' => $row->nominal_value] : []),
+                        ...($row->requiresSizeReading() ? ['measured_value' => $this->withinToleranceValue($row)] : []),
                     ])->all(),
                 ], $actors['inspector']);
             }
@@ -345,7 +356,7 @@ final class PurchasingReceivingHistoryLayer extends DemoSeeder
             $measurements = [];
             foreach ($rows as $row) {
                 if ($row->hasTolerance()) {
-                    $measurements[] = ['_id' => (int) $row->id, 'measured_value' => $row->nominal_value];
+                    $measurements[] = ['_id' => (int) $row->id, 'measured_value' => $this->withinToleranceValue($row)];
                 } else {
                     $checklist[] = ['_id' => (int) $row->id, 'is_pass' => true];
                 }
@@ -385,6 +396,17 @@ final class PurchasingReceivingHistoryLayer extends DemoSeeder
             throw new RuntimeException("Incoming inspection {$inspection->inspection_number} has no criteria.");
         }
         $submitted = $context->at($at, fn () => $context->asUser($actors['inspector'], function () use ($inspection, $rows, $actors) {
+            if (is_array($inspection->counted_capture)) {
+                return $this->inspections->recordBatchResult($inspection->fresh(), [
+                    'expected_result_version' => (int) $inspection->result_version,
+                    'coverage_confirmed' => true,
+                    'inspected_quantity' => max(1, (int) ($inspection->counted_capture['required_quantity'] ?? $inspection->sample_size)),
+                    'physical_defects_confirmed' => true,
+                    'problem_description' => 'Incoming lot failed supplier certificate and visual acceptance criteria.',
+                    'requirement_problem' => false,
+                    'measurements' => $this->sizeMeasurements($rows),
+                ], $actors['inspector']);
+            }
             if ($inspection->usesChecklistCapture()) {
                 $firstId = (int) $rows->first()->id;
 
@@ -401,7 +423,7 @@ final class PurchasingReceivingHistoryLayer extends DemoSeeder
                             'id' => (int) $row->id,
                             'result' => $failed ? 'failed' : 'passed',
                             ...($failed ? ['problem_description' => 'Moisture or contamination indication outside the receiving specification.'] : []),
-                            ...($row->requiresSizeReading() ? ['measured_value' => $failed ? $this->outOfToleranceValue($row) : $row->nominal_value] : []),
+                            ...($row->requiresSizeReading() ? ['measured_value' => $failed ? $this->outOfToleranceValue($row) : $this->withinToleranceValue($row)] : []),
                         ];
                     })->all(),
                 ], $actors['inspector']);
@@ -415,7 +437,7 @@ final class PurchasingReceivingHistoryLayer extends DemoSeeder
                         '_id' => (int) $row->id,
                         'measured_value' => $index === 0
                             ? $this->outOfToleranceValue($row)
-                            : $row->nominal_value,
+                            : $this->withinToleranceValue($row),
                     ];
                 } else {
                     $checklist[] = ['_id' => (int) $row->id, 'is_pass' => $index !== 0];
@@ -497,6 +519,39 @@ final class PurchasingReceivingHistoryLayer extends DemoSeeder
         throw new RuntimeException("Inspection requirement {$row->parameter_name} has no measurable limit to support a failed sample.");
     }
 
+    /** @param \Illuminate\Support\Collection<int, InspectionMeasurement> $rows
+     * @return list<array{id: int, measured_value: string}>
+     */
+    private function sizeMeasurements(Collection $rows): array
+    {
+        return $rows
+            ->filter(fn (InspectionMeasurement $row): bool => $row->requiresSizeReading())
+            ->map(fn (InspectionMeasurement $row): array => [
+                'id' => (int) $row->id,
+                'measured_value' => $this->withinToleranceValue($row),
+            ])
+            ->values()
+            ->all();
+    }
+
+    private function withinToleranceValue(InspectionMeasurement $row): string
+    {
+        $low = $row->tolerance_min !== null ? (float) $row->tolerance_min : null;
+        $high = $row->tolerance_max !== null ? (float) $row->tolerance_max : null;
+
+        if ($low !== null && $high !== null) {
+            return number_format(($low + $high) / 2, 4, '.', '');
+        }
+        if ($low !== null) {
+            return number_format($low, 4, '.', '');
+        }
+        if ($high !== null) {
+            return number_format($high, 4, '.', '');
+        }
+
+        throw new RuntimeException("Inspection requirement {$row->parameter_name} has no stored limits to support a conforming sample.");
+    }
+
     private function dispositionValue(NonConformanceReport $ncr): ?string
     {
         $disposition = $ncr->disposition;
@@ -549,7 +604,7 @@ final class PurchasingReceivingHistoryLayer extends DemoSeeder
                 'bill_number' => 'OGD-RH-'.str_replace('-', '', $scenario),
                 'date' => $at->toDateString(),
                 'goods_receipt_note_id' => $grn->hash_id,
-                'remarks' => 'Synthetic supplier invoice for thesis demonstration.',
+                'remarks' => 'Supplier invoice submitted against the accepted goods receipt.',
             ],
         )));
     }
@@ -578,7 +633,7 @@ final class PurchasingReceivingHistoryLayer extends DemoSeeder
             'payment_date' => $at->toDateString(),
             'amount' => $amount,
             'payment_method' => 'bank_transfer',
-            'reference_number' => 'DEMO-RH-'.str_replace('-', '', $scenario),
+            'reference_number' => 'OGI-RH-'.str_replace('-', '', $scenario),
             'idempotency_key' => $key,
         ], $finance)));
         $context->records()->remember('purchasing-receiving.payment.'.strtolower($scenario), $payment);
@@ -589,7 +644,7 @@ final class PurchasingReceivingHistoryLayer extends DemoSeeder
     private function scenarioOrder(string $scenario, array $allowedStatuses): PurchaseOrder
     {
         $request = PurchaseRequest::query()
-            ->where('reason', 'DEMO-PURCHASING:PO-PR:'.$scenario)
+            ->where('reason', 'OGI-PURCHASING:PO-PR:'.$scenario)
             ->first();
         if (! $request) {
             throw new RuntimeException("Purchasing receiving history requires the {$scenario} request scenario.");

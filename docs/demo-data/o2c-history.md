@@ -7,7 +7,7 @@ Implementation is in draft [PR #545](https://github.com/kwat0g/kwatog/pull/545),
 `order-to-cash-history` depends on `crm-pricing`, which supplies fictional customers, active products, accepted price agreements, and the Sales demo account. It creates one internal Sales order through `SalesOrderService::quoteOrder()` and `SalesOrderService::create()`:
 
 - Status: `draft`
-- Seed marker in notes: `DEMO-O2C-LIVE:SO-DRAFT-0001`
+- Seed marker in notes: `OGI-O2C-LIVE:SO-DRAFT-0001`
 - Customer and product: first active customer/product pair with an active accepted price agreement for the planned delivery date
 - Quantity: 500 pieces
 - Delivery date: ten business days after `--as-of`
@@ -18,7 +18,7 @@ The service calculates the order number, agreement price, line total, VAT, order
 
 ## Live start
 
-Log in as the Sales Officer, open CRM Sales Orders, find the draft with marker `DEMO-O2C-LIVE:SO-DRAFT-0001`, review its customer, agreed price, quantity, payment terms, and delivery date, then confirm it. Confirmation is the next live action and should emit the application's normal order-confirmation chain to MRP. The demo seed does not pre-confirm the order or fabricate linked work orders or purchase requests.
+Log in as the Sales Officer, open CRM Sales Orders, find the draft with marker `OGI-O2C-LIVE:SO-DRAFT-0001`, review its customer, agreed price, quantity, payment terms, and delivery date, then confirm it. Confirmation is the next live action and should emit the application's normal order-confirmation chain to MRP. The seed does not pre-confirm the order or fabricate linked work orders or purchase requests.
 
 The UI click path has not yet been browser-verified. Check the Sales order list and confirmation action during the next integrated smoke run before presenting this as a rehearsed path.
 

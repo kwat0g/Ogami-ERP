@@ -26,7 +26,7 @@ use RuntimeException;
 /** Parks one count variance at its independent-review step for a live walkthrough. */
 final class InventoryCountLiveScenarioLayer extends DemoSeeder
 {
-    private const TITLE = 'DEMO-CYCLE-COUNT-LIVE:ZONE-A';
+    private const TITLE = 'Zone A Cycle Count — Variance Review';
 
     public function __construct(private readonly StockCountService $stockCounts) {}
 
@@ -44,14 +44,14 @@ final class InventoryCountLiveScenarioLayer extends DemoSeeder
     /** @return list<string> */
     public function dependencies(): array
     {
-        return ['opening-stock-balances', 'workforce-identities'];
+        return ['inventory-stock-coverage', 'opening-stock-balances', 'workforce-identities'];
     }
 
     protected function seedDemoData(DemoSeedContext $context): void
     {
         $countDay = $this->priorBusinessDay($context->options->asOf->setTimezone('Asia/Manila'));
-        $warehouse = $this->activeUser('warehouse.staff@accounts.ogami-demo.test', ['inventory.stock_count.view', 'inventory.stock_count.manage']);
-        $reviewer = $this->activeUser('system.admin@accounts.ogami-demo.test', ['inventory.stock_count.view', 'inventory.stock_count.manage']);
+        $warehouse = $this->activeUser('villanueva.aira@gmail.com', ['inventory.stock_count.view', 'inventory.stock_count.manage']);
+        $reviewer = $this->activeUser('aballe.aaron@gmail.com', ['inventory.stock_count.view', 'inventory.stock_count.manage']);
         $zone = WarehouseZone::query()
             ->where('code', 'A')
             ->whereHas('warehouse', static fn ($query) => $query->where('code', 'MW')->where('is_active', true))
@@ -111,7 +111,7 @@ final class InventoryCountLiveScenarioLayer extends DemoSeeder
         $line = $context->at($countDay->setTime(10, 0), fn (): StockCountItem => $context->asUser($warehouse, fn (): StockCountItem => $this->stockCounts->recordCount((int) $line->id, [
             'counted_quantity' => $countedQuantity,
             'lot_number' => null,
-            'notes' => 'Demo count records a 10% short count for independent verification.',
+            'notes' => 'Count records a 10% short quantity for independent verification.',
         ], $warehouse)));
         $session = $session->fresh();
 

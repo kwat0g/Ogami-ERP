@@ -71,8 +71,13 @@ export default function CreatePurchaseRequestPage() {
   const [pendingDraft, setPendingDraft] = useState<V | null>(null);
 
   const items = useQuery({
-    queryKey: ['inventory', 'items', { per_page: 200, is_active: 'true' }],
-    queryFn: () => itemsApi.list({ per_page: 200, is_active: 'true' }),
+    queryKey: [
+      'inventory',
+      'items',
+      { per_page: 200, is_active: 'true', exclude_item_type: 'finished_good' },
+    ],
+    queryFn: () =>
+      itemsApi.list({ per_page: 200, is_active: 'true', exclude_item_type: 'finished_good' }),
   });
 
   const departments = useQuery({
@@ -147,17 +152,14 @@ export default function CreatePurchaseRequestPage() {
     setValue(`items.${index}.item_id`, itemId);
     const item = itemById.get(itemId);
     if (item) {
-      const catalogDescription = item.description?.trim() ?? '';
-      const itemName = item.name.trim().slice(0, PURCHASE_LINE_DESCRIPTION_MAX);
+      const itemDescription = item.description || item.name;
+      const descriptionCharacters = Array.from(itemDescription);
+      const requestDescription = descriptionCharacters.length <= PURCHASE_LINE_DESCRIPTION_MAX
+        ? itemDescription
+        : `${descriptionCharacters.slice(0, PURCHASE_LINE_DESCRIPTION_MAX - 1).join('').trimEnd()}…`;
       // Purchasing lines are limited to 200 characters by the API and
-      // database. Catalog descriptions are free-form and can exceed that, so
-      // use the concise catalog name instead of putting an invalid value here.
-      setValue(
-        `items.${index}.description`,
-        catalogDescription.length > PURCHASE_LINE_DESCRIPTION_MAX
-          ? itemName
-          : catalogDescription || itemName,
-      );
+      // database. Preserve as much catalog detail as fits in that field.
+      setValue(`items.${index}.description`, requestDescription);
       setValue(`items.${index}.unit`, item.unit_of_measure);
       // items.standard_cost is decimal(15,4) — e.g. "0.5000". The schema (and the
       // estimated_unit_price remains money at 2 decimals, so normalize here
@@ -384,13 +386,13 @@ export default function CreatePurchaseRequestPage() {
                         helper={
                           watched[i]?.item_id
                           && (itemById.get(watched[i].item_id)?.description?.trim().length ?? 0) > PURCHASE_LINE_DESCRIPTION_MAX
-                            ? 'Catalog description is over 200 characters; the item name is used on this purchasing line.'
+                            ? 'Long catalog descriptions are shortened to 200 characters on this purchasing line.'
                             : undefined
                         }
                         title={
                           watched[i]?.item_id
                             ? (itemById.get(watched[i].item_id)?.description?.trim().length ?? 0) > PURCHASE_LINE_DESCRIPTION_MAX
-                              ? 'Catalog description exceeds the purchasing line limit; the item name is used.'
+                              ? 'Catalog description was shortened to fit the purchasing line limit.'
                               : 'Description is copied from the selected item'
                             : 'Editable for ad-hoc lines only'
                         }

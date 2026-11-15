@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Payroll;
 
+use App\Common\Exceptions\BusinessRuleException;
 use App\Common\Services\SettingsService;
+use App\Common\Support\Money;
 use App\Modules\Auth\Models\Role;
 use App\Modules\Auth\Models\User;
 use App\Modules\HR\Models\Department;
@@ -102,6 +104,23 @@ class PayrollGlPostingTest extends TestCase
 
         $period->refresh();
         $this->assertSame((int) $entryId, (int) $period->journal_entry_id);
+    }
+
+    public function test_gl_refuses_negative_net_instead_of_posting_an_unrecovered_deduction_plug(): void
+    {
+        $settings = app(SettingsService::class);
+        $settings->set('modules.accounting', true, 'modules');
+        [, $period] = $this->fullySetup();
+        $payroll = Payroll::query()->where('payroll_period_id', $period->id)->sole();
+        $payroll->update([
+            'total_deductions' => Money::add((string) $payroll->gross_pay, '1.00'),
+            'net_pay' => '0.00',
+        ]);
+
+        $this->expectException(BusinessRuleException::class);
+        $this->expectExceptionMessage('negative or unreconciled net-pay amount');
+
+        app(PayrollGlPostingService::class)->post($period->fresh());
     }
 
     public function test_payroll_wages_are_classified_by_production_department(): void

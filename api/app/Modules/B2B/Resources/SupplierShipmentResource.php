@@ -28,6 +28,10 @@ class SupplierShipmentResource extends JsonResource
             'shipped_date' => $this->shipped_date?->toDateString(),
             'carrier' => $this->carrier,
             'tracking_number' => $this->tracking_number,
+            'vehicle' => $this->vehicle,
+            'driver_name' => $this->driver_name,
+            'driver_phone' => $this->driver_phone,
+            'plate_number' => $this->plate_number,
             'estimated_arrival' => $this->estimated_arrival?->toDateString(),
             'late_eta' => (bool) ($deadline
                 && $this->estimated_arrival

@@ -76,7 +76,7 @@ class MaintenanceSparePartsCatalogLayerTest extends TestCase
             $this->assertCount($expectedTotal - 6, $layer->plannedDefinitions($scale));
         }
 
-        $actor = User::query()->where('email', 'warehouse.staff@accounts.ogami-demo.test')->firstOrFail();
+        $actor = User::query()->where('email', 'villanueva.aira@gmail.com')->firstOrFail();
         $newPartIds = $parts->filter(fn (Item $item): bool => (int) substr($item->code, 3) > 6)->modelKeys();
         $createdAudit = DB::table('audit_logs')
             ->where('model_type', (new Item)->getMorphClass())

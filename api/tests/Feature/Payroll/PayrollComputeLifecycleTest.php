@@ -11,6 +11,7 @@ use App\Modules\Payroll\Enums\PayrollPeriodStatus;
 use App\Modules\Payroll\Events\PayrollComputationRequested;
 use App\Modules\Payroll\Models\PayrollPeriod;
 use App\Modules\Payroll\Services\PayrollPeriodService;
+use Carbon\Carbon;
 use Database\Seeders\GovernmentTableSeeder;
 use Database\Seeders\RolePermissionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -85,6 +86,58 @@ class PayrollComputeLifecycleTest extends TestCase
         ]);
     }
 
+    public function test_compute_is_rejected_before_the_cutoff_end_and_does_not_claim_the_period(): void
+    {
+        Queue::fake();
+        $hr = $this->userWithRole('hr_officer');
+        $period = $this->period();
+        $period->forceFill([
+            'period_start' => '2026-11-01',
+            'period_end' => '2026-11-15',
+            'payroll_date' => '2026-11-20',
+        ])->save();
+
+        Carbon::setTestNow('2026-11-03 09:00:00');
+        try {
+            $this->actingAs($hr)
+                ->postJson("/api/v1/payroll-periods/{$period->hash_id}/compute")
+                ->assertStatus(422)
+                ->assertJsonPath(
+                    'message',
+                    'Payroll actions are unavailable until the cutoff ends on Nov 15, 2026. Try again on Nov 16, 2026.',
+                );
+        } finally {
+            Carbon::setTestNow();
+        }
+
+        $this->assertSame(PayrollPeriodStatus::Draft, $period->fresh()->status);
+        $this->assertSame(0, DB::table('event_outbox')
+            ->where('event_type', PayrollComputationRequested::class)
+            ->count());
+    }
+
+    public function test_compute_becomes_available_on_the_day_after_the_cutoff_ends(): void
+    {
+        Queue::fake();
+        $hr = $this->userWithRole('hr_officer');
+        $period = $this->period();
+        $period->forceFill([
+            'period_start' => '2026-11-01',
+            'period_end' => '2026-11-15',
+            'payroll_date' => '2026-11-20',
+        ])->save();
+
+        Carbon::setTestNow('2026-11-16 09:00:00');
+        try {
+            $this->actingAs($hr)
+                ->postJson("/api/v1/payroll-periods/{$period->hash_id}/compute")
+                ->assertStatus(202)
+                ->assertJsonPath('data.status', PayrollPeriodStatus::Processing->value);
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
     public function test_second_compute_click_is_rejected_while_a_run_is_in_flight(): void
     {
         Queue::fake();
@@ -98,8 +151,8 @@ class PayrollComputeLifecycleTest extends TestCase
         // This is the spam click. It must not enqueue a second run.
         $this->actingAs($hr)
             ->postJson("/api/v1/payroll-periods/{$period->hash_id}/compute")
-            ->assertStatus(422)
-            ->assertJsonPath('message', 'This period is already being computed. Wait for the current run to finish.');
+            ->assertStatus(409)
+            ->assertJsonPath('message', 'Payroll period is now processing. Refresh the record and review available actions before starting Compute.');
 
         $this->assertSame(1, DB::table('event_outbox')
             ->where('event_type', PayrollComputationRequested::class)
@@ -114,7 +167,7 @@ class PayrollComputeLifecycleTest extends TestCase
 
         $this->actingAs($hr)
             ->postJson("/api/v1/payroll-periods/{$period->hash_id}/compute")
-            ->assertStatus(422);
+            ->assertStatus(409);
 
         $this->assertSame(PayrollPeriodStatus::Approved, $period->fresh()->status);
         $this->assertSame(0, DB::table('event_outbox')
@@ -137,7 +190,7 @@ class PayrollComputeLifecycleTest extends TestCase
 
             $this->actingAs($hr)
                 ->postJson("/api/v1/payroll-periods/{$period->hash_id}/compute")
-                ->assertStatus(422);
+                ->assertStatus(409);
 
             $this->assertSame($status, $period->fresh()->status);
         }
@@ -184,17 +237,17 @@ class PayrollComputeLifecycleTest extends TestCase
     public function test_draft_period_cannot_be_approved(): void
     {
         $checker = $this->userWithRole('finance_officer');
-        $period  = $this->period();
+        $period = $this->period();
 
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('This period has not been computed yet.');
+        $this->expectExceptionMessage('Payroll period is now draft. Refresh the record and review available actions before approving.');
         app(PayrollPeriodService::class)->approve($period, $checker);
     }
 
     public function test_computed_period_with_no_rows_cannot_be_approved(): void
     {
         $checker = $this->userWithRole('finance_officer');
-        $period  = $this->period(PayrollPeriodStatus::Computed->value);
+        $period = $this->period(PayrollPeriodStatus::Computed->value);
 
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('no payroll rows');
@@ -203,7 +256,7 @@ class PayrollComputeLifecycleTest extends TestCase
 
     public function test_force_unlock_lands_on_draft_and_records_the_actor(): void
     {
-        $admin  = $this->userWithRole('system_admin');
+        $admin = $this->userWithRole('system_admin');
         $period = $this->period(PayrollPeriodStatus::Processing->value);
 
         $this->actingAs($admin)

@@ -26,11 +26,18 @@ class StoreWarehouseZoneRequest extends FormRequest
 
     public function rules(): array
     {
+        $capacityStatuses = ['unverified', 'estimated', 'rated'];
+        if (! $this->isMethod('POST')) {
+            $capacityStatuses[] = 'derived';
+        }
+
         return [
-            'warehouse_id' => ['required', 'integer', 'exists:warehouses,id'],
+            'warehouse_id' => [$this->isMethod('POST') ? 'required' : 'sometimes', 'integer', 'exists:warehouses,id'],
             'name'         => ['required', 'string', 'min:2', 'max:50'],
             'code'         => ['required', 'string', 'min:1', 'max:10', 'regex:/^[A-Z0-9-]+$/'],
             'zone_type'    => ['required', Rule::in(WarehouseZoneType::values())],
+            'capacity_kg'  => ['sometimes', 'nullable', 'numeric', 'decimal:0,2', 'gt:0', 'max:99999999.99'],
+            'capacity_status' => ['sometimes', 'string', Rule::in($capacityStatuses)],
         ];
     }
 

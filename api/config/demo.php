@@ -4,16 +4,25 @@ declare(strict_types=1);
 
 use Database\Seeders\Demo\BomRoutingCatalogLayer;
 use Database\Seeders\Demo\BusinessPartnerCatalogLayer;
+use Database\Seeders\Demo\AnalyticsForecastLayer;
 use Database\Seeders\Demo\CrmPricingLayer;
 use Database\Seeders\Demo\FinishedProductCatalogLayer;
+use Database\Seeders\Demo\FinishedGoodsOrderableStockLayer;
+use Database\Seeders\Demo\ForecastAccuracyHistoryLayer;
+use Database\Seeders\Demo\HrTransactionHistoryLayer;
 use Database\Seeders\Demo\InventoryCatalogLayer;
 use Database\Seeders\Demo\InventoryCountLiveScenarioLayer;
+use Database\Seeders\Demo\InventoryStockCoverageLayer;
+use Database\Seeders\Demo\IllustrativeKpiHistoryLayer;
+use Database\Seeders\Demo\LeaveBalanceInitializationLayer;
 use Database\Seeders\Demo\MaintenanceHistoryLayer;
 use Database\Seeders\Demo\MaintenanceMasterDataLayer;
 use Database\Seeders\Demo\MaintenanceSparePartsCatalogLayer;
 use Database\Seeders\Demo\OpeningStockBalancesLayer;
 use Database\Seeders\Demo\OrderToCashHistoryLayer;
+use Database\Seeders\Demo\OrderToCashFulfillmentLayer;
 use Database\Seeders\Demo\OrganizationReferenceDataLayer;
+use Database\Seeders\Demo\PayrollAttendanceHistoryLayer;
 use Database\Seeders\Demo\ProductionAssetsLayer;
 use Database\Seeders\Demo\ProductionExecutionHistoryLayer;
 use Database\Seeders\Demo\ProductionHistoryLayer;
@@ -59,6 +68,9 @@ return [
         BomRoutingCatalogLayer::class,
         BusinessPartnerCatalogLayer::class,
         WorkforceIdentityLayer::class,
+        LeaveBalanceInitializationLayer::class,
+        HrTransactionHistoryLayer::class,
+        PayrollAttendanceHistoryLayer::class,
         QualityPlanLayer::class,
         MaintenanceMasterDataLayer::class,
         QualityInspectionReferencesLayer::class,
@@ -71,8 +83,14 @@ return [
         QualityHistoryLayer::class,
         ProductionHistoryLayer::class,
         ProductionExecutionHistoryLayer::class,
+        FinishedGoodsOrderableStockLayer::class,
         MaintenanceHistoryLayer::class,
         OrderToCashHistoryLayer::class,
+        OrderToCashFulfillmentLayer::class,
+        InventoryStockCoverageLayer::class,
         InventoryCountLiveScenarioLayer::class,
+        AnalyticsForecastLayer::class,
+        ForecastAccuracyHistoryLayer::class,
+        IllustrativeKpiHistoryLayer::class,
     ],
 ];

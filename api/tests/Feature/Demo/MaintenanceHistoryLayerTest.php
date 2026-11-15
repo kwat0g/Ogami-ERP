@@ -30,7 +30,7 @@ class MaintenanceHistoryLayerTest extends TestCase
 {
     use RefreshDatabase;
 
-    private const MARKER = 'DEMO-MAINT-HIST';
+    private const MARKER = 'OGI-MAINT-HIST';
 
     protected function setUp(): void
     {

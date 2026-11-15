@@ -113,6 +113,10 @@ export interface PortalShipment {
   shipped_date: string | null;
   carrier: string | null;
   tracking_number: string | null;
+  vehicle?: string | null;
+  driver_name?: string | null;
+  driver_phone?: string | null;
+  plate_number?: string | null;
   estimated_arrival: string | null;
   notes: string | null;
   updated_at: string | null;

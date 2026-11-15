@@ -111,9 +111,26 @@ export default function PayrollAdjustmentDetailPage() {
                 <dd className="font-mono text-xs text-muted">{adjustment.employee?.employee_no ?? '—'}</dd>
               </div>
               <div>
-                <dt className="text-xs text-muted">Payroll period</dt>
+                <dt className="text-xs text-muted">Source payroll period</dt>
                 <dd className="mt-1 text-sm text-primary">{adjustment.period?.label ?? '—'}</dd>
               </div>
+              {adjustment.type === 'unpaid_absence' && (
+                <>
+                  <div>
+                    <dt className="text-xs text-muted">Approved unpaid leave</dt>
+                    <dd className="mt-1 text-sm text-primary">{adjustment.source_leave_request?.leave_request_no ?? 'Source leave unavailable'}</dd>
+                    {adjustment.source_leave_request?.start_date && adjustment.source_leave_request.end_date && (
+                      <dd className="mt-1 text-xs text-muted">
+                        {formatDate(adjustment.source_leave_request.start_date)} to {formatDate(adjustment.source_leave_request.end_date)}
+                      </dd>
+                    )}
+                  </div>
+                  <div>
+                    <dt className="text-xs text-muted">Target payroll cutoff</dt>
+                    <dd className="mt-1 text-sm text-primary">{adjustment.target_period?.label ?? 'Target cutoff unavailable'}</dd>
+                  </div>
+                </>
+              )}
               <div>
                 <dt className="text-xs text-muted">Adjustment type</dt>
                 <dd className="mt-1 text-sm text-primary">{adjustment.type_label}</dd>
@@ -146,7 +163,11 @@ export default function PayrollAdjustmentDetailPage() {
         onClose={() => setApproveOpen(false)}
         onConfirm={() => approveMutation.mutate()}
         title="Approve payroll adjustment?"
-        description={adjustment ? `${formatPeso(adjustment.amount)} for ${adjustment.employee?.full_name ?? 'this employee'}. Once approved, it applies to the next payroll run.` : undefined}
+        description={adjustment
+          ? adjustment.type === 'unpaid_absence'
+            ? `${formatPeso(adjustment.amount)} for ${adjustment.employee?.full_name ?? 'this employee'}. Once approved, it applies only to ${adjustment.target_period?.label ?? 'the selected cutoff'}.`
+            : `${formatPeso(adjustment.amount)} for ${adjustment.employee?.full_name ?? 'this employee'}. Once approved, it applies to the next payroll run.`
+          : undefined}
         variant="warning"
         confirmLabel="Approve"
         pending={approveMutation.isPending}

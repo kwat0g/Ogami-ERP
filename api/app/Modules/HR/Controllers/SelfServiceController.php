@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\HR\Controllers;
 
 use App\Common\Services\SettingsService;
+use App\Common\Services\CurrencyDisplayService;
 use App\Modules\Attendance\Enums\AttendanceStatus;
 use App\Modules\Attendance\Enums\OvertimeStatus;
 use App\Modules\Attendance\Exceptions\OvertimeStateConflictException;
@@ -24,6 +25,7 @@ use App\Modules\Leave\Models\LeaveRequest;
 use App\Modules\Leave\Resources\LeaveRequestResource;
 use App\Modules\Payroll\Models\Payroll;
 use App\Modules\Payroll\Resources\PayrollResource;
+use App\Modules\Payroll\Services\PayrollAttendanceSummaryService;
 use App\Modules\Payroll\Services\PayslipPdfService;
 use App\Modules\Payroll\Services\PayrollPublicationPolicy;
 use App\Modules\Loans\Services\LoanService;
@@ -55,6 +57,7 @@ class SelfServiceController
         private readonly LoanService $loans,
         private readonly PayrollPublicationPolicy $payrollPublication,
         private readonly PayslipPdfService $payslipPdf,
+        private readonly PayrollAttendanceSummaryService $payrollAttendanceSummary,
     ) {}
 
     private function currentEmployee(Request $request): Employee
@@ -196,6 +199,26 @@ class SelfServiceController
         );
     }
 
+    /** Employee-only detail for one published payslip. */
+    public function payslipDetail(Request $request, string $id): JsonResponse
+    {
+        $employee = $this->currentEmployee($request);
+        $payrollId = Payroll::tryDecodeHash($id);
+        abort_if($payrollId === null, 404);
+
+        $payroll = Payroll::query()
+            ->with(['employee.department', 'employee.position', 'period', 'deductionDetails'])
+            ->whereKey($payrollId)
+            ->where('employee_id', $employee->id)
+            ->firstOrFail();
+        $this->payrollPublication->assertPayrollPublishable($payroll);
+
+        $data = (new PayrollResource($payroll))->resolve($request);
+        $data['attendance_summary'] = $this->payrollAttendanceSummary->forPayroll($payroll);
+
+        return response()->json(['data' => $data]);
+    }
+
     /**
      * M024 owner-only payslip download. Do not reuse the shared payroll route:
      * department heads are allowed to open department payroll rows there.
@@ -223,7 +246,7 @@ class SelfServiceController
         abort_unless($loanId === null || (Schema::hasTable('employee_loans') && EmployeeLoan::query()->whereKey($loanId)->where('employee_id', $employee->id)->exists()), 404);
 
         if (! Schema::hasTable('employee_loans')) {
-            return response()->json(['data' => ['active' => [], 'history' => [], 'loan_types' => $this->loans->types(), 'max_pay_periods' => $this->settings->requiredInt('loans.max_pay_periods', 1, 120)]]);
+            return response()->json(['data' => ['active' => [], 'history' => [], 'loan_types' => $this->loans->types(), 'loan_limits' => [], 'max_pay_periods' => $this->settings->requiredInt('loans.max_pay_periods', 1, 120)]]);
         }
 
         $historyLimit = $this->settings->requiredInt('self_service.history_limit', 1, 500);
@@ -248,18 +271,58 @@ class SelfServiceController
         $active = $activeRows->map($map)->values()->all();
         $history = $historyRows->map($map)->values()->all();
 
-        return response()->json(['data' => ['active' => $active, 'history' => $history, 'loan_types' => $this->loans->types(), 'max_pay_periods' => $this->settings->requiredInt('loans.max_pay_periods', 1, 120)]]);
+        $loanTypes = $this->loans->types();
+
+        return response()->json(['data' => [
+            'active' => $active,
+            'history' => $history,
+            'loan_types' => $loanTypes,
+            'loan_limits' => $this->selfServiceLoanLimits($employee, $loanTypes),
+            'max_pay_periods' => $this->settings->requiredInt('loans.max_pay_periods', 1, 120),
+        ]]);
+    }
+
+    /** @param array<int, array{value:string}> $loanTypes
+     *  @return array<string, array{principal_min:string, principal_max:?string, has_active?:bool, max_pay_periods?:int, limit_error?:string}>
+     */
+    private function selfServiceLoanLimits(Employee $employee, array $loanTypes): array
+    {
+        $limits = [];
+        foreach ($loanTypes as $loanTypeData) {
+            $type = LoanType::from($loanTypeData['value']);
+            try {
+                $limits[$type->value] = $this->loans->limitsFor($employee, $type);
+            } catch (BusinessRuleException $exception) {
+                $limits[$type->value] = [
+                    'principal_min' => $type->principalMinimum() ?? '1.00',
+                    'principal_max' => null,
+                    'limit_error' => $exception->getMessage(),
+                ];
+            }
+        }
+
+        return $limits;
     }
 
     public function applyLoan(Request $request): JsonResponse
     {
         $employee = $this->currentEmployee($request);
+        $type = LoanType::tryFrom((string) $request->input('loan_type'));
+        $minimum = $type?->principalMinimum() ?? '1.00';
+        $maximum = $type?->principalMaximum();
+        $amountRules = ['required', 'numeric', 'decimal:0,2', 'min:'.$minimum];
+        if ($maximum !== null) {
+            $amountRules[] = 'max:'.$maximum;
+        }
 
         $validated = $request->validate([
             'loan_type' => ['required', Rule::in(collect($this->loans->types())->pluck('value')->all())],
-            'amount' => ['required', 'numeric', 'min:1'],
+            'amount' => $amountRules,
             'periods' => ['required', 'integer', 'min:1', 'max:'.$this->settings->requiredInt('loans.max_pay_periods', 1, 120)],
             'reason' => ['nullable', 'string', 'max:500'],
+        ], [
+            'amount.min' => 'Amount must be at least '.app(CurrencyDisplayService::class)->format($minimum).'.',
+            'amount.max' => $maximum === null ? 'Amount is too large.' : 'Amount cannot exceed '.app(CurrencyDisplayService::class)->format($maximum).'.',
         ]);
 
         if (! Schema::hasTable('employee_loans')) {

@@ -295,7 +295,7 @@ describe('customer order entry', () => {
     expect(screen.getByText('Maximum order quantity is 20.000 per sales order.')).toBeVisible();
   });
 
-  it('shows every customer-visible product gallery image', async () => {
+  it('opens all customer-visible product photos from one preview', async () => {
     vi.mocked(customerPortalApi.listCatalog).mockResolvedValue([{ ...product, images: [
       { id: 'image-1', url: '/api/catalog/image-1', position: 0, alt_text: 'Front view', is_primary: true },
       { id: 'image-2', url: '/api/catalog/image-2', position: 1, alt_text: 'Side view', is_primary: false },
@@ -303,8 +303,13 @@ describe('customer order entry', () => {
     renderPage();
     fireEvent.click(screen.getByRole('button', { name: 'Add products' }));
 
-    expect(await screen.findByRole('button', { name: 'View larger photo of Front view' })).toBeVisible();
-    expect(screen.getByRole('button', { name: 'View larger photo of Side view' })).toBeVisible();
+    const photoPreview = await screen.findByRole('button', { name: `View 2 photos of ${product.name}` });
+    expect(photoPreview).toBeVisible();
+    fireEvent.click(photoPreview);
+    expect(await screen.findByRole('img', { name: 'Front view' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Show photo 2 of 2: Side view' }));
+    expect(screen.getByRole('img', { name: 'Side view' })).toBeVisible();
+    expect(screen.getByText('Photo 2 of 2')).toBeVisible();
   });
 
   it('requires a warranty choice and attaches the selected terms to the order line', async () => {

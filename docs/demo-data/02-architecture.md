@@ -42,7 +42,7 @@ Browser fixtures that still depend on the legacy `DemoAccountSeeder` use `api/te
 | `php artisan demo:reset [--as-of=...] [--scale=...] [--seed=...] [--no-history]` | Checks the guard, the code-level readiness gate, and layer plan before `migrate:fresh`. The gate must stay false during staged implementation and may be enabled only after every required layer exists and `demo:verify` passes. |
 | `php artisan demo:snapshot [--file=name.dump]` | Guarded PostgreSQL custom-format `pg_dump`; writes a SHA-256 manifest alongside the dump. Password is passed through the child process environment, not command arguments or manifest. |
 | `php artisan demo:restore --file=name.dump` | Guarded restore to the same allowlisted DB name only; validates filename, directory, matching manifest, and checksum before `pg_restore --single-transaction`. |
-| `php artisan demo:credentials` | Lists internal and portal accounts whose email ends in `.test`; displays only the configured shared demo password, if present. |
+| `php artisan demo:credentials` | Lists internal and portal accounts in the guarded demo database, including Gmail-based accounts; displays the configured shared demo password, if present. |
 | `php artisan demo:verify` | Planned for Phase 6; not implemented in this tooling unit. |
 
 Snapshots are stored in `DEMO_SNAPSHOT_DIRECTORY` or `api/storage/app/demo-snapshots`. Use backups only for the isolated allowlisted demo database. The restore command replaces database objects in that database.

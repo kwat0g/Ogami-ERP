@@ -87,7 +87,7 @@ Route::middleware(['auth:sanctum', 'feature:inventory'])->prefix('inventory')->g
         ->middleware('permission:inventory.items.manage');
 
     /* ─── Warehouse / Zones / Locations ─── */
-    Route::get('/warehouse/options', [WarehouseController::class, 'options'])->middleware('permission:inventory.view');
+    Route::get('/warehouse/options', [WarehouseController::class, 'options'])->middleware('permission_any:inventory.view,inventory.warehouse.manage');
     Route::get('/warehouse', [WarehouseController::class, 'tree'])->middleware('permission_any:inventory.view,return_management.receive,return_management.dispose,return_management.complete');
     Route::get('/warehouses', [WarehouseController::class, 'indexWarehouses'])->middleware('permission:inventory.view');
     Route::post('/warehouses', [WarehouseController::class, 'storeWarehouse'])->middleware('permission:inventory.warehouse.manage');

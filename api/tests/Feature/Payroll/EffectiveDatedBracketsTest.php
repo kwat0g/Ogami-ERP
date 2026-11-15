@@ -6,7 +6,11 @@ namespace Tests\Feature\Payroll;
 
 use App\Modules\Payroll\Enums\ContributionAgency;
 use App\Modules\Payroll\Models\GovernmentContributionTable;
+use App\Modules\Payroll\Models\GovernmentScheduleVersion;
+use App\Modules\Payroll\Services\GovernmentContributionTableImportService;
 use App\Modules\Payroll\Services\GovernmentContributionTableService;
+use App\Modules\Payroll\Services\GovernmentScheduleVersionService;
+use App\Common\Support\CacheGeneration;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Tests\TestCase;
@@ -34,6 +38,33 @@ class EffectiveDatedBracketsTest extends TestCase
         ]);
     }
 
+    /** @param array<int, array{0:string, 1:string, 2:string, 3:string}> $brackets */
+    private function publishSchedule(ContributionAgency $agency, string $effectiveDate, array $brackets): void
+    {
+        $path = tempnam(sys_get_temp_dir(), 'gov-published-');
+        $lines = ['bracket_min,bracket_max,ee_amount,er_amount,effective_date'];
+        foreach ($brackets as [$min, $max, $ee, $er]) {
+            $lines[] = implode(',', [$min, $max, $ee, $er, $effectiveDate]);
+        }
+        file_put_contents($path, implode("\n", $lines));
+
+        try {
+            $maker = \App\Modules\Auth\Models\User::factory()->create();
+            $checker = \App\Modules\Auth\Models\User::factory()->create();
+            $result = app(GovernmentContributionTableImportService::class)->importFromPath(
+                $agency,
+                $path,
+                $agency->label().' test schedule',
+                'https://example.gov/schedule',
+                $maker->id,
+            );
+            $version = GovernmentScheduleVersion::query()->findOrFail($result['version_id']);
+            app(GovernmentScheduleVersionService::class)->publish($version, $checker, completenessConfirmed: true);
+        } finally {
+            @unlink($path);
+        }
+    }
+
     public function test_picks_latest_schedule_on_or_before_the_date(): void
     {
         $this->sssRow('2024-01-01', 100.00, 200.00);
@@ -52,14 +83,11 @@ class EffectiveDatedBracketsTest extends TestCase
     {
         $this->sssRow('2025-01-01', 100.00, 200.00);
         $service = app(GovernmentContributionTableService::class);
-        $staleRows = $service->activeBrackets(ContributionAgency::Sss);
-        $oldVersion = (string) Cache::get('gov_table:sss:ver', 'legacy-v1');
-
-        // Model a reader that began before the table update but stores its old
-        // result after the invalidation generation has changed.
+        $service->activeBrackets(ContributionAgency::Sss);
+        // Model a table update followed by generation rotation. A reader must
+        // miss the old payload namespace and reload the new row value.
         GovernmentContributionTable::query()->update(['ee_amount' => 250.00]);
-        Cache::put('gov_table:sss:ver', 'after-write', 604800);
-        Cache::put("gov_table:sss:rows-v2:v{$oldVersion}:active", $staleRows, 300);
+        CacheGeneration::rotateDefault('gov_table:sss:ver', 604800, 'payroll.test', 'after-write');
 
         $freshRows = $service->activeBrackets(ContributionAgency::Sss);
 
@@ -99,7 +127,10 @@ class EffectiveDatedBracketsTest extends TestCase
     {
         $this->sssRow('2025-01-01', 150.00, 300.00);
         $svc = app(GovernmentContributionTableService::class);
-        $row = GovernmentContributionTable::query()->firstOrFail();
+        $row = GovernmentContributionTable::query()
+            ->where('agency', 'sss')
+            ->whereDate('effective_date', '2025-01-01')
+            ->firstOrFail();
 
         $this->assertCount(1, $svc->bracketsEffectiveOn(ContributionAgency::Sss, '2025-06-01'));
         $svc->delete($row);
@@ -112,8 +143,8 @@ class EffectiveDatedBracketsTest extends TestCase
 
     public function test_sss_service_uses_schedule_in_force_on_pay_date(): void
     {
-        $this->sssRow('2024-01-01', 100.00, 200.00);
-        $this->sssRow('2025-01-01', 150.00, 300.00);
+        $this->publishSchedule(ContributionAgency::Sss, '2024-01-01', [['0', '999999.99', '100', '200']]);
+        $this->publishSchedule(ContributionAgency::Sss, '2025-01-01', [['0', '999999.99', '150', '300']]);
 
         $svc = app(\App\Modules\Payroll\Services\Government\SssComputationService::class);
 
@@ -127,26 +158,14 @@ class EffectiveDatedBracketsTest extends TestCase
     public function test_payroll_engine_deducts_using_schedule_on_pay_date(): void
     {
         // SSS flat amounts: 2024 EE 100 / ER 200; 2025 EE 150 / ER 300.
-        $this->sssRow('2024-01-01', 100.00, 200.00);
-        $this->sssRow('2025-01-01', 150.00, 300.00);
+        $this->publishSchedule(ContributionAgency::Sss, '2024-01-01', [['0', '999999.99', '100', '200']]);
+        $this->publishSchedule(ContributionAgency::Sss, '2025-01-01', [['0', '999999.99', '150', '300']]);
         // The compute-time guard (PY-02) refuses a first-half period unless ALL
         // FOUR agencies have brackets effective on the payroll date, so seed
         // minimal PhilHealth/Pag-IBIG/BIR rows; only SSS moves sss_ee below.
-        foreach ([
-            ['philhealth', 0.0225, 0.0225],
-            ['pagibig', 0.02, 0.02],
-            ['bir', 0.00, 0.00],
-        ] as [$agency, $ee, $er]) {
-            GovernmentContributionTable::create([
-                'agency'         => $agency,
-                'bracket_min'    => 0.00,
-                'bracket_max'    => 999999.99,
-                'ee_amount'      => $ee,
-                'er_amount'      => $er,
-                'effective_date' => '2024-01-01',
-                'is_active'      => true,
-            ]);
-        }
+        $this->publishSchedule(ContributionAgency::Philhealth, '2024-01-01', [['0', '999999.99', '0.0225', '0.0225']]);
+        $this->publishSchedule(ContributionAgency::Pagibig, '2024-01-01', [['0', '999999.99', '0.02', '0.02']]);
+        $this->publishSchedule(ContributionAgency::Bir, '2024-01-01', [['0', '999999.99', '0', '0']]);
 
         $employee = \App\Modules\HR\Models\Employee::factory()->create([
             'pay_type'             => 'monthly',

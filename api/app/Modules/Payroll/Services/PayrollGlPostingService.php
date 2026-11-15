@@ -15,6 +15,7 @@ use App\Modules\Accounting\Services\JournalEntryService;
 use App\Modules\Auth\Models\User;
 use App\Modules\Payroll\Enums\PayrollGlHandoffStatus;
 use App\Modules\Payroll\Enums\PayrollPeriodStatus;
+use App\Modules\Payroll\Models\Payroll;
 use App\Modules\Payroll\Models\PayrollPeriod;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -146,6 +147,8 @@ class PayrollGlPostingService
             return null;
         }
 
+        $this->assertPayrollRowsReconcile($period);
+
             $totals = $validPayrolls
                 ->where('payroll_period_id', $period->id)
                 ->whereNull('error_message')
@@ -160,6 +163,7 @@ class PayrollGlPostingService
                     COALESCE(SUM(adjustment_amount),   0) as adjustments,
                     COALESCE(SUM(sss_ee),          0) as sss_ee,
                     COALESCE(SUM(sss_er),          0) as sss_er,
+                    COALESCE(SUM(sss_ec),          0) as sss_ec,
                     COALESCE(SUM(philhealth_ee),   0) as ph_ee,
                     COALESCE(SUM(philhealth_er),   0) as ph_er,
                     COALESCE(SUM(pagibig_ee),      0) as pg_ee,
@@ -281,26 +285,15 @@ class PayrollGlPostingService
             };
 
             $sssEr        = (string) $totals->sss_er;
+            $sssEc        = (string) $totals->sss_ec;
             $phEr         = (string) $totals->ph_er;
             $pgEr         = (string) $totals->pg_er;
-            $sssTotal     = Money::add((string) $totals->sss_ee,        $sssEr);
+            $sssTotal     = Money::add(Money::add((string) $totals->sss_ee, $sssEr), $sssEc);
             $phTotal      = Money::add((string) $totals->ph_ee,         $phEr);
             $pgTotal      = Money::add((string) $totals->pg_ee,         $pgEr);
             $wht          = (string) $totals->wht;
             $loans        = (string) $totals->loans;
             $net          = (string) $totals->net;
-            // Signed net effect of applied adjustments (positive = extra pay).
-            $adjustments  = (string) $totals->adjustments;
-            $grossTotal   = (string) $totals->gross;
-            // Employee-borne deductions — the withholdings that reduce take-home
-            // pay. Used to derive the net-pay-floor remainder below.
-            $eeDeductions = Money::add(
-                (string) $totals->sss_ee,
-                (string) $totals->ph_ee,
-                (string) $totals->pg_ee,
-                $wht,
-                $loans,
-            );
 
             if ($isThirteenth) {
                 // 13th-month withholding reduces the employee payable, not the
@@ -343,12 +336,12 @@ class PayrollGlPostingService
                 }
 
                 // Employer expenses
-                $debit($code('sss_employer_expense'),  $sssEr, 'SSS Employer Share Expense');
+                $debit($code('sss_employer_expense'), Money::add($sssEr, $sssEc), 'SSS Employer Share and EC Expense');
                 $debit($code('philhealth_employer_expense'),  $phEr,  'PhilHealth Employer Share Expense');
                 $debit($code('pagibig_employer_expense'),  $pgEr,  'Pag-IBIG Employer Share Expense');
 
                 // Liability credits (gov)
-                $credit($code('sss_payable'), $sssTotal, 'SSS Payable (EE+ER)');
+                $credit($code('sss_payable'), $sssTotal, 'SSS Payable (EE+ER+EC)');
                 $credit($code('philhealth_payable'), $phTotal,  'PhilHealth Payable (EE+ER)');
                 $credit($code('pagibig_payable'), $pgTotal,  'Pag-IBIG Payable (EE+ER)');
                 $credit($code('withholding_payable'), $wht,      'Withholding Tax Payable');
@@ -358,22 +351,6 @@ class PayrollGlPostingService
 
                 // Cash outflow for net pay
                 $credit($code('cash'), $net, 'Cash in Bank — Net Pay Disbursed');
-
-                // Net pay is clamped at zero when deductions would exceed pay,
-                // so the un-recovered remainder is not cash that ever left the
-                // bank. Credit it back explicitly rather than letting it show
-                // up as a mystery imbalance. Derived, not plugged: it is the
-                // exact shortfall between what was withheld and what the payroll
-                // rows could actually absorb.
-                $unrecovered = Money::sub(
-                    Money::add(Money::sub($grossTotal, $eeDeductions), $adjustments),
-                    $net,
-                );
-                if (Money::lt($unrecovered, '0')) {
-                    $debit($code('salary_expense'), Money::negate($unrecovered), 'Net Pay Floor Adjustment');
-                } else {
-                    $credit($code('salary_expense'), $unrecovered, 'Unrecovered Deductions (net pay floored at zero)');
-                }
             }
 
             if (Money::cmp($totalDebit, $totalCredit) !== 0) {
@@ -421,6 +398,39 @@ class PayrollGlPostingService
             ])->save();
 
             return $entryId;
+    }
+
+    /** Refuse to turn an invalid/floored payroll row into a balanced journal plug. */
+    private function assertPayrollRowsReconcile(PayrollPeriod $period): void
+    {
+        $currentPolicy = $period->computation_policy_version === PayrollComputationFingerprintService::POLICY_VERSION;
+
+        foreach (Payroll::query()->where('payroll_period_id', $period->id)->whereNull('error_message')->get() as $payroll) {
+            $rawNet = Money::add(
+                Money::sub((string) $payroll->gross_pay, (string) $payroll->total_deductions),
+                (string) $payroll->adjustment_amount,
+            );
+            if (Money::lt($rawNet, '0.00') || Money::cmp($rawNet, (string) $payroll->net_pay) !== 0) {
+                throw new BusinessRuleException(sprintf(
+                    'Payroll GL posting refused: employee %s has a negative or unreconciled net-pay amount. Review the payroll and use the approved correction path.',
+                    (string) $payroll->employee_id,
+                ));
+            }
+
+            if ($currentPolicy && Money::gt((string) $payroll->loan_deductions, '0.00')) {
+                $allocations = Money::round2((string) DB::table('payroll_loan_recovery_allocations')
+                    ->where('payroll_id', $payroll->id)->sum('withheld_amount'));
+                $payments = Money::round2((string) DB::table('loan_payments')
+                    ->where('payroll_id', $payroll->id)->sum('amount'));
+                if (Money::cmp($allocations, (string) $payroll->loan_deductions) !== 0
+                    || Money::cmp($payments, (string) $payroll->loan_deductions) !== 0) {
+                    throw new BusinessRuleException(sprintf(
+                        'Payroll GL posting refused: employee %s has loan recovery that does not reconcile with the payroll and loan ledgers.',
+                        (string) $payroll->employee_id,
+                    ));
+                }
+            }
+        }
     }
 
     /** @return list<string> */

@@ -70,7 +70,12 @@ class GovernmentTableRealtimeTest extends TestCase
             ]));
 
             $result = app(GovernmentContributionTableImportService::class)
-                ->importFromPath(ContributionAgency::Sss, $path, deactivatePrior: false);
+                ->importFromPath(
+                    ContributionAgency::Sss,
+                    $path,
+                    'SSS test schedule',
+                    'https://sss.gov.ph/schedule',
+                );
         } finally {
             @unlink($path);
         }

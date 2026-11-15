@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { LuSearch, LuBan } from '@/lib/icons';
+import { AxiosError } from 'axios';
+import toast from 'react-hot-toast';
+import { LuSearch, LuBan, LuPencil, LuPlus, LuTrash2 } from '@/lib/icons';
+import { warehouseApi } from '@/api/inventory/warehouse';
 import { warehouseMapApi } from '@/api/inventory/warehouseWms';
 import { Chip } from '@/components/ui/Chip';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { Modal } from '@/components/ui/Modal';
 import { Panel } from '@/components/ui/Panel';
 import { SkeletonBlock } from '@/components/ui/Skeleton';
 import { Button } from '@/components/ui/Button';
@@ -18,6 +23,8 @@ import { focusRingInset } from '@/lib/focus';
 import { focusRing } from '@/lib/focus';
 import { cn } from '@/lib/cn';
 import { StockCountManager } from './stock-count';
+import { WarehouseLocationForm, WarehouseZoneForm } from './map-management';
+import type { WarehouseMapLocation, WarehouseMapZone } from '@/types/warehouse';
 
 const STATUS_COLORS: Record<string, string> = {
   empty: 'bg-surface text-muted border border-subtle',
@@ -45,6 +52,7 @@ const STATUS_SWATCH: Record<string, string> = {
  * inventory.stock_count.view.
  */
 export default function WarehouseMapPage() {
+  const queryClient = useQueryClient();
   const { can } = usePermission();
   const navigate = useNavigate();
   const { pathname } = useLocation();
@@ -81,9 +89,15 @@ export default function WarehouseMapPage() {
 
   const [activeWh, setActiveWh] = useState<string | null>(searchParams.get('warehouse_id'));
   const [activeZone, setActiveZone] = useState<string | null>(searchParams.get('zone_id'));
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [selectedBin, setSelectedBin] = useState<{ id: string; detail: any } | null>(null);
+  const [selectedBinId, setSelectedBinId] = useState<string | null>(null);
   const [binQuery, setBinQuery] = useState('');
+  const [zoneForm, setZoneForm] = useState<{ mode: 'create' | 'edit'; existing: WarehouseMapZone | null } | null>(null);
+  const [locationForm, setLocationForm] = useState<{ mode: 'create' | 'edit'; existing: WarehouseMapLocation | null } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<
+    | { kind: 'zone'; id: string; name: string }
+    | { kind: 'location'; id: string; code: string }
+    | null
+  >(null);
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['warehouse', 'map'],
@@ -98,7 +112,7 @@ export default function WarehouseMapPage() {
         if (location) {
           setActiveWh(warehouse.id);
           setActiveZone(currentZone.id);
-          setSelectedBin({ id: location.id, detail: location });
+          setSelectedBinId(location.id);
           return;
         }
       }
@@ -108,6 +122,16 @@ export default function WarehouseMapPage() {
   const wh = data?.find((w) => w.id === activeWh) ?? data?.[0];
   const zones = wh?.zones ?? [];
   const zone = zones.find((z) => z.id === activeZone) ?? null;
+  const selectedBin = useMemo(() => {
+    if (!selectedBinId) return null;
+    for (const warehouse of data ?? []) {
+      for (const currentZone of warehouse.zones) {
+        const location = currentZone.locations.find((bin) => bin.id === selectedBinId);
+        if (location) return { id: location.id, detail: location };
+      }
+    }
+    return null;
+  }, [data, selectedBinId]);
   const statusLegend = useMemo(() => {
     const labels = new Map<string, string>();
     for (const warehouse of data ?? []) {
@@ -139,10 +163,71 @@ export default function WarehouseMapPage() {
   }, [zone, binQuery]);
 
   const binDetail = useQuery({
-    queryKey: ['warehouse', 'bin', selectedBin?.id],
-    queryFn: () => warehouseMapApi.binDetail(selectedBin!.id),
+    queryKey: ['warehouse', 'bin', selectedBinId],
+    queryFn: () => warehouseMapApi.binDetail(selectedBinId!),
     enabled: canMap && view === 'map' && !!selectedBin,
   });
+
+  const reloadMap = () => {
+    void queryClient.invalidateQueries({ queryKey: ['warehouse', 'map'] });
+    void queryClient.invalidateQueries({ queryKey: ['warehouse', 'bin'] });
+  };
+
+  const deleteZone = useMutation({
+    mutationFn: (id: string) => warehouseApi.deleteZone(id),
+    onSuccess: (_result, id) => {
+      toast.success('Zone archived.');
+      setDeleteTarget(null);
+      if (activeZone === id) {
+        setActiveZone(null);
+        setSelectedBinId(null);
+        setSearchParams((params) => {
+          params.delete('zone_id');
+          params.delete('location_id');
+          return params;
+        }, { replace: true });
+      }
+      reloadMap();
+    },
+    onError: (error: AxiosError<{ message?: string }>) =>
+      toast.error(error.response?.data?.message ?? 'Failed to delete zone.'),
+  });
+
+  const deleteLocation = useMutation({
+    mutationFn: (id: string) => warehouseApi.deleteLocation(id),
+    onSuccess: (_result, id) => {
+      toast.success('Bin archived.');
+      setDeleteTarget(null);
+      if (selectedBinId === id) {
+        setSelectedBinId(null);
+        setSearchParams((params) => {
+          params.delete('location_id');
+          return params;
+        }, { replace: true });
+      }
+      reloadMap();
+    },
+    onError: (error: AxiosError<{ message?: string }>) =>
+      toast.error(error.response?.data?.message ?? 'Failed to delete bin.'),
+  });
+
+  const saveZone = (id: string) => {
+    setZoneForm(null);
+    setActiveZone(id);
+    setSelectedBinId(null);
+    setSearchParams((params) => {
+      params.set('zone_id', id);
+      params.delete('location_id');
+      return params;
+    }, { replace: true });
+    reloadMap();
+  };
+
+  const saveLocation = (id: string) => {
+    setLocationForm(null);
+    setSelectedBinId(id);
+    reloadMap();
+  };
 
   return (
     <div>
@@ -166,24 +251,36 @@ export default function WarehouseMapPage() {
           ) : undefined
         }
       />
-      <div className="px-5 py-4 space-y-4">
+      <div className="space-y-6 px-5 py-5">
         {view === 'count' ? (
           <StockCountManager />
         ) : (
           <>
             {/* Legend — explains the bin colour coding. */}
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-2xs text-muted">
-              <span className="font-medium uppercase tracking-wider">Legend</span>
-              {statusLegend.map(([key, label]) => (
-                <span key={key} className="inline-flex items-center gap-1.5">
-                  <span
-                    aria-hidden
-                    className={cn('h-2.5 w-2.5 rounded-[3px]', STATUS_SWATCH[key])}
-                  />
-                  {label}
-                </span>
-              ))}
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs leading-5 text-muted">
+                <span className="font-medium uppercase tracking-wider">Bin status</span>
+                {statusLegend.map(([key, label]) => (
+                  <span key={key} className="inline-flex items-center gap-1.5">
+                    <span
+                      aria-hidden
+                      className={cn('h-2.5 w-2.5 rounded-[3px]', STATUS_SWATCH[key])}
+                    />
+                    {label}
+                  </span>
+                ))}
+              </div>
+              <p role="note" className="max-w-4xl text-xs leading-5 text-muted">
+                Usage counts kg stock and items with a configured gross kg weight per base unit.
+                Unweighted items are excluded; see bin cards. Include packaging in item weights.
+                Capacity is advisory—verify limits against posted rack and floor ratings.
+              </p>
             </div>
+            {wh?.is_active === false && (
+              <div role="status" className="rounded-md border border-warning/30 bg-warning-bg/20 px-3 py-2 text-sm text-warning-fg">
+                This warehouse is inactive. Stock workflows will not accept new movements here.
+              </div>
+            )}
 
             {isLoading && !data && (
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -225,55 +322,98 @@ export default function WarehouseMapPage() {
                       );
                       setActiveWh(id);
                       setActiveZone(null);
-                      setSelectedBin(null);
+                      setSelectedBinId(null);
                       setBinQuery('');
                     }}
-                    options={data.map((w) => ({ value: w.id, label: `${w.code} — ${w.name}` }))}
+                    options={data.map((w) => ({ value: w.id, label: `${w.is_active === false ? 'Inactive · ' : ''}${w.code} — ${w.name}` }))}
                   />
                 )}
 
-                <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+                <div className="grid grid-cols-1 gap-x-6 gap-y-6 xl:grid-cols-12">
                   {/* Zone sidebar */}
-                  <div className="md:col-span-3 min-w-0 space-y-1">
-                    <div className="text-2xs uppercase tracking-wider text-muted font-medium px-1 mb-1">
-                      Zones
+                  <div className="min-w-0 xl:col-span-4 2xl:col-span-3">
+                    <div className="mb-3 flex items-center justify-between px-1">
+                      <div className="text-xs uppercase tracking-wider text-muted font-medium">Zones</div>
+                      {canMap && wh && (
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="secondary"
+                          icon={<LuPlus size={12} />}
+                          onClick={() => setZoneForm({ mode: 'create', existing: null })}
+                        >
+                          Add zone
+                        </Button>
+                      )}
                     </div>
-                    {zones.map((z) => (
-                      <button
-                        key={z.id}
-                        type="button"
-                        onClick={() => {
-                          setSearchParams(
-                            (params) => {
-                              params.set('zone_id', z.id);
-                              params.delete('location_id');
-                              return params;
-                            },
-                            { replace: true },
-                          );
-                          setActiveZone(z.id);
-                          setSelectedBin(null);
-                          setBinQuery('');
-                        }}
-                        className={`w-full text-left px-2 py-1.5 text-xs rounded-md transition-colors cursor-pointer border ${focusRingInset} ${
+                    {zones.length === 0 && <div className="px-1 py-3 text-xs text-muted">No zones configured.</div>}
+                    <div className="flex gap-2 overflow-x-auto pb-2 xl:flex-col xl:overflow-visible xl:pb-0">
+                      {zones.map((z) => (
+                        <div key={z.id} className={cn(
+                          'flex min-w-56 shrink-0 items-start rounded-lg border transition-colors xl:min-w-0 xl:shrink',
                           zone?.id === z.id
-                            ? 'bg-accent/10 text-accent border-accent/30 shadow-sm'
-                            : 'bg-surface border-default text-secondary hover:border-subtle hover:text-primary hover:bg-elevated'
-                        }`}
-                      >
-                        <div className="font-mono">{z.code}</div>
-                        <div className="text-2xs text-muted">
-                          {z.name} · {z.type_label}
+                            ? 'border-accent/30 bg-accent/10'
+                            : 'border-default bg-surface hover:border-subtle hover:bg-elevated',
+                        )}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSearchParams(
+                                (params) => {
+                                  params.set('zone_id', z.id);
+                                  params.delete('location_id');
+                                  return params;
+                                },
+                                { replace: true },
+                              );
+                              setActiveZone(z.id);
+                              setSelectedBinId(null);
+                              setBinQuery('');
+                            }}
+                            className={cn('min-w-0 flex-1 rounded-lg px-3 py-3 text-left text-xs leading-5 cursor-pointer', focusRingInset)}
+                          >
+                            <div className="font-mono font-medium text-primary">{z.code}</div>
+                            <div className="mt-1 text-secondary leading-5">{z.name}</div>
+                            <div className="text-xs text-muted">{z.type_label} · {z.locations.length} bins</div>
+                            <CapacityUsage
+                              usedKg={z.capacity_used_kg}
+                              capacityKg={z.capacity_kg}
+                              capacityStatus={z.capacity_status ?? 'unverified'}
+                              untrackedLineCount={z.capacity_untracked_line_count ?? 0}
+                            />
+                          </button>
+                          {canMap && (
+                            <div className="flex shrink-0 flex-col gap-1 px-1 pt-2">
+                              <Button
+                                type="button"
+                                size="xs"
+                                variant="ghost"
+                                iconOnly
+                                icon={<LuPencil size={12} />}
+                                aria-label={`Edit zone ${z.name}`}
+                                onClick={() => setZoneForm({ mode: 'edit', existing: z })}
+                              />
+                              <Button
+                                type="button"
+                                size="xs"
+                                variant="ghost"
+                                iconOnly
+                                icon={<LuTrash2 size={12} />}
+                                aria-label={`Delete zone ${z.name}`}
+                                className="text-muted hover:text-danger-fg"
+                                onClick={() => setDeleteTarget({ kind: 'zone', id: z.id, name: z.name })}
+                              />
+                            </div>
+                          )}
                         </div>
-                        <div className="text-2xs text-muted">{z.locations.length} bins</div>
-                      </button>
-                    ))}
+                      ))}
+                    </div>
                   </div>
 
                   {/* Bin grid */}
-                  <div className="md:col-span-6 min-w-0">
+                  <div className="min-w-0 xl:col-span-8 2xl:col-span-6">
                     {zone && (
-                      <div className="mb-2">
+                      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
                         <Input
                           fieldSize="sm"
                           placeholder="Search bin or item…"
@@ -281,51 +421,87 @@ export default function WarehouseMapPage() {
                           onChange={(e) => setBinQuery(e.target.value)}
                           prefix={<LuSearch size={13} />}
                           className="font-mono"
-                          containerClassName="max-w-xs"
+                          containerClassName="min-w-0 flex-1"
                         />
+                        {canMap && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            icon={<LuPlus size={13} />}
+                            onClick={() => setLocationForm({ mode: 'create', existing: null })}
+                          >
+                            Add bin
+                          </Button>
+                        )}
                       </div>
                     )}
-                    <div className="text-xs text-muted mb-2">
-                      {zone
-                        ? `${zone.name} — ${visibleBins.length} ${visibleBins.length === 1 ? 'bin' : 'bins'}${binQuery.trim() ? ' matching' : ''}`
-                        : 'Select a zone to view bins'}
+                    <div className="mb-4">
+                      {zone ? (
+                        <>
+                          <h2 className="text-base font-medium leading-6 text-primary">{zone.name}</h2>
+                          <p className="mt-1 text-xs leading-5 text-muted">
+                            {visibleBins.length} {visibleBins.length === 1 ? 'bin' : 'bins'}
+                            {binQuery.trim() ? ' match your search' : ''}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-sm leading-5 text-muted">Select a zone to view its bins.</p>
+                      )}
                     </div>
                     {zone && (
-                      /* Bins get tapped while walking a rack with a tablet in one hand, so
-              the three data rows sit at 12px rather than 10px and the grid drops
-              to two columns on a phone — five 10px columns truncated the bin
-              code, which is the one string the picker is matching against. */
-                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-1.5">
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-3">
                         {visibleBins.map((loc) => (
                           <button
                             key={loc.id}
                             type="button"
-                            onClick={() => setSelectedBin({ id: loc.id, detail: loc })}
+                            onClick={() => setSelectedBinId(loc.id)}
                             className={cn(
-                              'text-left p-2.5 rounded-md text-sm transition-colors cursor-pointer',
+                              'min-w-0 rounded-lg border p-3 text-left text-sm leading-5 transition-colors cursor-pointer',
                               focusRing,
                               STATUS_COLORS[loc.stock_status] || STATUS_COLORS['empty'],
+                              !loc.is_active && 'opacity-60',
                               selectedBin?.id === loc.id && 'ring-2 ring-accent',
                             )}
                           >
-                            <div className="font-mono font-medium truncate">{loc.code}</div>
-                            <div className="text-xs mt-0.5 truncate">
-                              {loc.stock_status === 'empty'
-                                ? '—'
-                                : loc.current_item
-                                  ? `${loc.current_item.code}`
-                                  : '—'}
+                            <div className="flex items-center justify-between gap-1">
+                              <div className="truncate font-mono text-sm font-semibold leading-5">{loc.code}</div>
+                              {!loc.is_active && <Chip variant="neutral">Inactive</Chip>}
                             </div>
-                            <div className="text-xs font-mono tabular-nums">
-                              {loc.stock_status !== 'empty'
-                                ? loc.current_item
-                                  ? `${Number(loc.current_quantity).toFixed(1)} ${loc.current_item.unit_of_measure ?? ''}`
-                                  : 'Multiple items'
-                                : ''}
+                            <div className="mt-2 min-h-12 space-y-1 text-xs leading-5">
+                              {loc.stock_status === 'empty' ? (
+                                <div className="text-muted">No stock</div>
+                              ) : loc.current_item ? (
+                                <>
+                                  <div className="truncate font-mono text-secondary" title={loc.current_item.code}>
+                                    {loc.current_item.code}
+                                  </div>
+                                  <div className="truncate text-secondary" title={loc.current_item.name}>
+                                    {loc.current_item.name}
+                                  </div>
+                                  <div className="font-mono tabular-nums text-primary">
+                                    {Number(loc.current_quantity).toLocaleString('en-PH', { maximumFractionDigits: 3 })}{' '}
+                                    {loc.current_item.unit_of_measure ?? ''}
+                                  </div>
+                                </>
+                              ) : (
+                                <div className="text-secondary">Multiple items</div>
+                              )}
                             </div>
+                            <CapacityUsage
+                              usedKg={loc.capacity_used_kg}
+                              capacityKg={loc.capacity_kg}
+                              capacityStatus={loc.capacity_status ?? 'unverified'}
+                              untrackedLineCount={loc.capacity_untracked_line_count ?? 0}
+                              showBasis={false}
+                              showUntrackedNote={false}
+                            />
+                            {!!loc.capacity_untracked_items?.length && (
+                              <UnweightedCapacityItems items={loc.capacity_untracked_items} />
+                            )}
                             {loc.is_blocked && (
                               <div
-                                className="text-xs text-danger-fg mt-0.5 truncate"
+                                className="mt-3 border-t border-subtle pt-2 text-xs leading-5 text-danger-fg"
                                 title={loc.blocked_reason ?? ''}
                               >
                                 {/* Was the ⛔ emoji. Emoji render per-platform,
@@ -337,6 +513,7 @@ export default function WarehouseMapPage() {
                                   aria-hidden="true"
                                 />
                                 {loc.stock_status_label ?? loc.stock_status}
+                                {loc.blocked_reason && <div className="break-words">{loc.blocked_reason}</div>}
                               </div>
                             )}
                           </button>
@@ -351,10 +528,38 @@ export default function WarehouseMapPage() {
                   </div>
 
                   {/* Bin detail panel */}
-                  <div className="md:col-span-3 min-w-0 space-y-3">
+                  <div className="min-w-0 xl:col-span-12 2xl:col-span-3">
                     {selectedBin && (
-                      <Panel title={`Bin: ${selectedBin.detail.full_code}`}>
-                        <div className="text-xs space-y-2">
+                      <Panel
+                        title={`Bin: ${selectedBin.detail.full_code}`}
+                        actions={canMap ? (
+                          <div className="flex gap-1">
+                            <Button
+                              type="button"
+                              size="xs"
+                              variant="secondary"
+                              icon={<LuPencil size={12} />}
+                              onClick={() => setLocationForm({ mode: 'edit', existing: selectedBin.detail })}
+                            >
+                              Edit
+                            </Button>
+                            <Button
+                              type="button"
+                              size="xs"
+                              variant="danger"
+                              icon={<LuTrash2 size={12} />}
+                              onClick={() => setDeleteTarget({
+                                kind: 'location',
+                                id: selectedBin.detail.id,
+                                code: selectedBin.detail.code,
+                              })}
+                            >
+                              Delete
+                            </Button>
+                          </div>
+                        ) : undefined}
+                      >
+                        <div className="space-y-3 text-xs leading-5">
                           <StatusRow label="Status">
                             <Chip
                               variant={
@@ -374,17 +579,31 @@ export default function WarehouseMapPage() {
                             </Chip>
                           </StatusRow>
                           <StatusRow label="Code">{selectedBin.detail.code}</StatusRow>
+                          <StatusRow label="Availability">{selectedBin.detail.is_active ? 'Active' : 'Inactive'}</StatusRow>
                           {selectedBin.detail.rack && (
                             <StatusRow label="Rack">{selectedBin.detail.rack}</StatusRow>
                           )}
                           {selectedBin.detail.bin && (
                             <StatusRow label="Bin">{selectedBin.detail.bin}</StatusRow>
                           )}
+                          <StatusRow label="Capacity">
+                            {selectedBin.detail.capacity_kg
+                              ? `${formatKg(selectedBin.detail.capacity_used_kg)} / ${formatKg(selectedBin.detail.capacity_kg)} kg`
+                              : `No limit · ${formatKg(selectedBin.detail.capacity_used_kg)} kg used`}
+                          </StatusRow>
                           {selectedBin.detail.capacity_kg && (
-                            <StatusRow label="Capacity">
-                              {Number(selectedBin.detail.capacity_kg).toFixed(0)} kg
+                            <StatusRow label="Capacity basis">
+                              {capacityStatusLabel(selectedBin.detail.capacity_status ?? 'unverified')}
                             </StatusRow>
                           )}
+                          <CapacityUsage
+                            usedKg={selectedBin.detail.capacity_used_kg}
+                            capacityKg={selectedBin.detail.capacity_kg}
+                            capacityStatus={selectedBin.detail.capacity_status ?? 'unverified'}
+                            untrackedLineCount={selectedBin.detail.capacity_untracked_line_count ?? 0}
+                            showLabel={false}
+                            showUntrackedNote={false}
+                          />
                           {selectedBin.detail.current_item && (
                             <>
                               <StatusRow label="Item">
@@ -425,29 +644,34 @@ export default function WarehouseMapPage() {
                             <SkeletonBlock className="h-20" />
                           )}
                           {binDetail.data && (
-                            <div className="border-t border-subtle pt-2 mt-2 space-y-1">
-                              <div className="text-2xs uppercase tracking-wider text-muted font-medium">
+                            <div className="mt-3 space-y-3 border-t border-subtle pt-3">
+                              <div className="text-xs uppercase tracking-wider text-muted font-medium">
                                 Stock levels
                               </div>
                               {binDetail.data.stock_levels.length === 0 ? (
                                 <div className="text-muted">No stock at this bin.</div>
                               ) : (
-                                binDetail.data.stock_levels.map((sl, i) => (
-                                  <div key={i} className="text-2xs">
-                                    <span className="font-mono">{sl.item_code}</span>
-                                    <span className="text-muted ml-1">
-                                      {Number(sl.quantity).toFixed(3)}
-                                    </span>
-                                    <span className="text-muted ml-1">
-                                      usable:{' '}
-                                      {Number(sl.usable_quantity ?? sl.available).toFixed(3)}{' '}
-                                      {sl.unit_of_measure}
-                                    </span>
-                                  </div>
-                                ))
+                                <div className="space-y-2">
+                                  {binDetail.data.stock_levels.map((sl, i) => (
+                                    <div key={i} className="space-y-0.5 leading-5">
+                                      <div className="font-medium">
+                                        <span className="font-mono">{sl.item_code || 'Unknown item'}</span>
+                                        {sl.item_name && <span> — {sl.item_name}</span>}
+                                      </div>
+                                      <div className="text-muted">
+                                        On hand: {Number(sl.quantity).toLocaleString('en-PH')} {sl.unit_of_measure ?? 'units'}
+                                        {' · '}usable: {Number(sl.usable_quantity ?? sl.available).toLocaleString('en-PH')}
+                                      </div>
+                                      {sl.unit_of_measure?.trim().toLowerCase() !== 'kg' &&
+                                        Number(sl.weight_kg_per_unit ?? 0) <= 0 && (
+                                          <div className="text-warning-fg">No gross kg weight · excluded from capacity usage</div>
+                                        )}
+                                    </div>
+                                  ))}
+                                </div>
                               )}
                               {binDetail.data.last_movement && (
-                                <div className="text-2xs text-muted pt-1">
+                                <div className="pt-1 text-xs leading-5 text-muted">
                                   Last:{' '}
                                   {binDetail.data.last_movement.movement_type_label ??
                                     binDetail.data.last_movement.movement_type.replace(/_/g, ' ')}
@@ -461,9 +685,7 @@ export default function WarehouseMapPage() {
                       </Panel>
                     )}
                     {!selectedBin && (
-                      <div className="text-sm text-muted text-center py-5">
-                        Click a bin to see details.
-                      </div>
+                      <p className="py-2 text-sm leading-5 text-muted">Select a bin to see its details.</p>
                     )}
                   </div>
                 </div>
@@ -472,6 +694,64 @@ export default function WarehouseMapPage() {
           </>
         )}
       </div>
+
+      <Modal
+        isOpen={!!zoneForm}
+        onClose={() => setZoneForm(null)}
+        title={zoneForm?.mode === 'edit' ? `Edit zone ${zoneForm.existing?.code}` : 'Add zone'}
+        size="sm"
+      >
+        {zoneForm && wh && (
+          <WarehouseZoneForm
+            key={`${zoneForm.mode}-${zoneForm.existing?.id ?? 'new'}`}
+            mode={zoneForm.mode}
+            existing={zoneForm.existing}
+            warehouseId={wh.id}
+            onClose={() => setZoneForm(null)}
+            onSaved={saveZone}
+          />
+        )}
+      </Modal>
+
+      <Modal
+        isOpen={!!locationForm}
+        onClose={() => setLocationForm(null)}
+        title={locationForm?.mode === 'edit' ? `Edit bin ${locationForm.existing?.code}` : 'Add bin'}
+        size="sm"
+      >
+        {locationForm && zone && (
+          <WarehouseLocationForm
+            key={`${locationForm.mode}-${locationForm.existing?.id ?? 'new'}`}
+            mode={locationForm.mode}
+            existing={locationForm.existing}
+            zoneId={zone.id}
+            onClose={() => setLocationForm(null)}
+            onSaved={saveLocation}
+          />
+        )}
+      </Modal>
+
+      <ConfirmDialog
+        isOpen={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          if (deleteTarget.kind === 'zone') deleteZone.mutate(deleteTarget.id);
+          else deleteLocation.mutate(deleteTarget.id);
+        }}
+        title={deleteTarget?.kind === 'zone' ? 'Delete zone?' : 'Delete bin?'}
+        description={deleteTarget ? (
+          <>
+            <span className="font-medium text-primary">
+              {deleteTarget.kind === 'zone' ? deleteTarget.name : deleteTarget.code}
+            </span>
+            {' will be archived. Deletion is blocked while this zone or bin has stock, reservations, or pending stock adjustments.'}
+          </>
+        ) : null}
+        confirmLabel="Delete"
+        variant="danger"
+        pending={deleteZone.isPending || deleteLocation.isPending}
+      />
     </div>
   );
 }
@@ -481,6 +761,111 @@ function StatusRow({ label, children }: { label: string; children: React.ReactNo
     <div className="flex justify-between gap-2">
       <span className="text-muted whitespace-nowrap">{label}</span>
       <span className="text-right font-mono">{children}</span>
+    </div>
+  );
+}
+
+function formatKg(value: string | null | undefined): string {
+  return new Intl.NumberFormat('en-PH', { maximumFractionDigits: 1 }).format(Number(value ?? 0));
+}
+
+function capacityStatusLabel(status: 'unverified' | 'estimated' | 'derived' | 'rated'): string {
+  return {
+    unverified: 'Unverified',
+    estimated: 'Planning estimate',
+    derived: 'Derived from active bins',
+    rated: 'Entered from posted rating',
+  }[status];
+}
+
+function CapacityUsage({
+  usedKg,
+  capacityKg,
+  capacityStatus,
+  untrackedLineCount,
+  showLabel = true,
+  showBasis = true,
+  showUntrackedNote = true,
+}: {
+  usedKg: string;
+  capacityKg: string | null;
+  capacityStatus: 'unverified' | 'estimated' | 'derived' | 'rated';
+  untrackedLineCount: number;
+  showLabel?: boolean;
+  showBasis?: boolean;
+  showUntrackedNote?: boolean;
+}) {
+  const groupClass = showLabel ? 'mt-3 space-y-2' : 'space-y-2';
+
+  if (capacityKg === null) {
+    return (
+      <div className={groupClass}>
+        {showLabel && <div className="text-xs leading-5 text-muted">No limit · {formatKg(usedKg)} kg tracked</div>}
+        {showUntrackedNote && untrackedLineCount > 0 && <UntrackedCapacityNote lineCount={untrackedLineCount} />}
+      </div>
+    );
+  }
+
+  const capacity = Number(capacityKg);
+  const used = Number(usedKg);
+  const percent = capacity > 0 ? (used / capacity) * 100 : 0;
+  const clampedPercent = Math.min(100, Math.max(0, percent));
+  const barColor = percent >= 100 ? 'bg-danger' : percent >= 90 ? 'bg-warning' : 'bg-accent';
+
+  return (
+    <div className={groupClass}>
+      {showLabel && (
+        <div className="flex flex-wrap justify-between gap-x-2 text-xs leading-5 text-muted tabular-nums">
+          <span>Capacity</span>
+          <span>{formatKg(usedKg)} / {formatKg(capacityKg)} kg{percent > 100 ? ` · ${Math.round(percent)}%` : ''}</span>
+        </div>
+      )}
+      {showLabel && showBasis && <div className="text-xs leading-5 text-muted">{capacityStatusLabel(capacityStatus)}</div>}
+      <div
+        role="progressbar"
+        aria-label={`Capacity usage: ${formatKg(usedKg)} of ${formatKg(capacityKg)} kilograms`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(clampedPercent)}
+        className="h-1.5 overflow-hidden rounded-full bg-subtle"
+      >
+        <div className={cn('h-full rounded-full transition-[width]', barColor)} style={{ width: `${clampedPercent}%` }} />
+      </div>
+      {showUntrackedNote && untrackedLineCount > 0 && <UntrackedCapacityNote lineCount={untrackedLineCount} />}
+    </div>
+  );
+}
+
+function UntrackedCapacityNote({ lineCount }: { lineCount: number }) {
+  return (
+    <div role="note" className="text-xs leading-5 text-warning-fg">
+      {lineCount} stock line{lineCount === 1 ? ' has' : 's have'} no gross kg weight configured; see bin cards for item names.
+    </div>
+  );
+}
+
+function UnweightedCapacityItems({
+  items,
+}: {
+  items: NonNullable<WarehouseMapLocation['capacity_untracked_items']>;
+}) {
+  return (
+    <div role="note" className="mt-3 space-y-2 break-words border-t border-subtle pt-3 text-xs leading-5 text-warning-fg">
+      <div className="font-medium">Gross weight not set · {items.length}</div>
+      <ul className="space-y-2">
+        {items.map((item, index) => (
+          <li key={item.item_id ?? `${item.item_code ?? 'unknown'}-${index}`}>
+            <div>
+              <span className="font-mono font-medium">{item.item_code ?? 'Unknown item'}</span>
+              <span> — {item.item_name ?? 'Item details unavailable'}</span>
+            </div>
+            <div className="text-muted">
+              On hand: {Number(item.quantity).toLocaleString('en-PH', { maximumFractionDigits: 3 })}{' '}
+              {item.unit_of_measure ?? 'units'}
+            </div>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

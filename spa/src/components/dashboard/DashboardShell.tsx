@@ -221,8 +221,6 @@ interface DashboardShellProps<T> {
   query: QueryLike<T>;
   /** How many KPI skeleton tiles to show while loading. */
   kpiCount?: number;
-  /** The default action list leads the dashboard. `after-kpis` lets a dashboard place it after its own KPI row. */
-  attentionPlacement?: 'before-content' | 'after-kpis';
   refreshingQueryKey?: readonly unknown[];
   /**
    * Newest timestamp behind the displayed data (e.g. max widget-data
@@ -253,7 +251,6 @@ export function DashboardShell<T>({
   header,
   query,
   kpiCount = 4,
-  attentionPlacement = 'before-content',
   refreshingQueryKey,
   updatedAt,
   staleAfterMs = WIDGET_STALE_AFTER_MS,
@@ -332,7 +329,6 @@ export function DashboardShell<T>({
             <SkeletonBlock key={i} className="h-[76px] rounded-md" />
           ))}
         </section>
-        {attentionPlacement === 'after-kpis' && <DashboardAttentionList />}
         <SkeletonDetail />
       </>
     );
@@ -349,14 +345,12 @@ export function DashboardShell<T>({
             </Button>
           }
         />
-        {attentionPlacement === 'after-kpis' && <DashboardAttentionList />}
       </>
     );
   } else if (data == null || isEmpty?.(data)) {
     body = (
       <>
         <EmptyState icon="inbox" title={emptyTitle} description={emptyDescription} />
-        {attentionPlacement === 'after-kpis' && <DashboardAttentionList />}
       </>
     );
   } else {
@@ -377,7 +371,6 @@ export function DashboardShell<T>({
       {headerNode}
       <DashboardBody>
         {headerSlot}
-        {attentionPlacement === 'before-content' && <DashboardAttentionList />}
         {freshnessIndicator}
         {body}
       </DashboardBody>

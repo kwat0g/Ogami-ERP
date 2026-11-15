@@ -142,11 +142,10 @@ class RolePermissionSeeder extends Seeder
                 // transitions to Voided). This is an administrator-only recovery
                 // control; operational HR and Finance roles deliberately omit it.
                 ['slug' => 'payroll.periods.void',        'name' => 'Void Payroll Period'],
-                // REC-04 — maker-checker override. Normally the person who
-                // COMPUTED a run may not APPROVE it (second set of eyes on a
-                // ₱-material 200-employee batch). This slug bypasses that guard.
-                // Granted ONLY to system_admin (via wildcard).
-                ['slug' => 'payroll.periods.self_approve_override', 'name' => 'Bypass Payroll Maker-Checker'],
+                // Compatibility permission retained for existing installations.
+                // Payroll stage actions now rely on each stage permission and
+                // audit attribution rather than an actor-identity override.
+                ['slug' => 'payroll.periods.self_approve_override', 'name' => 'Legacy Payroll Self-Approval Override'],
                 // H-8 — admin escape hatch for periods stuck at Processing because
                 // the payroll job worker crashed before its finally block ran.
                 ['slug' => 'payroll.periods.force_unlock', 'name' => 'Force-unlock Payroll Period'],
@@ -557,7 +556,7 @@ class RolePermissionSeeder extends Seeder
         return [
             'system_admin' => [
                 'name' => 'System Administrator',
-                'description' => 'Administers users, roles, settings, audit logs, sessions, backups and integrations; business approval chains still enforce their designated approvers and maker-checker rules.',
+                'description' => 'Administers users, roles, settings, audit logs, sessions, backups and integrations; business actions remain permission-gated and audited.',
                 'permissions' => '*',
             ],
             'hr_officer' => [
@@ -589,10 +588,10 @@ class RolePermissionSeeder extends Seeder
                         'payroll.payslip.view_all',
                         // REC-06 follow-up — HR files SSS/PhilHealth/BIR remittances.
                         'payroll.statutory.export',
-                        // REC-04 — hr_officer is the MAKER: creates + computes a
-                        // payroll run but does NOT approve it. payroll.periods.approve
-                        // was removed here so the person who computes cannot also
-                        // sign off — approval is finance_officer's (checker) job.
+                        // HR remains the default payroll maker while Finance has
+                        // the default approve/finalize/disburse permissions. The
+                        // service also allows an authorized user to continue their
+                        // own run for single-officer organizations.
                         'payroll.periods.create',
                         'payroll.periods.compute',
                         'payroll.adjustments.view',
@@ -613,12 +612,13 @@ class RolePermissionSeeder extends Seeder
                 'description' => 'Manages accounting, budgets, loans and fixed assets; reviews customer price offers and disburses payroll; approves purchases, financial returns, stock adjustments, bank changes and Finance clearance; reviews supplier quotations without running sourcing.',
                 'permissions' => array_merge(
                     // HR owns the payroll work (create, compute, correction).
-                    // Finance is the checker and payment owner: it can review a
-                    // period, either approve or return it for correction, then
-                    // finalize/disburse after HR's work has passed review.
+                    // Finance owns anomaly review, approval and payment stages.
+                    // A single Finance Officer can complete those stages; each
+                    // action remains separately permission-gated and audited.
                     [
                         'crm.price_agreements.approve', 'crm.products.view', 'crm.price_agreements.view', 'inventory.costs.review', 'inventory.costs.approve',
                         'payroll.periods.view',
+                        'payroll.anomalies.review',
                         'payroll.periods.approve',
                         'payroll.periods.request_correction',
                         'payroll.periods.finalize',
@@ -682,7 +682,7 @@ class RolePermissionSeeder extends Seeder
             // decisions remain in their owning modules.
             'vice_president' => [
                 'name' => 'Vice President',
-                'description' => 'Reviews financial statements, budgets, supplier quotations and customer complaints; provides executive approval for purchases, payments, loans, salary adjustments and asset disposals without running sourcing, payroll preparation or HR records.',
+                'description' => 'Reviews financial statements, budgets, supplier quotations and customer complaints; provides executive approval for purchases, payments, salary adjustments and asset disposals without running sourcing, payroll preparation or HR records.',
                 'permissions' => array_merge(
                     $this->selfService(),
                     [
@@ -690,12 +690,9 @@ class RolePermissionSeeder extends Seeder
                         'purchasing.pr.approve',
                         'purchasing.po.approve', 'purchasing.po.view_all',
                         'purchasing.rfq.view',
-                        // Final approver of the cash_advance (step 3) and
-                        // company_loan (step 4) chains, and the final checker of
-                        // salary_adjustment (step 2). Without these slugs the
-                        // approve routes refused the only role the step accepts
-                        // and every chain stalled at its last step (2026-09-10
-                        // approval-chain audit).
+                        // Retained so requests submitted under the previous loan
+                        // workflows can finish; new loan requests use HR then
+                        // Finance. VP remains the final checker for salary_adjustment.
                         'loans.view', 'loans.approve',
                         'hr.salary_adjustments.view',
                         'hr.salary_adjustments.act',
@@ -1016,7 +1013,7 @@ class RolePermissionSeeder extends Seeder
             ],
             'department_head' => [
                 'name' => 'Department Head',
-                'description' => 'Reads department employee records, raises purchase requests, approves department leave, overtime, loans and returns, and signs department separation-clearance tasks; purchase approvals follow the financial workflow.',
+                'description' => 'Reads department employee records, raises purchase requests, approves department leave, overtime and returns, and signs department separation-clearance tasks; purchase approvals follow the financial workflow.',
                 'permissions' => array_merge(
                     $this->selfService(),
                     [
@@ -1024,8 +1021,8 @@ class RolePermissionSeeder extends Seeder
                         'hr.employees.trainings.view',
                         'attendance.ot.approve',
                         'leave.approve_dept',
-                        // Department Head is the first approver in both loan
-                        // workflows; list/show remain department-scoped.
+                        // Retained for requests submitted under the previous
+                        // loan workflows; new requests start with HR Officer.
                         'loans.view', 'loans.approve',
                         'purchasing.view',
                         // 2026-09-10 — PR chain redesign: department heads are the

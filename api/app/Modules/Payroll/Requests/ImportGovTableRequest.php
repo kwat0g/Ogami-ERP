@@ -16,8 +16,9 @@ class ImportGovTableRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'csv'                  => ['required', 'file', 'mimes:csv,txt', 'max:1024'],
-            'deactivate_prior'     => ['nullable', 'boolean'],
+            'csv' => ['required', 'file', 'mimes:csv,txt', 'max:1024'],
+            'source_title' => ['required', 'string', 'max:200'],
+            'source_url' => ['required', 'url', 'starts_with:https://', 'max:2048'],
         ];
     }
 }

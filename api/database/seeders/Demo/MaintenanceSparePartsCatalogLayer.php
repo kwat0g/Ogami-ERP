@@ -17,7 +17,7 @@ use RuntimeException;
 /** Seeds the service-backed spare part catalog without creating stock balances. */
 final class MaintenanceSparePartsCatalogLayer extends DemoSeeder
 {
-    private const DESCRIPTION_PREFIX = 'Synthetic demo maintenance spare part.';
+    private const DESCRIPTION_PREFIX = 'Maintenance spare part for plant equipment.';
 
     /** @var array<string, int> */
     private const TARGET_COUNTS = ['small' => 20, 'demo' => 100, 'full' => 140];
@@ -183,6 +183,11 @@ final class MaintenanceSparePartsCatalogLayer extends DemoSeeder
         $item = Item::withTrashed()->where('code', $definition['code'])->first();
         if ($item === null) {
             $item = $this->items->create($definition);
+        } elseif ($this->matchesRecognizedLegacyDefinition($item, $definition)) {
+            // Earlier demo runs used this explicit synthetic description. Migrate
+            // only rows whose full catalog contract still matches, through the
+            // owning item service; any other drift remains a hard refusal.
+            $item = $this->items->update($item, ['description' => $definition['description']]);
         } elseif (! $this->matchesDefinition($item, $definition)) {
             throw new BusinessRuleException("Spare part code {$definition['code']} exists with non-demo or changed catalog data; refusing to overwrite it.");
         } elseif ($item->trashed()) {
@@ -197,7 +202,20 @@ final class MaintenanceSparePartsCatalogLayer extends DemoSeeder
     private function matchesDefinition(Item $item, array $definition): bool
     {
         return $item->description === $definition['description']
-            && $item->name === $definition['name']
+            && $this->matchesDefinitionExceptDescription($item, $definition);
+    }
+
+    /** @param array{code: string, name: string, description: string, category_id: int, unit_of_measure: string, item_type: string, standard_cost: string, reorder_method: string, reorder_point: string, safety_stock: string, minimum_order_quantity: string, lead_time_days: int, is_critical: bool, is_active: bool} $definition */
+    private function matchesRecognizedLegacyDefinition(Item $item, array $definition): bool
+    {
+        return str_starts_with((string) $item->description, 'Synthetic maintenance spare part.')
+            && $this->matchesDefinitionExceptDescription($item, $definition);
+    }
+
+    /** @param array{code: string, name: string, description: string, category_id: int, unit_of_measure: string, item_type: string, standard_cost: string, reorder_method: string, reorder_point: string, safety_stock: string, minimum_order_quantity: string, lead_time_days: int, is_critical: bool, is_active: bool} $definition */
+    private function matchesDefinitionExceptDescription(Item $item, array $definition): bool
+    {
+        return $item->name === $definition['name']
             && (int) $item->category_id === $definition['category_id']
             && $item->item_type->value === $definition['item_type']
             && $item->unit_of_measure === $definition['unit_of_measure']

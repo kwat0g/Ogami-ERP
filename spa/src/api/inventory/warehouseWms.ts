@@ -18,11 +18,14 @@ export const warehouseMapApi = {
         data: {
           location: WarehouseMapLocation;
           stock_levels: Array<{
-            item_code: string;
+            item_id?: string | null;
+            item_code: string | null;
+            item_name?: string | null;
             quantity: string;
             available: string;
             usable_quantity?: string;
-            unit_of_measure?: string;
+            unit_of_measure?: string | null;
+            weight_kg_per_unit?: string | null;
           }>;
           last_movement: {
             movement_type: string;

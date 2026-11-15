@@ -31,6 +31,24 @@ enum LoanType: string
         return ! $this->isGovernment();
     }
 
+    public function principalMinimum(): ?string
+    {
+        return match ($this) {
+            self::CompanyLoan => '1000.00',
+            self::CashAdvance => '500.00',
+            default => null,
+        };
+    }
+
+    public function principalMaximum(): ?string
+    {
+        return match ($this) {
+            self::CompanyLoan => '5000.00',
+            self::CashAdvance => '2000.00',
+            default => null,
+        };
+    }
+
     /** Workflow type for ApprovalService. */
     public function workflowType(): string
     {

@@ -31,13 +31,13 @@ class BusinessPartnerCatalogLayerTest extends TestCase
         $runner->run($options);
 
         $this->assertSame(3, Customer::query()->count());
-        $this->assertSame(5, Vendor::query()->count());
+        $this->assertSame(3, Vendor::query()->count());
         $this->assertSame(3, Customer::query()->where('is_active', true)->count());
-        $this->assertSame(5, Vendor::query()->where('is_active', true)->count());
+        $this->assertSame(3, Vendor::query()->where('is_active', true)->count());
 
         $customers = Customer::query()->with(['portalProducts', 'warrantyOptions'])->orderBy('code')->get();
         foreach ($customers as $customer) {
-            $this->assertMatchesRegularExpression('/@[^@]+\.ogami-demo\.test\z/', (string) $customer->email);
+            $this->assertMatchesRegularExpression('/\A[a-z0-9.]+@gmail\.com\z/', (string) $customer->email);
             $this->assertNotFalse(filter_var($customer->email, FILTER_VALIDATE_EMAIL));
             $this->assertMatchesRegularExpression('/\ACUS-2026-\d{4}\z/', (string) $customer->code);
             $this->assertSame('2026-11-14', $customer->created_at->toDateString());
@@ -50,7 +50,7 @@ class BusinessPartnerCatalogLayerTest extends TestCase
         }
 
         foreach (Vendor::query()->get() as $vendor) {
-            $this->assertMatchesRegularExpression('/@[^@]+\.ogami-demo\.test\z/', (string) $vendor->email);
+            $this->assertMatchesRegularExpression('/\A[a-z0-9.]+@gmail\.com\z/', (string) $vendor->email);
             $this->assertNotFalse(filter_var($vendor->email, FILTER_VALIDATE_EMAIL));
             $this->assertSame('2026-11-14', $vendor->created_at->toDateString());
             $this->assertNull($vendor->tin, 'Demo vendor records must not contain government tax IDs.');
@@ -63,7 +63,7 @@ class BusinessPartnerCatalogLayerTest extends TestCase
         $runner->run($options);
 
         $this->assertSame(3, Customer::query()->count());
-        $this->assertSame(5, Vendor::query()->count());
+        $this->assertSame(3, Vendor::query()->count());
         $this->assertSame($customerCodes, Customer::query()->orderBy('code')->pluck('code')->all());
         $this->assertSame($productAccessCount, \DB::table('customer_product_access')->count());
         $this->assertSame($warrantyCount, CustomerProductWarrantyOption::query()->count());
@@ -81,18 +81,18 @@ class BusinessPartnerCatalogLayerTest extends TestCase
         app(DemoSeedRunner::class)->run($options);
 
         $this->assertSame(10, Customer::query()->count());
-        $this->assertSame(1, Customer::query()->where('is_active', false)->count());
-        $this->assertSame(18, Vendor::query()->count());
-        $this->assertSame(1, Vendor::query()->where('is_active', false)->count());
+        $this->assertSame(10, Customer::query()->where('is_active', true)->count());
+        $this->assertSame(6, Vendor::query()->count());
+        $this->assertSame(6, Vendor::query()->where('is_active', true)->count());
 
         foreach (Customer::query()->get(['email', 'tin']) as $customer) {
             $this->assertNotFalse(filter_var($customer->email, FILTER_VALIDATE_EMAIL));
-            $this->assertStringEndsWith('.ogami-demo.test', (string) strrchr((string) $customer->email, '@'));
+            $this->assertStringEndsWith('@gmail.com', (string) $customer->email);
             $this->assertNull($customer->tin);
         }
         foreach (Vendor::query()->get(['email', 'tin']) as $vendor) {
             $this->assertNotFalse(filter_var($vendor->email, FILTER_VALIDATE_EMAIL));
-            $this->assertStringEndsWith('.ogami-demo.test', (string) strrchr((string) $vendor->email, '@'));
+            $this->assertStringEndsWith('@gmail.com', (string) $vendor->email);
             $this->assertNull($vendor->tin);
         }
     }

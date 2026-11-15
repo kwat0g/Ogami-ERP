@@ -65,15 +65,15 @@ class PurchasingReceivingHistoryLayerTest extends TestCase
 
         $runner->run($options);
 
-        $receipts = GoodsReceiptNote::query()->where('remarks', 'like', 'DEMO-RECEIVING:%');
+        $receipts = GoodsReceiptNote::query()->where('remarks', 'like', 'OGI-RECEIVING:%');
         $receiptStatuses = (clone $receipts)->select('status', DB::raw('count(*) as aggregate'))
             ->groupBy('status')->pluck('aggregate', 'status')->all();
         foreach (array_diff(GrnStatus::values(), [GrnStatus::Draft->value]) as $status) {
             $this->assertArrayHasKey($status, $receiptStatuses, "Expected a demo GRN in {$status} status.");
         }
-        $partialAcceptance = (clone $receipts)->where('remarks', 'DEMO-RECEIVING:GRN-PARTIAL-ACCEPT')->firstOrFail();
+        $partialAcceptance = (clone $receipts)->where('remarks', 'OGI-RECEIVING:GRN-PARTIAL-ACCEPT')->firstOrFail();
         $this->assertSame('2026-11-27', $partialAcceptance->received_date->toDateString(), 'The Nov 30 seeded holiday must not be selected as an operating day.');
-        $sentRequestId = PurchaseRequest::query()->where('reason', 'DEMO-PURCHASING:PO-PR:PO-SENT')->value('id');
+        $sentRequestId = PurchaseRequest::query()->where('reason', 'OGI-PURCHASING:PO-PR:PO-SENT')->value('id');
         $sentPoIds = PurchaseOrder::query()->where('purchase_request_id', $sentRequestId)->select('id');
         $this->assertTrue(DB::table('goods_receipt_notes')->whereIn('purchase_order_id', $sentPoIds)->where('status', GrnStatus::Draft->value)->exists());
 
@@ -98,7 +98,7 @@ class PurchasingReceivingHistoryLayerTest extends TestCase
     /** @return array<string, array<int, array<string, mixed>>> */
     private function fingerprint(): array
     {
-        $receiptIds = GoodsReceiptNote::query()->where('remarks', 'like', 'DEMO-RECEIVING:%')->select('id');
+        $receiptIds = GoodsReceiptNote::query()->where('remarks', 'like', 'OGI-RECEIVING:%')->select('id');
 
         return [
             'receipts' => DB::table('goods_receipt_notes')->whereIn('id', $receiptIds)->orderBy('id')->get()->map(static fn ($row): array => (array) $row)->all(),

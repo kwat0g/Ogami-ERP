@@ -17,12 +17,17 @@ class WarehouseMapResource extends JsonResource
             'code' => $this->code,
             'name' => $this->name,
             'address' => $this->address,
+            'is_active' => (bool) $this->is_active,
             'zones' => $this->whenLoaded('zones', fn () => $this->zones->map(fn ($zone) => [
                 'id' => $zone->hash_id,
                 'code' => $zone->code,
                 'name' => $zone->name,
                 'zone_type' => $zone->zone_type?->value,
                 'type_label' => $zone->zone_type?->label(),
+                'capacity_kg' => $zone->capacity_kg,
+                'capacity_status' => $zone->capacity_status,
+                'capacity_used_kg' => $zone->capacity_used_kg ?? '0.000000000',
+                'capacity_untracked_line_count' => $zone->capacity_untracked_line_count ?? 0,
                 'locations' => $zone->relationLoaded('locations')
                     ? $zone->locations->map(fn ($loc) => [
                         'id' => $loc->hash_id,
@@ -30,9 +35,14 @@ class WarehouseMapResource extends JsonResource
                         'full_code' => $loc->full_code,
                         'rack' => $loc->rack,
                         'bin' => $loc->bin,
+                        'is_active' => $loc->is_active,
                         'is_blocked' => $loc->is_blocked,
                         'blocked_reason' => $loc->blocked_reason,
                         'capacity_kg' => $loc->capacity_kg,
+                        'capacity_status' => $loc->capacity_status,
+                        'capacity_used_kg' => $loc->capacity_used_kg ?? '0.000000000',
+                        'capacity_untracked_line_count' => $loc->capacity_untracked_line_count ?? 0,
+                        'capacity_untracked_items' => $loc->capacity_untracked_items ?? [],
                         'current_item' => $this->summary($loc)['current_item'] ? [
                             'id' => $this->summary($loc)['current_item']->hash_id,
                             'code' => $this->summary($loc)['current_item']->code,
@@ -58,16 +68,19 @@ class WarehouseMapResource extends JsonResource
         if ($loc->is_blocked) {
             return 'blocked';
         }
-        $qty = (float) $this->getStockQuantity($loc);
-        if ($qty <= 0) {
+        $quantity = (float) $this->getStockQuantity($loc);
+        if ($quantity <= 0) {
             return 'empty';
         }
-        $inKilograms = strtolower((string) ($this->summary($loc)['current_item']?->unit_of_measure ?? '')) === 'kg';
-        if ($inKilograms && $loc->capacity_kg && $qty < $loc->capacity_kg * 0.2) {
-            return 'low';
-        }
-        if ($inKilograms && $loc->capacity_kg && $qty >= $loc->capacity_kg * 0.9) {
-            return 'full';
+        if ($loc->capacity_kg) {
+            $capacityKg = (float) $loc->capacity_kg;
+            $occupiedKg = (float) ($loc->capacity_used_kg ?? 0);
+            if ($occupiedKg > 0 && $occupiedKg < $capacityKg * 0.2) {
+                return 'low';
+            }
+            if ($occupiedKg >= $capacityKg * 0.9) {
+                return 'full';
+            }
         }
 
         return 'ok';

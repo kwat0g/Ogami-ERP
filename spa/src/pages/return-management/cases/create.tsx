@@ -44,6 +44,7 @@ type LineDraft = {
   expected: string;
   received: string;
   defective: string;
+  missing: string;
   lot: string;
   serial: string;
   reason: string;
@@ -72,6 +73,15 @@ function calcGood(received: string, defective: string): string {
   if (receivedValue === null || defectiveValue === null || defectiveValue > receivedValue)
     return '—';
   return fromMilli(receivedValue - defectiveValue);
+}
+
+function calcUndamaged(expected: string, missing: string, defective: string): string {
+  const expectedValue = toMilli(expected);
+  const missingValue = toMilli(missing);
+  const defectiveValue = toMilli(defective);
+  if (expectedValue === null || missingValue === null || defectiveValue === null) return '—';
+  const undamaged = expectedValue - missingValue - defectiveValue;
+  return undamaged < 0n ? '—' : fromMilli(undamaged);
 }
 
 export default function ReturnCaseCreatePage() {
@@ -162,6 +172,7 @@ export default function ReturnCaseCreatePage() {
             expected: line.expected_quantity,
             received: line.received_quantity,
             defective: '0',
+            missing: calcShortage(line.expected_quantity, line.received_quantity),
             lot: line.lot_number ?? '',
             serial: '',
             reason: '',
@@ -181,7 +192,7 @@ export default function ReturnCaseCreatePage() {
   );
   const selectedHasIssue = affectedLines.some((line) => {
     const draft = drafts[line.id];
-    const shortage = calcShortage(draft.expected, draft.received);
+    const shortage = realm === 'customer' ? draft.missing : calcShortage(draft.expected, draft.received);
     return shortage !== '0.000' || (toMilli(draft.defective) ?? 0n) > 0n;
   });
 
@@ -191,7 +202,10 @@ export default function ReturnCaseCreatePage() {
     const received = toMilli(draft.received);
     const defective = toMilli(draft.defective);
     const pieces = realm === 'customer' && ['pcs', 'pc', 'pieces'].includes((line.unit ?? '').toLowerCase());
-    for (const field of ['expected', 'received', 'defective'] as const) {
+    const quantityFields = realm === 'customer'
+      ? ['expected', 'missing', 'defective'] as const
+      : ['expected', 'received', 'defective'] as const;
+    for (const field of quantityFields) {
       const raw = draft[field];
       const value = toMilli(raw);
       if (!/^\d{1,9}(?:\.\d{1,3})?$/.test(raw) || value === null) {
@@ -204,6 +218,13 @@ export default function ReturnCaseCreatePage() {
       errors[`${line.id}.expected`] = `Maximum ${line.maximum_quantity} ${line.unit ?? ''}.`;
     } else if (type === 'customer' && expected !== toMilli(line.expected_quantity)) {
       errors[`${line.id}.expected`] = 'Expected quantity changed. Refresh the source record.';
+    }
+    if (realm === 'customer') {
+      const missing = toMilli(draft.missing);
+      if (expected !== null && missing !== null && defective !== null && missing + defective > expected) {
+        errors[`${line.id}.missing`] = 'Missing and damaged quantities cannot exceed expected quantity.';
+      }
+      return errors;
     }
     if (received !== null && expected !== null && received > expected) {
       errors[`${line.id}.received`] = 'Received quantity cannot exceed expected quantity.';
@@ -256,7 +277,13 @@ export default function ReturnCaseCreatePage() {
 
   const patchLine = (line: ReturnCaseSourceLineOption, patch: Partial<LineDraft>) => {
     if (submitting.current) return;
-    setDrafts((current) => ({ ...current, [line.id]: { ...current[line.id], ...patch } }));
+    setDrafts((current) => {
+      const nextDraft = { ...current[line.id], ...patch };
+      if (realm === 'customer' && ('missing' in patch || 'defective' in patch)) {
+        nextDraft.received = calcUndamaged(nextDraft.expected, nextDraft.missing, nextDraft.defective);
+      }
+      return { ...current, [line.id]: nextDraft };
+    });
     setClientErrors((current) => {
       const next = { ...current };
       delete next[`${line.id}.expected`];
@@ -269,7 +296,9 @@ export default function ReturnCaseCreatePage() {
 
   const addFiles = (event: ChangeEvent<HTMLInputElement>) => {
     const selected = Array.from(event.target.files ?? []).filter((file) => {
-      const error = evidenceFileError(file);
+      const error = evidenceFileError(file) ?? (realm === 'customer' && !/\.(jpe?g|png|webp)$/i.test(file.name)
+        ? `${file.name}: choose a JPG, PNG or WebP photo.`
+        : null);
       if (error) toast.error(error);
       return !error;
     });
@@ -285,6 +314,7 @@ export default function ReturnCaseCreatePage() {
     if (!selectedSource || !sourceQuery.data) errors.source = 'Choose a source document first.';
     if (description.trim().length === 0) errors.description = 'Describe what happened.';
     if (description.trim().length > 2000) errors.description = 'Use 2,000 characters or fewer.';
+    if (realm === 'customer' && files.length === 0) errors.evidence = 'Add a photo before submitting.';
     if (!selectedHasIssue)
       errors.lines = 'Select at least one quantity problem or damaged quantity.';
 
@@ -293,6 +323,7 @@ export default function ReturnCaseCreatePage() {
       const expected = toMilli(draft.expected);
       const received = toMilli(draft.received);
       const defective = toMilli(draft.defective);
+      const missing = realm === 'customer' ? toMilli(draft.missing) : null;
       if (
         expected === null ||
         expected <= 0n ||
@@ -301,12 +332,21 @@ export default function ReturnCaseCreatePage() {
         errors[`${line.id}.expected`] =
           `Enter a positive quantity up to ${line.maximum_quantity} ${line.unit ?? ''}.`;
       }
-      if (received === null || received > (expected ?? 0n)) {
-        errors[`${line.id}.received`] =
-          'Received quantity must be zero or more and cannot exceed expected.';
-      }
-      if (defective === null || defective > (received ?? 0n)) {
-        errors[`${line.id}.defective`] = 'Damaged quantity must be part of what arrived.';
+      let submittedReceived: bigint | null = received;
+      if (realm === 'customer') {
+        if (missing === null || defective === null || missing + defective > (expected ?? 0n)) {
+          errors[`${line.id}.missing`] = errors[`${line.id}.missing`] ?? 'Missing and damaged quantities cannot exceed expected.';
+        } else {
+          submittedReceived = expected! - missing;
+        }
+        if (missing === 0n && defective === 0n) errors[`${line.id}.missing`] = 'Enter a missing or damaged quantity for this line.';
+      } else {
+        if (received === null || received > (expected ?? 0n)) {
+          errors[`${line.id}.received`] = 'Received quantity must be zero or more and cannot exceed expected.';
+        }
+        if (defective === null || defective > (received ?? 0n)) {
+          errors[`${line.id}.defective`] = 'Damaged quantity must be part of what arrived.';
+        }
       }
       if (
         expected === null ||
@@ -314,18 +354,13 @@ export default function ReturnCaseCreatePage() {
         defective === null ||
         errors[`${line.id}.expected`] ||
         errors[`${line.id}.received`] ||
-        errors[`${line.id}.defective`]
-      ) {
-        continue;
-      }
-      if (expected <= received && defective === 0n) {
-        errors[`${line.id}.defective`] = 'Enter a shortage or damaged quantity for this line.';
-        continue;
-      }
+        errors[`${line.id}.defective`] ||
+        errors[`${line.id}.missing`]
+      ) continue;
       prepared.push({
         source_line_id: line.id,
         ...(type === 'supplier' ? { expected_quantity: fromMilli(expected) } : {}),
-        received_quantity: fromMilli(received),
+        received_quantity: fromMilli(submittedReceived!),
         defective_quantity: fromMilli(defective),
         lot_number: draft.lot.trim() || undefined,
         serial_number: draft.serial.trim() || undefined,
@@ -505,7 +540,9 @@ export default function ReturnCaseCreatePage() {
                 <p className="mb-4 text-sm text-secondary">
                   {reportOnly
                     ? 'Select the short line. Supplier dispatch is prefilled when available; confirm what was expected before submitting to Purchasing.'
-                    : 'Select each affected line. Missing quantity is calculated from what was expected and what arrived; damaged goods are counted among received goods.'}
+                    : realm === 'customer'
+                      ? 'Select each affected line. Enter missing and damaged quantities; undamaged goods received are calculated automatically.'
+                      : 'Select each affected line. Missing quantity is calculated from what was expected and what arrived; damaged goods are counted among received goods.'}
                 </p>
                 {sourceLines.length === 0 && (
                   <p className="text-sm text-muted">This source has no reportable lines.</p>
@@ -517,13 +554,14 @@ export default function ReturnCaseCreatePage() {
                       expected: line.expected_quantity,
                       received: line.received_quantity,
                       defective: '0',
+                      missing: calcShortage(line.expected_quantity, line.received_quantity),
                       lot: line.lot_number ?? '',
                       serial: '',
                       reason: '',
                     };
                     const invalid = Object.keys(lineErrors(line, draft)).length > 0;
-                    const shortage = invalid ? '—' : calcShortage(draft.expected, draft.received);
-                    const good = invalid ? '—' : calcGood(draft.received, draft.defective);
+                    const shortage = invalid ? '—' : realm === 'customer' ? draft.missing : calcShortage(draft.expected, draft.received);
+                    const good = invalid ? '—' : realm === 'customer' ? draft.received : calcGood(draft.received, draft.defective);
                     const isPoSource = sourceQuery.data.source.kind === 'purchase_order';
                     const receivedEditable = sourceQuery.data.type === 'customer';
                     const expectedEditable = sourceQuery.data.type === 'supplier' && !reportOnly;
@@ -592,61 +630,87 @@ export default function ReturnCaseCreatePage() {
                                   serverLineError('expected_quantity')
                                 }
                               />
-                              <Input
-                                label="Actually received"
-                                type="text"
-                                inputMode="decimal"
-                                maxLength={13}
-                                value={draft.received}
-                                readOnly={!receivedEditable}
-                                helper={receivedEditable ? `Maximum ${draft.expected} ${line.unit ?? ''}.` : 'From the source receipt.'}
-                                disabled={createMutation.isPending}
-                                onChange={(event) =>
-                                  receivedEditable && patchLine(line, { received: event.target.value })
-                                }
-                                suffix={line.unit ?? undefined}
-                                error={
-                                  liveErrors[`${line.id}.received`] || clientErrors[`${line.id}.received`] ||
-                                  serverLineError('received_quantity')
-                                }
-                              />
-                              {!reportOnly && (
-                                <Input
-                                  label="Damaged or defective"
-                                  type="text"
-                                  inputMode="decimal"
-                                  maxLength={13}
-                                  value={draft.defective}
-                                  helper={`Maximum ${draft.received || '0'} ${line.unit ?? ''} received.`}
-                                  disabled={createMutation.isPending || (!receivedEditable && isPoSource)}
-                                  onChange={(event) =>
-                                    patchLine(line, { defective: event.target.value })
-                                  }
-                                  suffix={line.unit ?? undefined}
-                                  error={
-                                    liveErrors[`${line.id}.defective`] || clientErrors[`${line.id}.defective`] ||
-                                    serverLineError('defective_quantity')
-                                  }
-                                />
-                              )}
-                              <div
-                                className={`grid ${reportOnly ? 'grid-cols-1' : 'grid-cols-2'} gap-2 rounded-md bg-subtle px-3 py-2`}
-                              >
-                                <div>
-                                  <span className="block text-2xs text-muted">Missing</span>
-                                  <span className="font-mono text-sm tabular-nums text-primary">
-                                    {shortage} {line.unit}
-                                  </span>
-                                </div>
-                                {!reportOnly && (
-                                  <div>
-                                    <span className="block text-2xs text-muted">Good</span>
-                                    <span className="font-mono text-sm tabular-nums text-primary">
-                                      {good} {line.unit}
-                                    </span>
+                              {realm === 'customer' ? (
+                                <>
+                                  <Input
+                                    label="Damaged or defective"
+                                    type="text"
+                                    inputMode="decimal"
+                                    maxLength={13}
+                                    value={draft.defective}
+                                    helper="Enter damaged units; undamaged received updates automatically."
+                                    disabled={createMutation.isPending}
+                                    onChange={(event) => patchLine(line, { defective: event.target.value })}
+                                    suffix={line.unit ?? undefined}
+                                    error={liveErrors[`${line.id}.defective`] || clientErrors[`${line.id}.defective`]}
+                                  />
+                                  <Input
+                                    label="Missing"
+                                    type="text"
+                                    inputMode="decimal"
+                                    maxLength={13}
+                                    value={draft.missing}
+                                    helper="Enter units that did not arrive."
+                                    disabled={createMutation.isPending}
+                                    onChange={(event) => patchLine(line, { missing: event.target.value })}
+                                    suffix={line.unit ?? undefined}
+                                    error={liveErrors[`${line.id}.missing`] || clientErrors[`${line.id}.missing`]}
+                                  />
+                                  <Input
+                                    label="Actually received"
+                                    type="text"
+                                    inputMode="decimal"
+                                    maxLength={13}
+                                    value={draft.received}
+                                    readOnly
+                                    helper="Calculated from expected, missing, and damaged quantities."
+                                    disabled={createMutation.isPending}
+                                    suffix={line.unit ?? undefined}
+                                  />
+                                </>
+                              ) : (
+                                <>
+                                  <Input
+                                    label="Actually received"
+                                    type="text"
+                                    inputMode="decimal"
+                                    maxLength={13}
+                                    value={draft.received}
+                                    readOnly={!receivedEditable}
+                                    helper={receivedEditable ? `Maximum ${draft.expected} ${line.unit ?? ''}.` : 'From the source receipt.'}
+                                    disabled={createMutation.isPending}
+                                    onChange={(event) => receivedEditable && patchLine(line, { received: event.target.value })}
+                                    suffix={line.unit ?? undefined}
+                                    error={liveErrors[`${line.id}.received`] || clientErrors[`${line.id}.received`] || serverLineError('received_quantity')}
+                                  />
+                                  {!reportOnly && (
+                                    <Input
+                                      label="Damaged or defective"
+                                      type="text"
+                                      inputMode="decimal"
+                                      maxLength={13}
+                                      value={draft.defective}
+                                      helper={`Maximum ${draft.received || '0'} ${line.unit ?? ''} received.`}
+                                      disabled={createMutation.isPending || (!receivedEditable && isPoSource)}
+                                      onChange={(event) => patchLine(line, { defective: event.target.value })}
+                                      suffix={line.unit ?? undefined}
+                                      error={liveErrors[`${line.id}.defective`] || clientErrors[`${line.id}.defective`] || serverLineError('defective_quantity')}
+                                    />
+                                  )}
+                                  <div className={`grid ${reportOnly ? 'grid-cols-1' : 'grid-cols-2'} gap-2 rounded-md bg-subtle px-3 py-2`}>
+                                    <div>
+                                      <span className="block text-2xs text-muted">Missing</span>
+                                      <span className="font-mono text-sm tabular-nums text-primary">{shortage} {line.unit}</span>
+                                    </div>
+                                    {!reportOnly && (
+                                      <div>
+                                        <span className="block text-2xs text-muted">Good</span>
+                                        <span className="font-mono text-sm tabular-nums text-primary">{good} {line.unit}</span>
+                                      </div>
+                                    )}
                                   </div>
-                                )}
-                              </div>
+                                </>
+                              )}
                             </div>
                             {sourceQuery.data.type === 'supplier' &&
                               sourceQuery.data.source.kind === 'purchase_order' && (
@@ -672,6 +736,7 @@ export default function ReturnCaseCreatePage() {
                                 <Input
                                   label="Serial number"
                                   value={draft.serial}
+                                  helper="If the item has a serial number, enter the number on its label. Leave blank if none is shown."
                                   onChange={(event) =>
                                     patchLine(line, { serial: event.target.value })
                                   }
@@ -739,19 +804,22 @@ export default function ReturnCaseCreatePage() {
                     <label className="flex min-h-9 cursor-pointer items-center gap-2 rounded-md border border-default px-3 text-sm text-primary hover:bg-elevated focus-within:ring-2 focus-within:ring-accent">
                       <LuFileText size={16} className="text-muted" />
                       <span>
-                        Add photos or documents <span className="text-muted">(optional)</span>
+                        {realm === 'customer' ? 'Add a photo *' : 'Add photos or documents'}
+                        {realm !== 'customer' && <span className="text-muted"> (optional)</span>}
                       </span>
                       <input
                         type="file"
-                        accept=".jpg,.jpeg,.png,.webp,.pdf"
+                        accept={realm === 'customer' ? '.jpg,.jpeg,.png,.webp' : '.jpg,.jpeg,.png,.webp,.pdf'}
                         multiple
                         className="sr-only"
+                        aria-required={realm === 'customer'}
                         onChange={addFiles}
                       />
                     </label>
                     <p className="mt-1 text-xs text-muted">
-                      JPG, PNG, WebP or PDF, up to 10 MB each.
+                      {realm === 'customer' ? 'Required. JPG, PNG or WebP, up to 10 MB each.' : 'JPG, PNG, WebP or PDF, up to 10 MB each.'}
                     </p>
+                    {clientErrors.evidence && <p role="alert" className="mt-1 text-xs text-danger-fg">{clientErrors.evidence}</p>}
                     {files.length > 0 && (
                       <ul className="mt-2 space-y-1 text-xs text-secondary">
                         {files.map((file, index) => (
@@ -825,7 +893,7 @@ export default function ReturnCaseCreatePage() {
                     {affectedLines.map((line) => {
                       const draft = drafts[line.id];
                       const invalid = Object.keys(lineErrors(line, draft)).length > 0;
-                      const missing = invalid ? '—' : calcShortage(draft.expected, draft.received);
+                      const missing = invalid ? '—' : realm === 'customer' ? draft.missing : calcShortage(draft.expected, draft.received);
                       return (
                         <p key={line.id} className={`mt-2 text-xs ${invalid ? 'text-danger-fg' : 'text-secondary'}`}>
                           {invalid ? 'Fix quantities: ' : ''}{line.part_number ?? line.description}: {missing} missing
@@ -855,7 +923,7 @@ export default function ReturnCaseCreatePage() {
                 size="touch"
                 icon={<LuCheck size={16} />}
                 loading={createMutation.isPending}
-                disabled={!selectedSource || !sourceQuery.data || sourceQuery.isError || sourceQuery.isFetching || !canCreate || !selectedHasIssue || !description.trim() || Object.keys(liveErrors).length > 0}
+                disabled={!selectedSource || !sourceQuery.data || sourceQuery.isError || sourceQuery.isFetching || !canCreate || !selectedHasIssue || !description.trim() || (realm === 'customer' && files.length === 0) || Object.keys(liveErrors).length > 0}
                 onClick={validateAndSubmit}
               >
                 Submit report

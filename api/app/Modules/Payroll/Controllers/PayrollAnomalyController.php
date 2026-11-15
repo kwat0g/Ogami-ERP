@@ -8,6 +8,7 @@ use App\Modules\Payroll\Models\PayrollAnomalyFlag;
 use App\Modules\Payroll\Models\PayrollPeriod;
 use App\Modules\Payroll\Resources\PayrollAnomalyFlagResource;
 use App\Modules\Payroll\Services\PayrollAnomalyService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 
@@ -37,9 +38,24 @@ class PayrollAnomalyController
     public function resolve(PayrollAnomalyFlag $flag, Request $request): PayrollAnomalyFlagResource
     {
         $request->validate([
-            'remarks' => ['required', 'string', 'min:3', 'max:1000'],
+            'remarks' => ['required', 'string', 'min:3', 'max:1000', 'not_regex:/^\s*$/u'],
         ]);
-        $flag = $this->service->resolve($flag, (int) $request->user()->id, (string) $request->input('remarks'));
+        $flag = $this->service->resolve($flag, (int) $request->user()->id, trim((string) $request->input('remarks')));
         return new PayrollAnomalyFlagResource($flag->load(['resolver', 'employee', 'payroll']));
+    }
+
+    public function resolveAll(PayrollPeriod $period, Request $request): JsonResponse
+    {
+        $request->validate([
+            'remarks' => ['required', 'string', 'min:3', 'max:1000', 'not_regex:/^\s*$/u'],
+        ]);
+
+        $resolvedCount = $this->service->resolveAll(
+            $period,
+            (int) $request->user()->id,
+            trim((string) $request->input('remarks')),
+        );
+
+        return response()->json(['data' => ['resolved_count' => $resolvedCount]]);
     }
 }

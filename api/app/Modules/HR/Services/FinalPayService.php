@@ -25,11 +25,14 @@ use App\Modules\Loans\Services\LoanService;
 use App\Modules\Payroll\Enums\PayrollPeriodStatus;
 use App\Modules\Payroll\Models\Payroll;
 use App\Modules\Payroll\Models\PayrollPeriod;
+use App\Modules\Payroll\Models\PayrollLoanRecoveryAllocation;
+use App\Modules\Payroll\Services\DeductionAllocationService;
 use App\Modules\Payroll\Services\EmploymentProrationService;
 use App\Modules\Payroll\Support\EmployedDayFraction;
 use Carbon\CarbonInterface;
 use Closure;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Throwable;
 
 /**
@@ -51,6 +54,7 @@ class FinalPayService
         private readonly AccountingAccountPolicyService $accountPolicies,
         private readonly SettingsService $settings,
         private readonly EmploymentProrationService $proration,
+        private readonly DeductionAllocationService $deductionAllocator,
     ) {}
 
     public function compute(Clearance $clearance, ?User $by = null): Clearance
@@ -102,19 +106,26 @@ class FinalPayService
             $less = Money::add($loanBal, $propertyL, $advance);
             $net  = Money::clampMin(Money::sub($plus, $less), Money::zero());
 
-            // LN-02/LN-03 — settle the deducted loan ledger here, at the stage
-            // the separation finalize gate observes. recordPayment reconciles
-            // each loan from its immutable payment ledger, so by finalize the
-            // gate's balance check sees the settled state and the JE's
-            // "Settle outstanding loan from final pay" arm credits what this
-            // payout actually absorbed. Only what this payout can recover is
-            // settled (mirroring postJournalEntry's priority and clamp); any
-            // residue keeps the gate blocking until it is settled manually.
-            $recoverable = Money::lt($plus, $less) ? $plus : $less;
-            $loanPool    = Money::lt($loanBal, $recoverable) ? $loanBal : $recoverable;
-            $advancePool = Money::sub($recoverable, $loanPool);
-            $this->settleLoansForFinalPay($lockedClearance, LoanType::CompanyLoan, $loanPool);
-            $this->settleLoansForFinalPay($lockedClearance, LoanType::CashAdvance, $advancePool);
+            // A recompute cannot settle more than the payout still available
+            // after earlier clearance-linked payments. This prevents a second
+            // compute from consuming the same final-pay earnings again.
+            $alreadyWithheld = $this->finalPaySettlementTotal($lockedClearance->id);
+            if (Money::gt($alreadyWithheld, $plus)) {
+                throw new BusinessRuleException(
+                    'Final pay earnings are now lower than the amount already allocated to loan recovery. Reverse or correct the prior settlement through the approved loan correction path before recomputing.',
+                );
+            }
+            $requestedLoans = Money::add($loanBal, $advance);
+            $targetRecovery = Money::lt($plus, $requestedLoans) ? $plus : $requestedLoans;
+            $additionalCapacity = Money::sub($targetRecovery, $alreadyWithheld);
+            $allocationRunId = (string) Str::uuid();
+            $loanAllocation = $this->allocateAndSettleFinalPayLoans(
+                $lockedClearance,
+                $employee,
+                $additionalCapacity,
+                $allocationRunId,
+            );
+            $actualLoanRecovery = Money::add($alreadyWithheld, $loanAllocation['withheld']);
 
             $breakdown = [
                 'last_salary_pro_rated'           => $lastSalary,
@@ -126,6 +137,10 @@ class FinalPayService
                 'gross_plus'                      => $plus,
                 'gross_less'                      => $less,
                 'net'                             => $net,
+                'loan_recovery_allocation_run_id' => $allocationRunId,
+                'loan_recovery_requested'         => $requestedLoans,
+                'loan_recovery_withheld'          => $actualLoanRecovery,
+                'loan_recovery_deferred'          => Money::sub($requestedLoans, $actualLoanRecovery),
                 'leave_balance_consumed'          => true,
             ];
 
@@ -354,29 +369,66 @@ class FinalPayService
      * compute() before the gate clears (SeparationService tells the operator
      * exactly that).
      */
-    private function settleLoansForFinalPay(Clearance $clearance, LoanType $type, string $pool): void
+    private function allocateAndSettleFinalPayLoans(
+        Clearance $clearance,
+        Employee $employee,
+        string $capacity,
+        string $allocationRunId,
+    ): array
     {
-        $remaining = Money::round2($pool);
-        if (Money::lte($remaining, Money::zero())) {
-            return;
-        }
-
         $loans = EmployeeLoan::query()
-            ->where('employee_id', $clearance->employee_id)
-            ->where('loan_type', $type->value)
-            ->where('status', LoanStatus::Active->value)
+            ->where('employee_id', $employee->id)
+            ->whereIn('loan_type', [LoanType::CompanyLoan->value, LoanType::CashAdvance->value])
+            ->whereIn('status', [LoanStatus::Active->value, LoanStatus::Pending->value])
             ->where('balance', '>', 0)
             ->orderBy('id')
             ->lockForUpdate()
             ->get();
 
+        $requests = $loans
+            ->filter(static fn (EmployeeLoan $loan): bool => $loan->status === LoanStatus::Active)
+            ->map(static fn (EmployeeLoan $loan): array => [
+                'key' => $loan->id,
+                'requested' => Money::round2((string) $loan->balance),
+            ])->values()->all();
+        $allocations = collect($this->deductionAllocator->allocate($capacity, $requests))->keyBy('key');
+        $requestedTotal = Money::zero();
+        $withheldTotal = Money::zero();
+        $deferredTotal = Money::zero();
+
         foreach ($loans as $loan) {
-            if (Money::lte($remaining, Money::zero())) {
-                break;
+            if ($loan->status === LoanStatus::Pending) {
+                $requested = Money::round2((string) $loan->balance);
+                $amount = Money::zero();
+                $deferred = $requested;
+                $deferredReason = 'loan_not_active';
+            } else {
+                $allocation = $allocations->get($loan->id);
+                if (! $allocation) {
+                    continue;
+                }
+                $requested = $allocation['requested'];
+                $amount = $allocation['withheld'];
+                $deferred = $allocation['deferred'];
+                $deferredReason = Money::isZero($deferred) ? null : 'insufficient_final_pay';
             }
-            $amount = Money::lt((string) $loan->balance, $remaining)
-                ? Money::round2((string) $loan->balance)
-                : $remaining;
+            $requestedTotal = Money::add($requestedTotal, $requested);
+            $withheldTotal = Money::add($withheldTotal, $amount);
+            $deferredTotal = Money::add($deferredTotal, $deferred);
+
+            PayrollLoanRecoveryAllocation::query()->create([
+                'clearance_id' => $clearance->id,
+                'allocation_run_id' => $allocationRunId,
+                'employee_loan_id' => $loan->id,
+                'requested_amount' => $requested,
+                'withheld_amount' => $amount,
+                'deferred_amount' => $deferred,
+                'deferred_reason' => $deferredReason,
+            ]);
+
+            if (Money::isZero($amount)) {
+                continue;
+            }
 
             app(LoanService::class)->recordPayment(
                 $loan,
@@ -386,9 +438,9 @@ class FinalPayService
                 paymentDate: $clearance->separation_date->toDateString(),
                 clearanceId: $clearance->id,
             );
-
-            $remaining = Money::sub($remaining, $amount);
         }
+
+        return ['requested' => $requestedTotal, 'withheld' => $withheldTotal, 'deferred' => $deferredTotal];
     }
 
     /** Sum this clearance has already settled from final pay, by loan bucket. */
@@ -400,6 +452,14 @@ class FinalPayService
             ->where('lp.payment_type', LoanPaymentType::FinalPay->value)
             ->where('el.loan_type', $loanType)
             ->sum('lp.amount'));
+    }
+
+    private function finalPaySettlementTotal(int $clearanceId): string
+    {
+        return Money::round2((string) DB::table('loan_payments')
+            ->where('clearance_id', $clearanceId)
+            ->where('payment_type', LoanPaymentType::FinalPay->value)
+            ->sum('amount'));
     }
 
     /* ─── Component helpers ─── */

@@ -19,7 +19,7 @@ class OpenAttendanceAnomalyTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_open_rows_raise_an_informational_flag_that_never_counts_as_unresolved(): void
+    public function test_open_rows_raise_a_blocking_flag_until_reviewed(): void
     {
         $employee = Employee::factory()->create();
         $period = PayrollPeriod::factory()->create(['period_start' => '2026-01-01', 'period_end' => '2026-01-15']);
@@ -33,11 +33,8 @@ class OpenAttendanceAnomalyTest extends TestCase
         $flag = PayrollAnomalyFlag::query()->where('payroll_id', $payroll->id)->where('flag_type', PayrollAnomalyType::OpenAttendance->value)->firstOrFail();
         $this->assertSame(['2026-01-05'], $flag->details['dates']);
 
-        // first_payroll is also raised for this brand-new employee and DOES block; the open-attendance flag does not.
-        $total = PayrollAnomalyFlag::query()->where('payroll_period_id', $period->id)->count();
-        $this->assertGreaterThan($svc->unresolvedCount($period->id), $total);
         $this->assertSame(
-            PayrollAnomalyFlag::query()->where('payroll_period_id', $period->id)->where('flag_type', '!=', PayrollAnomalyType::OpenAttendance->value)->where('is_resolved', false)->count(),
+            PayrollAnomalyFlag::query()->where('payroll_period_id', $period->id)->where('is_resolved', false)->count(),
             $svc->unresolvedCount($period->id),
         );
     }

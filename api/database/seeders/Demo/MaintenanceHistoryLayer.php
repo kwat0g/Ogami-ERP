@@ -37,13 +37,13 @@ use RuntimeException;
 /** Seeds service-backed maintenance work history and current repair scenarios. */
 final class MaintenanceHistoryLayer extends DemoSeeder
 {
-    private const COMPLETED_MARKER = '[DEMO-MAINT-HIST:COMPLETED-BREAKDOWN]';
+    private const COMPLETED_MARKER = '[OGI-MAINT-HIST:COMPLETED-BREAKDOWN]';
 
-    private const LIVE_MARKER = '[DEMO-MAINT-HIST:LIVE-BREAKDOWN]';
+    private const LIVE_MARKER = '[OGI-MAINT-HIST:LIVE-BREAKDOWN]';
 
-    private const ASSIGNED_DESCRIPTION = '[DEMO-MAINT-HIST:ASSIGNED] Scheduled mold cooling-circuit inspection.';
+    private const ASSIGNED_DESCRIPTION = '[OGI-MAINT-HIST:ASSIGNED] Scheduled mold cooling-circuit inspection.';
 
-    private const CANCELLED_DESCRIPTION = '[DEMO-MAINT-HIST:CANCELLED] Tooling inspection withdrawn after a revised production window.';
+    private const CANCELLED_DESCRIPTION = '[OGI-MAINT-HIST:CANCELLED] Tooling inspection withdrawn after a revised production window.';
 
     private const COMPLETED_PART_REQUEST = '4a5ef278-4ea1-4b75-9a7e-580a76001101';
 
@@ -76,11 +76,11 @@ final class MaintenanceHistoryLayer extends DemoSeeder
     protected function seedDemoData(DemoSeedContext $context): void
     {
         $asOf = $context->options->asOf->setTimezone('Asia/Manila')->startOfDay();
-        $supervisor = $this->account('maintenance.supervisor@accounts.ogami-demo.test', 'maintenance.wo.assign');
-        $technicianOne = $this->account('maintenance.tech.one@accounts.ogami-demo.test', 'maintenance.wo.complete');
-        $technicianTwo = $this->account('maintenance.tech.two@accounts.ogami-demo.test', 'maintenance.wo.complete');
-        $warehouse = $this->account('warehouse.staff@accounts.ogami-demo.test', 'inventory.issue.create');
-        $productionManager = $this->account('production.manager@accounts.ogami-demo.test', 'maintenance.view');
+        $supervisor = $this->account('fulgencio.aldrin@gmail.com', 'maintenance.wo.assign');
+        $technicianOne = $this->account('alcazar.charissa@gmail.com', 'maintenance.wo.complete');
+        $technicianTwo = $this->account('ambras.abbygail@gmail.com', 'maintenance.wo.complete');
+        $warehouse = $this->account('villanueva.aira@gmail.com', 'inventory.issue.create');
+        $productionManager = $this->account('arsolon.ace@gmail.com', 'maintenance.view');
 
         $historyAt = $this->businessDayBefore($asOf, 42)->setTime(8, 0);
         $cancellationCreatedAt = $this->businessDayBefore($asOf, 16)->setTime(8, 0);
@@ -122,7 +122,7 @@ final class MaintenanceHistoryLayer extends DemoSeeder
         return $context->withoutNotifications(function () use ($context, $at, $supervisor, $technician, $warehouse, $verifier): MaintenanceWorkOrder {
             $order = $this->breakdownOrder(self::COMPLETED_MARKER);
             if (! $order) {
-                $machine = $this->idleMachine($context, $at);
+                $machine = $this->idleMachine($context, $at, avoidReservedCapacity: true);
                 $context->at($at, fn () => $context->asUser($supervisor, fn () => $this->machines->transitionStatus(
                     $machine,
                     MachineStatus::Breakdown,
@@ -147,7 +147,7 @@ final class MaintenanceHistoryLayer extends DemoSeeder
                 $context,
                 $order->fresh(),
                 $technician,
-                'DEMO-MAINT-HIST: replace a failed barrel heater band',
+                'Replace a failed barrel heater band',
                 'Isolated the heater circuit and verified the connector was sound.',
                 'in_progress',
                 $workAt,
@@ -171,7 +171,7 @@ final class MaintenanceHistoryLayer extends DemoSeeder
                 $context,
                 $order->fresh(),
                 $technician,
-                'DEMO-MAINT-HIST: heater-zone functional check passed',
+                'Heater-zone functional check passed',
                 'Replaced the heater band and confirmed stable temperature at operating setpoint.',
                 'passed',
                 $workAt->addMinutes(25),
@@ -359,7 +359,7 @@ final class MaintenanceHistoryLayer extends DemoSeeder
                 $context,
                 $order,
                 $technician,
-                'DEMO-MAINT-HIST: inspect hydraulic return circuit',
+                'Inspect hydraulic return circuit',
                 'Isolated the press and found a return-filter restriction; breakdown repair is awaiting warehouse handover.',
                 'in_progress',
                 $at->addMinutes(20),

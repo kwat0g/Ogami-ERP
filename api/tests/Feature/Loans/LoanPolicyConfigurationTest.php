@@ -34,16 +34,16 @@ class LoanPolicyConfigurationTest extends TestCase
         $employee = Employee::factory()->create(['basic_monthly_salary' => 30000]);
 
         $loan = app(LoanService::class)->request($employee->id, LoanType::CashAdvance, [
-            'principal' => '12000.00',
+            'principal' => '2000.00',
             'pay_periods' => 12,
             'purpose' => 'Configured policy regression',
         ]);
 
         $this->assertSame('0.105000', (string) $loan->interest_rate);
-        $this->assertGreaterThan(1000.0, (float) $loan->monthly_amortization);
-        $this->assertGreaterThan(12000.0, (float) $loan->balance);
-        $this->assertSame(3, $loan->approval_chain_size);
-        $this->assertCount(3, $loan->approvalRecords);
+        $this->assertGreaterThan(100.0, (float) $loan->monthly_amortization);
+        $this->assertGreaterThan(2000.0, (float) $loan->balance);
+        $this->assertSame(2, $loan->approval_chain_size);
+        $this->assertSame(['hr_officer', 'finance_officer'], $loan->approvalRecords->pluck('role_slug')->all());
     }
 
     public function test_types_are_sourced_from_configured_workflows_and_settings(): void
@@ -51,9 +51,16 @@ class LoanPolicyConfigurationTest extends TestCase
         $types = collect(app(LoanService::class)->types())->keyBy('value');
 
         $this->assertSame(['cash_advance', 'company_loan'], $types->keys()->sort()->values()->all());
-        $this->assertSame(3, $types['cash_advance']['approval_steps']);
+        $this->assertSame(2, $types['cash_advance']['approval_steps']);
+        $this->assertSame(['HR Officer', 'Finance Officer'], $types['cash_advance']['approval_chain']);
+        $this->assertSame('500.00', $types['cash_advance']['principal_min']);
+        $this->assertSame('2000.00', $types['cash_advance']['principal_max']);
         $this->assertSame('0', $types['cash_advance']['interest_rate']);
-        $this->assertSame(4, $types['company_loan']['approval_steps']);
+        $this->assertSame(2, $types['company_loan']['approval_steps']);
+        $this->assertSame(['HR Officer', 'Finance Officer'], $types['company_loan']['approval_chain']);
+        $this->assertSame('1000.00', $types['company_loan']['principal_min']);
+        $this->assertSame('5000.00', $types['company_loan']['principal_max']);
+        $this->assertNull($types['company_loan']['vp_approval_threshold']);
     }
 
     public function test_government_loan_types_are_rejected_before_schedule_generation(): void

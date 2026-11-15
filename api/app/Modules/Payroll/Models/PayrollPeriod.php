@@ -56,6 +56,7 @@ class PayrollPeriod extends Model
         'bank_file_status'    => BankFileGenerationStatus::class,
         'gl_handoff_status'   => PayrollGlHandoffStatus::class,
         'anomaly_detection_failed' => 'boolean',
+        'computation_policy_version' => 'string',
         'bank_file_at'        => 'datetime',
         'gl_handoff_at'       => 'datetime',
         'disbursement_status' => 'string',
@@ -85,6 +86,16 @@ class PayrollPeriod extends Model
         return $this->hasMany(PayrollAdjustment::class);
     }
 
+    public function governmentSchedulePins(): HasMany
+    {
+        return $this->hasMany(PayrollGovernmentSchedulePin::class, 'payroll_period_id');
+    }
+
+    public function anomalyEvaluations(): HasMany
+    {
+        return $this->hasMany(PayrollAnomalyEvaluation::class, 'payroll_period_id');
+    }
+
     public function bankFileRecords(): HasMany
     {
         return $this->hasMany(BankFileRecord::class);
@@ -110,9 +121,9 @@ class PayrollPeriod extends Model
         return $this->belongsTo(User::class, 'voided_by');
     }
 
-    // REC-04 — maker-checker attribution. computer() is the HR user who clicked
-    // Compute; approver()/finalizer() are the checker(s) who signed off. These
-    // let the resource surface WHO did each step for the audit trail.
+    // REC-04 — audit attribution. computer() is the HR user who clicked
+    // Compute; approver()/finalizer() record Finance sign-off steps and may
+    // identify the same person in a single-Finance-Officer organization.
     public function computer(): BelongsTo
     {
         return $this->belongsTo(User::class, 'computed_by');

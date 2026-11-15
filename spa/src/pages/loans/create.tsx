@@ -72,6 +72,7 @@ export default function CreateLoanPage() {
  queryFn: loansApi.types,
  });
  const { data: loanTypes = [] } = loanTypesQuery;
+ const selectedLoanType = loanTypes.find((type) => type.value === loanType);
 
  useEffect(() => {
  if (!loanType && loanTypes.length > 0) {
@@ -85,6 +86,12 @@ export default function CreateLoanPage() {
  enabled: !!employeeId && !!loanType,
  });
  const limits = limitsQuery.data;
+ const principalMinimum = limits?.principal_min ?? selectedLoanType?.principal_min;
+ const principalMaximum = limits?.principal_max ?? selectedLoanType?.principal_max;
+ const validPrincipalRange = Boolean(
+  limits && principalMinimum && principalMaximum &&
+  Number(principalMaximum) >= Number(principalMinimum),
+ );
  const lookups = [employeesQuery, loanTypesQuery, ...(employeeId && loanType ? [limitsQuery] : [])];
  const lookupFailed = lookups.some(query => query.isError);
  const lookupPending = lookups.some(query => query.isFetching);
@@ -126,6 +133,22 @@ navigate(`/hr/loans/${loan.id}`);
  });
  const safety = useFormSafety({ form, saved: mutation.isSuccess });
 
+ const submitRequest = (values: FormValues) => {
+  const minimum = limits?.principal_min ?? selectedLoanType?.principal_min;
+  const maximum = limits?.principal_max;
+  if (!limits || !minimum || !maximum || Number(maximum) < Number(minimum) || limits.has_active || lookupFailed || lookupPending) return;
+  const amount = Number(values.principal);
+  if (amount < Number(minimum)) {
+   setError('principal', { type: 'validate', message: `Minimum principal is ${formatPeso(minimum)}.` });
+   return;
+  }
+  if (amount > Number(maximum)) {
+   setError('principal', { type: 'validate', message: `Maximum principal is ${formatPeso(maximum)}.` });
+   return;
+  }
+  mutation.mutate(values);
+ };
+
  return (
  <div>
  <PageHeader title="New loan request" backTo="/hr/loans" backLabel="Loans" />
@@ -135,7 +158,7 @@ navigate(`/hr/loans/${loan.id}`);
  lookups.forEach(query => { if (query.isError) void query.refetch(); });
  }}>Retry options</Button>
  </div>}
- <form onSubmit={handleSubmit((d) => { if (limits && !limits.has_active && !lookupFailed && !lookupPending) mutation.mutate(d); }, onFormInvalid<FormValues>())} className="min-w-0 w-full px-5 py-4 space-y-4">
+ <form onSubmit={handleSubmit(submitRequest, onFormInvalid<FormValues>())} className="min-w-0 w-full px-5 py-4 space-y-4">
  <Panel title="Type & employee">
  <div className="space-y-3">
  <fieldset>
@@ -147,7 +170,7 @@ navigate(`/hr/loans/${loan.id}`);
  <span>
  <span className="block font-medium">{type.label}</span>
  <span className="block text-xs text-muted">
- {type.vp_approval_threshold ? `${type.approval_steps - 1} approvals; VP required at ${formatPeso(type.vp_approval_threshold)} or more` : `${type.approval_steps} approval steps`} · {type.interest_rate_percent ? type.interest_rate_percent + '%' : formatPercent(type.interest_rate)} annual interest
+ {type.approval_chain?.length ? `Approval: ${type.approval_chain.join(' → ')}` : `${type.approval_steps} approval steps`} · {type.interest_rate_percent ? type.interest_rate_percent + '%' : formatPercent(type.interest_rate)} annual interest
  </span>
  </span>
  </label>
@@ -162,7 +185,11 @@ navigate(`/hr/loans/${loan.id}`);
  </Select>
  {limits && (
  <div className="text-xs text-muted">
- Max principal: <span className="font-mono tabular-nums text-primary">{formatPeso(limits.principal_max)}</span>
+ {validPrincipalRange ? (
+  <>Allowed principal: <span className="font-mono tabular-nums text-primary">{formatPeso(principalMinimum!)}–{formatPeso(principalMaximum!)}</span></>
+ ) : (
+  <p role="status" className="text-danger-fg">The employee's salary-based maximum of {formatPeso(limits.principal_max)} is below the minimum of {formatPeso(principalMinimum ?? '0')}. No request can be submitted.</p>
+ )}
  {limits.has_active && <p role="status" className="text-danger-fg mt-1">This employee already has a pending or active loan or cash advance. No new request is allowed until it is closed.</p>}
  </div>
  )}
@@ -171,7 +198,7 @@ navigate(`/hr/loans/${loan.id}`);
 
  <Panel title="Amount & schedule">
  <div className="grid grid-cols-2 gap-3">
- <Input label="Principal" type="number" step="0.01" min="1" max={limits?.principal_max} prefix="₱" required {...register('principal')} error={errors.principal?.message} className="font-mono tabular-nums text-right" placeholder="0.00" />
+ <Input label="Principal" type="number" step="0.01" min={principalMinimum ?? '1'} max={principalMaximum} prefix="₱" required {...register('principal')} error={errors.principal?.message} className="font-mono tabular-nums text-right" placeholder="0.00" helper={principalMinimum && principalMaximum ? `Allowed: ${formatPeso(principalMinimum)}–${formatPeso(principalMaximum)}` : undefined} />
  <Input label="Pay periods" type="number" min={1} max={limits?.max_pay_periods} required {...register('pay_periods')} error={errors.pay_periods?.message} className="font-mono tabular-nums text-right" />
  <Textarea label="Purpose" {...register('purpose')} error={errors.purpose?.message} rows={2} className="col-span-2" maxLength={1000} />
  </div>
@@ -217,7 +244,7 @@ navigate(`/hr/loans/${loan.id}`);
 
  <FormActions>
  <Button type="button" variant="secondary" onClick={() => navigate('/hr/loans')}>Cancel</Button>
- <Button type="submit" variant="primary" disabled={isSubmitting || mutation.isPending || !limits || limits.has_active || lookupFailed || lookupPending} loading={mutation.isPending}>
+ <Button type="submit" variant="primary" disabled={isSubmitting || mutation.isPending || !limits || !validPrincipalRange || limits.has_active || lookupFailed || lookupPending} loading={mutation.isPending}>
  {mutation.isPending ? 'Submitting…' : 'Submit request'}
  </Button>
  </FormActions>

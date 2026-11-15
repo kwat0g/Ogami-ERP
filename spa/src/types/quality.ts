@@ -363,6 +363,8 @@ export interface Ncr {
     sampling_basis?: 'piece' | 'lot' | null;
     accepted_quantity?: number;
     sample_defect_count?: number | null;
+    defective_quantity?: number | string | null;
+    defect_recorder?: { id: string; name: string } | null;
     inspected_quantity?: number | null;
     inspector?: { id: string; name: string } | null;
     stage: string;

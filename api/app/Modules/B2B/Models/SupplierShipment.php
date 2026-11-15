@@ -31,6 +31,10 @@ class SupplierShipment extends Model
         'shipped_date',
         'carrier',
         'tracking_number',
+        'vehicle',
+        'driver_name',
+        'driver_phone',
+        'plate_number',
         'estimated_arrival',
         'notes',
     ];

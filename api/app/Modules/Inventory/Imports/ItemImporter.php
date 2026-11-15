@@ -18,7 +18,7 @@ use RuntimeException;
  * CSV columns: code, name, item_type, unit_of_measure, category,
  *   standard_cost, reorder_point, safety_stock, lead_time_days,
  *   [reorder_method, minimum_order_quantity for purchased item types],
- *   [description], [is_active]. The category is resolved by name and must
+ *   [description], [is_active], [weight_kg_per_unit]. The category is resolved by name and must
  *   carry the same item type as the imported row.
  */
 class ItemImporter implements EntityImporter
@@ -68,11 +68,17 @@ class ItemImporter implements EntityImporter
         $reorderPoint = trim($row['reorder_point'] ?? '');
         $safetyStock = trim($row['safety_stock'] ?? '');
         $minimumOrderQuantity = trim($row['minimum_order_quantity'] ?? '');
+        $weightKgPerUnit = trim($row['weight_kg_per_unit'] ?? '');
         $leadTimeDays = trim($row['lead_time_days'] ?? '');
         $isFinishedGood = $type === ItemType::FinishedGood->value;
 
         if ($stdCost === '' || ! is_numeric($stdCost) || (float) $stdCost < 0) {
             throw new RuntimeException('standard_cost is required and must be non-negative.');
+        }
+        if ($weightKgPerUnit !== '' && (! preg_match('/^\d+(?:\.\d{1,6})?$/', $weightKgPerUnit)
+            || bccomp($weightKgPerUnit, '0', 6) <= 0
+            || bccomp($weightKgPerUnit, '999999.999999', 6) > 0)) {
+            throw new RuntimeException('weight_kg_per_unit must be greater than zero and have no more than 6 decimal places.');
         }
         if ($isFinishedGood) {
             $reorderMethod = ReorderMethod::FixedQuantity->value;
@@ -123,6 +129,7 @@ class ItemImporter implements EntityImporter
             'category_id'     => $category->id,
             'item_type'       => $type,
             'unit_of_measure' => $uom,
+            'weight_kg_per_unit' => $weightKgPerUnit !== '' ? $weightKgPerUnit : null,
             'standard_cost'   => $stdCost,
             'reorder_method'  => $reorderMethod,
             'reorder_point'   => $reorderPoint,

@@ -80,6 +80,9 @@ class NcrService
         $q = NonConformanceReport::query()->with([
             'product:id,part_number,name',
             'inspection:id,inspection_number,stage,status,entity_type,entity_id,work_order_output_id,grn_item_id,batch_quantity,accepted_quantity,sample_defect_count,sample_size,capture_method,inspected_quantity,source_quantity,source_uom_code,sampling_basis,startup_trial_required,counted_capture,inspector_id',
+            'inspection.defectSummary:id,inspection_id,affected_quantity,created_by,updated_by',
+            'inspection.defectSummary.updater:id,name',
+            'inspection.defectSummary.creator:id,name',
             'inspection.trialOutput',
             'inspection.workOrderOutput',
             'inspection.inspector:id,name,role_id',
@@ -127,6 +130,9 @@ class NcrService
         return $ncr->load([
             'product:id,part_number,name',
             'inspection:id,inspection_number,stage,status,product_id,entity_type,entity_id,work_order_output_id,grn_item_id,batch_quantity,accepted_quantity,sample_defect_count,sample_size,capture_method,inspected_quantity,source_quantity,source_uom_code,sampling_basis,startup_trial_required,counted_capture,inspector_id',
+            'inspection.defectSummary:id,inspection_id,affected_quantity,created_by,updated_by',
+            'inspection.defectSummary.updater:id,name',
+            'inspection.defectSummary.creator:id,name',
             'inspection.workOrderOutput',
             'inspection.inspector:id,name,role_id',
             'creator:id,name,role_id',

@@ -43,7 +43,7 @@ const DEFAULT_FILTERS: ItemListParams = {
 // version of this comment conflated them:
 //
 // • LIMIT bounds the request COUNT. Fifty is comfortably inside the
-//   authenticated `api` limiter (300/min — the 60/min figure is the guest
+//   authenticated `api` limiter (1200/min — the 60/min figure is the guest
 //   bucket, `api/config/rate_limits.php`) while leaving room for the refetch and
 //   whatever else the session is doing, and it bounds how long the batch runs.
 // • CONCURRENCY bounds how many are IN FLIGHT, which is not the same thing and

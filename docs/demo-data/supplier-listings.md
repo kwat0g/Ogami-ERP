@@ -4,15 +4,15 @@ The `supplier-listings` layer covers internal supplier-offer review and source q
 
 ## Records and process states
 
-The layer maps each active sourceable item to one, two, or three active suppliers according to scale. It creates one approved current listing per mapped vendor/item pair, a revised offer for Luzon Polymer Resins on RM-001 (the earlier approved revision becomes superseded), a rejected quote for that vendor on RM-003, and a live pending quote for RM-005. Every state in the current `SupplierListingStatus` enum is represented.
+The layer maps resin and colorant items to Inabata Philippines Inc.; metal inserts to Philippine Nakamura and Aikawa Philippines Inc.; and packaging to Aikawa Philippines Inc., Junlec Printing Supply, Tanigawa Seisakusho, and Dyna Pack & Malinta. It creates approved current listings for the mapped sources, a revised Inabata offer on RM-001 (the earlier approved revision becomes superseded), a rejected Inabata quote for RM-003, and a live pending Inabata quote for RM-005. Every state in the current `SupplierListingStatus` enum is represented.
 
 | Scale | Mapped approved offers | Revision history | Rejected | Live pending | Total listings | Approved source rows |
 |---|---:|---:|---:|---:|---:|---:|
-| small | 28 | 1 superseded | 1 | 1 | 31 | 28 |
-| demo | 56 | 1 superseded | 1 | 1 | 59 | 56 |
-| full | 77 | 1 superseded | 1 | 1 | 80 | 77 |
+| small | 22 | 1 superseded | 1 | 1 | 25 | 22 |
+| demo | 37 | 1 superseded | 1 | 1 | 40 | 37 |
+| full | 37 | 1 superseded | 1 | 1 | 40 | 37 |
 
-The current small catalog contains 28 active sourceable items: 9 resins, 3 colorants, 3 metal inserts, 4 packaging items, 3 process consumables, and 6 spare parts. Demo and full counts follow the current candidate supplier map (respectively up to two and three suppliers per item); they do not add new items.
+The current catalog has 9 resins, 3 colorants, 3 metal inserts, 4 packaging items, 3 process consumables, and 6 spare parts. Supplier listings cover 22 material/packaging items: resin, colorant and process-consumable sourcing goes to Inabata; inserts go to Philippine Nakamura and Aikawa; packaging is offered by Aikawa, Junlec, Tanigawa and Dyna Pack. Maintenance spares remain unqualified because none of the six supplier descriptions identify a spare-parts business. The demo/full maps include all six named suppliers.
 
 ## Domain behavior
 
@@ -24,7 +24,7 @@ The seeded source actor is the current internal Purchasing Officer. Supplier por
 
 ## Synthetic quote assumptions
 
-Offer price is calculated from the demo item's standard cost, an order-unit conversion, and a fixed supplier factor. For example, RM-001 has a demo standard cost of PHP 120.00/kg, the quoted bag is 25 kg, and the Luzon Polymer factor is 1.03; the illustrative offer is PHP 3,090.00/bag, which the application stores as PHP 123.60/kg in `ApprovedSupplier.last_price`. Other vendors use fixed factors in the layer source. Packaging and metal-insert conversions follow the layer's explicit item/category mapping; process consumables and spares use a one-base-unit order pack.
+Offer price is calculated from the demo item's standard cost, an order-unit conversion, and a fixed supplier factor. For example, RM-001 has a demo standard cost of PHP 120.00/kg, the quoted bag is 25 kg, and the Inabata factor is 1.03; the illustrative offer is PHP 3,090.00/bag, which the application stores as PHP 123.60/kg in `ApprovedSupplier.last_price`. Other mapped vendors use fixed factors in the layer source. Packaging and metal-insert conversions follow the layer's explicit item/category mapping.
 
 These prices and pack sizes are generated demo assumptions, not supplier quotations or market benchmarks. See [F-021](FINDINGS.md#discovery-findings) and the current item/BOM cost caveats in [F-018](FINDINGS.md#discovery-findings).
 

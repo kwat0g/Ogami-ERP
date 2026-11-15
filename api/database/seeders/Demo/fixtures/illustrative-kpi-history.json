@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "months": 18,
+  "offsets": {
+    "ar_aging_60d": [1.5, 1.2, 0.8, 0.5, 0.0, -0.3, -0.8, -0.4, 0.0, 1.0, 2.0, 5.0, 4.0, 2.5, 1.5, 0.5, 0.0, -0.5],
+    "attendance_rate": [-0.8, -0.5, 0.0, 0.2, 0.1, -0.3, -1.0, -1.5, -2.2, -1.1, 0.0, 0.5, 0.8, 0.5, -0.4, 0.2, 0.7, 1.1],
+    "budget_utilization": [-8.0, -6.0, -5.0, -3.0, -2.0, 0.0, 2.0, 4.0, 8.0, 12.0, 16.0, 10.0, 7.0, 4.0, 0.0, -2.0, 1.0, 4.0],
+    "dppm": [120.0, 80.0, 60.0, 40.0, 0.0, -20.0, -40.0, -60.0, -50.0, 100.0, 250.0, 700.0, 450.0, 200.0, 100.0, 20.0, -30.0, -50.0],
+    "first_pass_yield": [-1.0, -0.8, -0.5, -0.2, 0.0, 0.1, 0.2, 0.0, -0.5, -1.5, -2.5, -2.0, -1.0, -0.5, 0.0, 0.2, 0.3, 0.4],
+    "inventory_turnover": [-1.5, -1.2, -0.8, -0.6, -0.2, 0.1, 0.3, 0.2, -0.4, -1.2, -2.0, -1.5, -1.0, -0.6, -0.2, 0.1, 0.4, 0.5],
+    "ncr_closure_days": [-0.5, 0.0, 0.2, 0.5, 0.0, -0.3, 0.5, 1.0, 1.5, 3.0, 6.0, 4.0, 2.0, 1.0, 0.5, 0.0, -0.2, -0.5],
+    "oee": [-8.0, -7.0, -5.0, -3.0, -2.0, 0.0, 1.0, 2.0, 0.0, -4.0, -8.0, -14.0, -10.0, -7.0, -4.0, -2.0, 1.0, 2.0],
+    "on_time_delivery": [-5.0, -4.0, -3.0, -2.0, 0.0, 1.0, 2.0, 1.0, 0.0, -3.0, -7.0, -10.0, -6.0, -3.0, -1.0, 0.0, 1.0, 2.0],
+    "supplier_quality": [2.0, 1.0, 0.0, -1.0, 1.0, 2.0, 3.0, 2.0, 1.0, 0.0, -8.0, -12.0, -7.0, -3.0, 0.0, 1.0, 2.0, 3.0],
+    "wo_completion_rate": [0.0, 1.0, 2.0, 1.0, 0.0, -2.0, -4.0, -6.0, -8.0, -5.0, -3.0, -1.0, 0.0, 1.0, 2.0, 3.0, 2.0, 1.0]
+  },
+  "anomalies": {
+    "ar_aging_60d": {"11": "Customer payment delay increased receivables over 60 days."},
+    "attendance_rate": {"8": "Attendance weakened during a high-overtime delivery period."},
+    "budget_utilization": {"9": "Unplanned overtime and repair costs raised spending."},
+    "dppm": {"10": "A mold and material quality cluster raised customer defects."},
+    "first_pass_yield": {"10": "The same quality cluster reduced first-pass yield."},
+    "inventory_turnover": {"10": "A resin shortage and production interruption slowed inventory turns."},
+    "ncr_closure_days": {"10": "Linked quality investigations took longer to contain and close."},
+    "oee": {"9": "Repeated machine breakdowns created a three-month downtime cluster."},
+    "on_time_delivery": {"10": "Supplier delays and machine downtime reduced on-time delivery."},
+    "supplier_quality": {"10": "A supplier lot rejection cluster lowered incoming quality performance."},
+    "wo_completion_rate": {"8": "A short capacity window delayed completion of planned work orders."}
+  }
+}

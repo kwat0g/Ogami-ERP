@@ -290,7 +290,7 @@ return Application::configure(basePath: dirname(__DIR__))
 
             return $message === null
                 ? null
-                : response()->json(['message' => $message], $status);
+                : response()->json(['message' => $message], $status, $e->getHeaders());
         });
 
         // The API must not return Laravel's debug exception payload for an
@@ -350,13 +350,20 @@ return Application::configure(basePath: dirname(__DIR__))
 
         RateLimiter::for('api', function (Request $r): Limit {
             $userId = optional($r->user())->getAuthIdentifier();
+            $identity = $userId !== null ? 'user:'.$userId : 'ip:'.$r->ip();
+
+            if ($r->is('api/v1/broadcasting/auth')) {
+                return Limit::perMinute(config('rate_limits.api_realtime_auth_per_minute', 1800))
+                    ->by('realtime:'.$identity);
+            }
+
             if ($userId !== null) {
-                return Limit::perMinute(config('rate_limits.api_authenticated_per_minute', 300))
-                    ->by('user:'.$userId);
+                return Limit::perMinute(config('rate_limits.api_authenticated_per_minute', 1200))
+                    ->by($identity);
             }
 
             return Limit::perMinute(config('rate_limits.api_guest_per_minute', 60))
-                ->by('ip:'.$r->ip());
+                ->by($identity);
         });
 
         RateLimiter::for('sensitive', fn (Request $r) => Limit::perMinute(10)

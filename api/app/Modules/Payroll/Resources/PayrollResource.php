@@ -4,14 +4,12 @@ declare(strict_types=1);
 
 namespace App\Modules\Payroll\Resources;
 
-use App\Modules\Attendance\Enums\AttendanceStatus;
-use App\Modules\Attendance\Models\Attendance;
 use App\Modules\Payroll\Enums\PayrollPeriodStatus;
 use App\Modules\Payroll\Models\Payroll;
 use App\Modules\Payroll\Models\PayrollPeriod;
+use App\Modules\Payroll\Services\PayrollAttendanceSummaryService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
-use Illuminate\Support\Str;
 
 /**
  * @mixin \App\Modules\Payroll\Models\Payroll
@@ -52,7 +50,7 @@ class PayrollResource extends JsonResource
             ];
 
             if ($period instanceof PayrollPeriod) {
-                $attendanceSummary = $this->attendanceSummary($period);
+                $attendanceSummary = app(PayrollAttendanceSummaryService::class)->forPayroll($this->resource);
             }
         }
 
@@ -93,6 +91,7 @@ class PayrollResource extends JsonResource
 
             'sss_ee'          => $this->sss_ee,
             'sss_er'          => $this->sss_er,
+            'sss_ec'          => $this->sss_ec,
             'philhealth_ee'   => $this->philhealth_ee,
             'philhealth_er'   => $this->philhealth_er,
             'pagibig_ee'      => $this->pagibig_ee,
@@ -119,66 +118,4 @@ class PayrollResource extends JsonResource
         ];
     }
 
-    /**
-     * Current recorded DTR details for the payroll cutoff. Missing DTR dates
-     * are deliberately not inferred as absences; only explicit Attendance rows
-     * contribute to these counts.
-     *
-     * @return array{
-     *   dtr_record_count: int,
-     *   present_days: int,
-     *   late_days: int,
-     *   absent_days: int,
-     *   half_days: int,
-     *   leave_days: int,
-     *   holiday_days: int,
-     *   rest_days: int,
-     *   records: array<int, array<string, mixed>>
-     * }
-     */
-    private function attendanceSummary(PayrollPeriod $period): array
-    {
-        $records = Attendance::query()
-            ->where('employee_id', $this->employee_id)
-            ->whereBetween('date', [$period->period_start, $period->period_end])
-            ->orderBy('date')
-            ->get([
-                'date', 'time_in', 'time_out', 'regular_hours', 'overtime_hours',
-                'night_diff_hours', 'tardiness_minutes', 'undertime_minutes', 'status',
-            ]);
-
-        return [
-            'dtr_record_count' => $records->count(),
-            'present_days' => $records->filter(fn (Attendance $attendance): bool =>
-                (float) $attendance->regular_hours > 0
-                && ! in_array($attendance->status, [AttendanceStatus::Absent, AttendanceStatus::OnLeave], true)
-            )->count(),
-            'late_days' => $records->filter(fn (Attendance $attendance): bool =>
-                $attendance->tardiness_minutes > 0 || $attendance->status === AttendanceStatus::Late
-            )->count(),
-            'absent_days' => $records->where('status', AttendanceStatus::Absent)->count(),
-            'half_days' => $records->where('status', AttendanceStatus::Halfday)->count(),
-            'leave_days' => $records->where('status', AttendanceStatus::OnLeave)->count(),
-            'holiday_days' => $records->where('status', AttendanceStatus::Holiday)->count(),
-            'rest_days' => $records->where('status', AttendanceStatus::RestDay)->count(),
-            'records' => $records->map(function (Attendance $attendance): array {
-                $status = $attendance->status instanceof AttendanceStatus
-                    ? $attendance->status->value
-                    : (string) $attendance->status;
-
-                return [
-                    'date' => $attendance->date?->toDateString(),
-                    'status' => $status,
-                    'status_label' => $attendance->status instanceof AttendanceStatus
-                        ? $attendance->status->label()
-                        : Str::headline($status),
-                    'regular_hours' => (string) $attendance->regular_hours,
-                    'overtime_hours' => (string) $attendance->overtime_hours,
-                    'night_diff_hours' => (string) $attendance->night_diff_hours,
-                    'tardiness_minutes' => (int) $attendance->tardiness_minutes,
-                    'undertime_minutes' => (int) $attendance->undertime_minutes,
-                ];
-            })->values()->all(),
-        ];
-    }
 }

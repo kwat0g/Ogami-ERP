@@ -6,12 +6,13 @@ namespace App\Modules\Payroll\Enums;
 
 enum PayrollAnomalyType: string
 {
-    case LargeChange    = 'large_change';
-    case ExcessiveOt    = 'excessive_ot';
-    case HighDeduction  = 'high_deduction';
-    case FirstPayroll   = 'first_payroll';
-    case ZeroPay        = 'zero_pay';
+    case LargeChange = 'large_change';
+    case ExcessiveOt = 'excessive_ot';
+    case HighDeduction = 'high_deduction';
+    case FirstPayroll = 'first_payroll';
+    case ZeroPay = 'zero_pay';
     case OpenAttendance = 'open_attendance';
+    case UnpaidAbsence = 'unpaid_absence';
 
     public static function values(): array
     {
@@ -21,12 +22,13 @@ enum PayrollAnomalyType: string
     public function label(): string
     {
         return match ($this) {
-            self::LargeChange   => 'Large net pay change',
-            self::ExcessiveOt   => 'Excessive overtime',
+            self::LargeChange => 'Large net pay change',
+            self::ExcessiveOt => 'Excessive overtime',
             self::HighDeduction => 'High deduction ratio',
-            self::FirstPayroll  => 'First payroll — verify',
-            self::ZeroPay       => 'Zero net pay',
+            self::FirstPayroll => 'No prior payroll on file — verify',
+            self::ZeroPay => 'Zero net pay',
             self::OpenAttendance => 'Open attendance (no time-out)',
+            self::UnpaidAbsence => 'Unpaid leave without payroll adjustment',
         };
     }
 }

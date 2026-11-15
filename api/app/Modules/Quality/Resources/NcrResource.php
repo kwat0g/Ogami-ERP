@@ -21,6 +21,10 @@ class NcrResource extends JsonResource
 {
     public function toArray(Request $request): array
     {
+        $defectRecorder = $this->inspection?->relationLoaded('defectSummary')
+            ? ($this->inspection->defectSummary?->updater ?? $this->inspection->defectSummary?->creator)
+            : null;
+
         return [
             'historical_held' => (bool) ($this->inspection?->work_order_output_id && $this->inspection?->workOrderOutput?->production_started_at),
             'startup_trial' => (bool) $this->inspection?->startup_trial_required,
@@ -85,6 +89,13 @@ class NcrResource extends JsonResource
                 'sampling_basis' => $this->inspection->sampling_basis,
                 'accepted_quantity' => $this->inspection->accepted_quantity,
                 'sample_defect_count' => $this->inspection->sample_defect_count,
+                'defective_quantity' => $this->inspection->relationLoaded('defectSummary')
+                    ? ($this->inspection->defectSummary?->affected_quantity ?? $this->inspection->sample_defect_count)
+                    : $this->inspection->sample_defect_count,
+                'defect_recorder' => $defectRecorder ? [
+                    'id' => $defectRecorder->hash_id,
+                    'name' => $defectRecorder->name,
+                ] : null,
                 'inspected_quantity' => $this->inspection->inspected_quantity,
                 'inspector' => $this->inspection->relationLoaded('inspector') && $this->inspection->inspector ? [
                     'id' => $this->inspection->inspector->hash_id,

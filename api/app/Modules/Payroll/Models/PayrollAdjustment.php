@@ -8,6 +8,7 @@ use App\Common\Traits\HasAuditLog;
 use App\Common\Traits\HasHashId;
 use App\Modules\Auth\Models\User;
 use App\Modules\HR\Models\Employee;
+use App\Modules\Leave\Models\LeaveRequest;
 use App\Modules\Payroll\Enums\PayrollAdjustmentStatus;
 use App\Modules\Payroll\Enums\PayrollAdjustmentType;
 use Illuminate\Database\Eloquent\Builder;
@@ -17,17 +18,18 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class PayrollAdjustment extends Model
 {
-    use HasFactory, HasHashId, HasAuditLog;
+    use HasAuditLog, HasFactory, HasHashId;
 
     protected $fillable = [
         'payroll_period_id', 'employee_id', 'original_payroll_id',
         'type', 'amount', 'reason', 'created_by',
+        'source_leave_request_id', 'target_payroll_period_id',
     ];
 
     protected $casts = [
-        'type'       => PayrollAdjustmentType::class,
-        'status'     => PayrollAdjustmentStatus::class,
-        'amount'     => 'decimal:2',
+        'type' => PayrollAdjustmentType::class,
+        'status' => PayrollAdjustmentStatus::class,
+        'amount' => 'decimal:2',
         'applied_at' => 'datetime',
     ];
 
@@ -44,6 +46,16 @@ class PayrollAdjustment extends Model
     public function originalPayroll(): BelongsTo
     {
         return $this->belongsTo(Payroll::class, 'original_payroll_id');
+    }
+
+    public function sourceLeaveRequest(): BelongsTo
+    {
+        return $this->belongsTo(LeaveRequest::class, 'source_leave_request_id');
+    }
+
+    public function targetPeriod(): BelongsTo
+    {
+        return $this->belongsTo(PayrollPeriod::class, 'target_payroll_period_id');
     }
 
     public function appliedToPayroll(): BelongsTo

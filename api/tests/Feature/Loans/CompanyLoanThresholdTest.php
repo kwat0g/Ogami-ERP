@@ -29,48 +29,41 @@ class CompanyLoanThresholdTest extends TestCase
         $this->seed([RolePermissionSeeder::class, ChartOfAccountsSeeder::class, WorkflowSeeder::class]);
     }
 
-    public static function amounts(): array
+    public static function loanCases(): array
     {
-        return [['6000.00', false], ['49999.99', false], ['50000.00', true], ['50000.01', true]];
+        return [
+            [LoanType::CompanyLoan->value, '5000.00'],
+            [LoanType::CashAdvance->value, '2000.00'],
+        ];
     }
 
-    #[DataProvider('amounts')]
-    public function test_employee_company_loan_uses_hr_and_requires_vp_only_at_threshold(string $principal, bool $requiresVp): void
+    #[DataProvider('loanCases')]
+    public function test_employee_loan_uses_only_hr_then_finance_approvals(string $loanType, string $principal): void
     {
         $employee = Employee::factory()->create(['basic_monthly_salary' => '100000.00', 'pay_type' => 'monthly']);
         $borrower = User::factory()->withRole('employee')->create(['employee_id' => $employee->id]);
-        $head = User::factory()->withRole('department_head')->create([
-            'employee_id' => Employee::factory()->create(['department_id' => $employee->department_id])->id,
-        ]);
         $response = $this->actingAs($borrower)->postJson('/api/v1/hr/self-service/loans', [
-            'loan_type' => 'company_loan', 'amount' => $principal, 'periods' => 6,
-            'reason' => 'Threshold regression',
+            'loan_type' => $loanType, 'amount' => $principal, 'periods' => 6,
+            'reason' => 'Approval chain regression',
         ])->assertCreated();
         $loan = EmployeeLoan::findOrFail(EmployeeLoan::tryDecodeHash($response->json('data.id')));
         $records = $loan->approvalRecords;
-        $this->assertSame(['department_head', 'hr_officer', 'finance_officer', 'vice_president'], $records->pluck('role_slug')->all());
-        $this->assertSame($requiresVp ? 'pending' : 'skipped', $records->last()->action);
+        $this->assertSame(['hr_officer', 'finance_officer'], $records->pluck('role_slug')->all());
+        $this->assertSame(2, $loan->approval_chain_size);
+        $this->assertSame(['pending', 'pending'], $records->pluck('action')->all());
         $this->assertNull($loan->disbursement_journal_entry_id);
 
         $hr = User::factory()->withRole('hr_officer')->create();
         $finance = User::factory()->withRole('finance_officer')->create();
-        $vp = User::factory()->withRole('vice_president')->create();
-        $manager = User::factory()->withRole('production_manager')->create();
 
-        $this->actingAs($hr)->patchJson("/api/v1/loans/{$loan->hash_id}/approve")->assertForbidden();
-        $this->actingAs($head)->patchJson("/api/v1/loans/{$loan->hash_id}/approve")->assertOk();
-        $this->actingAs($manager)->getJson("/api/v1/loans/{$loan->hash_id}")->assertForbidden();
-        $this->actingAs($manager)->patchJson("/api/v1/loans/{$loan->hash_id}/approve")->assertUnprocessable();
+        $this->actingAs($finance)->patchJson("/api/v1/loans/{$loan->hash_id}/approve")->assertForbidden();
+        $this->assertSame('pending', $records->first()->fresh()->action);
         $this->actingAs($hr)->getJson("/api/v1/loans/{$loan->hash_id}")->assertOk()->assertJsonPath('data.actions.can_approve', true);
         $this->actingAs($hr)->patchJson("/api/v1/loans/{$loan->hash_id}/approve")->assertOk();
         $this->assertSame(LoanStatus::Pending, $loan->fresh()->status);
         $this->assertNull($loan->fresh()->disbursement_journal_entry_id);
         $this->actingAs($finance)->patchJson("/api/v1/loans/{$loan->hash_id}/approve")->assertOk();
-        $this->assertSame($requiresVp ? LoanStatus::Pending : LoanStatus::Active, $loan->fresh()->status);
-        if ($requiresVp) {
-            $this->assertNull($loan->fresh()->disbursement_journal_entry_id);
-            $this->actingAs($vp)->patchJson("/api/v1/loans/{$loan->hash_id}/approve")->assertOk();
-        }
+        $this->assertSame(LoanStatus::Active, $loan->fresh()->status);
         $this->assertTrue(app(ApprovalService::class)->isFullyApproved($loan->fresh()));
         $this->assertNotNull($loan->fresh()->disbursement_journal_entry_id);
         $this->assertSame($principal, (string) $loan->fresh()->balance);
@@ -90,7 +83,7 @@ class CompanyLoanThresholdTest extends TestCase
         $head = User::factory()->withRole('department_head')->create([
             'employee_id' => Employee::factory()->create(['department_id' => $employee->department_id])->id,
         ]);
-        $loan = app(LoanService::class)->request($employee->id, LoanType::CompanyLoan, ['principal' => '6000.00', 'pay_periods' => 6]);
+        $loan = app(LoanService::class)->request($employee->id, LoanType::CompanyLoan, ['principal' => '5000.00', 'pay_periods' => 6]);
         app(LoanService::class)->approve($loan, $head);
         $before = $loan->approvalRecords()->get()->toArray();
         $cashAdvance = WorkflowDefinition::where('workflow_type', 'cash_advance')->firstOrFail()->toArray();
@@ -108,10 +101,17 @@ class CompanyLoanThresholdTest extends TestCase
         $this->assertSame($before, $loan->approvalRecords()->get()->toArray());
     }
 
-    public function test_loan_options_expose_the_configured_vp_threshold(): void
+    public function test_loan_options_expose_the_current_approval_chain_and_amount_limits(): void
     {
         $types = collect(app(LoanService::class)->types())->keyBy('value');
-        $this->assertSame('50000.00', $types['company_loan']['vp_approval_threshold']);
+        $this->assertSame(['HR Officer', 'Finance Officer'], $types['company_loan']['approval_chain']);
+        $this->assertSame('1000.00', $types['company_loan']['principal_min']);
+        $this->assertSame('5000.00', $types['company_loan']['principal_max']);
+        $this->assertSame(2, $types['company_loan']['approval_steps']);
+        $this->assertNull($types['company_loan']['vp_approval_threshold']);
+        $this->assertSame(['HR Officer', 'Finance Officer'], $types['cash_advance']['approval_chain']);
+        $this->assertSame('500.00', $types['cash_advance']['principal_min']);
+        $this->assertSame('2000.00', $types['cash_advance']['principal_max']);
         $this->assertNull($types['cash_advance']['vp_approval_threshold']);
     }
 }

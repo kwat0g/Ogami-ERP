@@ -6,11 +6,15 @@ namespace App\Modules\Payroll\Controllers;
 
 use App\Modules\Payroll\Enums\ContributionAgency;
 use App\Modules\Payroll\Models\GovernmentContributionTable;
+use App\Modules\Payroll\Models\GovernmentScheduleVersion;
 use App\Modules\Payroll\Requests\ImportGovTableRequest;
+use App\Modules\Payroll\Requests\PublishGovScheduleVersionRequest;
 use App\Modules\Payroll\Requests\UpdateGovTableBracketRequest;
+use App\Modules\Payroll\Resources\GovernmentScheduleVersionResource;
 use App\Modules\Payroll\Resources\GovernmentTableResource;
 use App\Modules\Payroll\Services\GovernmentContributionTableImportService;
 use App\Modules\Payroll\Services\GovernmentContributionTableService;
+use App\Modules\Payroll\Services\GovernmentScheduleVersionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -27,6 +31,7 @@ class GovernmentTableController
         ]);
 
         $rows = $this->service->list($request->string('agency')->value());
+
         return GovernmentTableResource::collection($rows);
     }
 
@@ -38,6 +43,38 @@ class GovernmentTableController
                 'label' => $agency->label(),
             ], ContributionAgency::cases()),
         ]]);
+    }
+
+    public function versions(Request $request): AnonymousResourceCollection
+    {
+        $request->validate([
+            'agency' => ['required', Rule::in(ContributionAgency::values())],
+        ]);
+
+        $versions = GovernmentScheduleVersion::query()
+            ->with(['importer:id,name', 'publisher:id,name'])
+            ->where('agency', $request->string('agency')->value())
+            ->orderByDesc('effective_date')
+            ->orderByDesc('version_number')
+            ->get();
+
+        return GovernmentScheduleVersionResource::collection($versions);
+    }
+
+    public function publish(
+        PublishGovScheduleVersionRequest $request,
+        GovernmentScheduleVersion $version,
+        GovernmentScheduleVersionService $publisher,
+    ): JsonResponse {
+        $published = $publisher->publish(
+            $version,
+            $request->user(),
+            (bool) $request->validated('confirm_completeness'),
+        );
+
+        return response()->json([
+            'data' => (new GovernmentScheduleVersionResource($published->load(['importer:id,name', 'publisher:id,name'])))->resolve(),
+        ]);
     }
 
     public function update(UpdateGovTableBracketRequest $request, GovernmentContributionTable $govTable): GovernmentTableResource
@@ -58,12 +95,14 @@ class GovernmentTableController
     public function destroy(GovernmentContributionTable $govTable): JsonResponse
     {
         $this->service->delete($govTable);
+
         return response()->json(null, 204);
     }
 
     public function restore(GovernmentContributionTable $govTable): JsonResponse
     {
         $this->service->restore($govTable);
+
         return response()->json(['message' => 'Government contribution table restored.']);
     }
 
@@ -80,10 +119,21 @@ class GovernmentTableController
             return response()->json(['message' => 'Unknown agency.'], 422);
         }
 
-        $path = $request->file('csv')->getRealPath();
-        $deactivatePrior = (bool) $request->input('deactivate_prior', true);
+        $file = $request->file('csv');
+        $result = $importer->importFromPath(
+            $enum,
+            $file->getRealPath(),
+            $request->validated('source_title'),
+            $request->validated('source_url'),
+            $request->user()?->id,
+            $file->getClientOriginalName(),
+        );
 
-        $result = $importer->importFromPath($enum, $path, $deactivatePrior);
+        if ($result['version_id'] !== null) {
+            $version = GovernmentScheduleVersion::query()->findOrFail($result['version_id']);
+            $result['version'] = (new GovernmentScheduleVersionResource($version->load(['importer:id,name', 'publisher:id,name'])))->resolve();
+            $result['version_id'] = $version->hash_id;
+        }
 
         return response()->json(['data' => $result]);
     }

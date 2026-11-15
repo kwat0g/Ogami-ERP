@@ -165,6 +165,10 @@ export const supplierPortalApi = {
       shipped_date?: string;
       carrier?: string;
       tracking_number?: string;
+      vehicle?: string | null;
+      driver_name?: string | null;
+      driver_phone?: string | null;
+      plate_number?: string | null;
       estimated_arrival?: string;
       notes?: string;
       items?: Array<{ purchase_order_item_id: string; quantity_shipped: string }>;

@@ -6,7 +6,7 @@ export type PayrollGlHandoffStatus = 'not_started' | 'pending' | 'manual_require
 export type BankFileGenerationStatus = 'not_started' | 'pending' | 'manual_required' | 'generated';
 export type DisbursementStatus = 'pending' | 'partially_disbursed' | 'disbursed';
 export type ProofType = 'deposit_slip' | 'bank_confirmation' | 'transfer_receipt' | 'other';
-export type PayrollAdjustmentType = 'underpayment' | 'overpayment';
+export type PayrollAdjustmentType = 'underpayment' | 'overpayment' | 'unpaid_absence';
 export type PayrollAdjustmentStatusValue = 'pending' | 'approved' | 'rejected' | 'applied';
 export type DeductionTypeValue =
  | 'sss' | 'philhealth' | 'pagibig' | 'withholding_tax'
@@ -22,10 +22,37 @@ export interface GovernmentTable {
  bracket_max: string;
  ee_amount: string;
  er_amount: string;
+ ec_amount: string;
  effective_date: string;
  is_active: boolean;
+ schedule_version_id?: string | null;
+ schedule_version_number?: number | null;
+ schedule_version_status?: 'draft' | 'published' | 'superseded' | 'legacy_unverified' | null;
+ schedule_version_source_title?: string | null;
+ is_immutable?: boolean;
  created_at: string;
  updated_at: string;
+}
+
+export interface GovernmentScheduleVersion {
+ id: string;
+ agency: ContributionAgency;
+ agency_label: string;
+ effective_date: string;
+ version_number: number;
+ status: 'draft' | 'published' | 'superseded' | 'legacy_unverified';
+ source_title: string | null;
+ source_url: string | null;
+ source_file_name: string | null;
+ source_file_sha256: string | null;
+ row_count: number;
+ imported_at: string | null;
+ importer?: { id: string; name: string } | null;
+ published_at: string | null;
+ publisher?: { id: string; name: string } | null;
+ completeness_confirmed: boolean;
+ can_publish?: boolean;
+ superseded_at: string | null;
 }
 
 export interface PayrollPeriodSummary {
@@ -59,6 +86,14 @@ export interface PayrollPeriod {
  period_start: string;
  period_end: string;
  payroll_date: string;
+ statutory_schedule_versions?: Array<{
+  agency: ContributionAgency;
+  effective_date: string;
+  version_number: number;
+  status: 'published' | 'superseded' | 'legacy_unverified' | 'draft' | null;
+  source_title: string | null;
+  source_file_sha256: string | null;
+ }> | null;
  is_first_half: boolean;
  is_thirteenth_month: boolean;
  status: PayrollPeriodStatus;
@@ -66,6 +101,14 @@ export interface PayrollPeriod {
  lifecycle_steps?: Array<{ key: string; label: string; state: 'pending' | 'active' | 'done' }>;
  is_locked: boolean;
  permissions?: Record<string, boolean>;
+ computation_evaluation?: {
+  status: 'missing' | 'passed' | 'failed';
+  freshness: 'missing' | 'current' | 'stale' | 'failed' | 'locked_snapshot';
+  finding_count: number;
+  unresolved_finding_count: number;
+  unresolved_now?: number;
+  evaluated_at: string | null;
+ } | null;
  compute_available_on?: string | null;
  available_actions?: {
   compute?: boolean;
@@ -123,7 +166,7 @@ export interface PayrollPeriod {
  voided_at?: string | null;
  void_reason?: string | null;
  voider?: { id: string; name: string } | null;
- /** REC-04 — maker-checker attribution: who computed / approved / finalized. */
+ /** REC-04 — payroll audit attribution: who computed / approved / finalized. */
  approved_at?: string | null;
  finalized_at?: string | null;
  /** Finance can return a computed period to HR with this durable reason. */
@@ -188,7 +231,8 @@ export type PayrollAnomalyType =
  | 'high_deduction'
  | 'first_payroll'
  | 'zero_pay'
- | 'open_attendance';
+ | 'open_attendance'
+ | 'unpaid_absence';
 
 export interface PayrollAnomalyFlag {
  id: string;
@@ -222,6 +266,8 @@ export interface PayrollDeductionDetail {
 
 export interface PayrollAttendanceRecord {
  date: string;
+ time_in?: string | null;
+ time_out?: string | null;
  status: string;
  status_label: string;
  regular_hours: string;
@@ -240,6 +286,11 @@ export interface PayrollAttendanceSummary {
  leave_days: number;
  holiday_days: number;
  rest_days: number;
+ total_regular_hours?: string;
+ total_overtime_hours?: string;
+ total_night_diff_hours?: string;
+ total_tardiness_minutes?: number;
+ total_undertime_minutes?: number;
  records: PayrollAttendanceRecord[];
 }
 
@@ -263,6 +314,7 @@ export interface Payroll {
  gross_pay: string;
  sss_ee: string;
  sss_er: string;
+ sss_ec: string;
  philhealth_ee: string;
  philhealth_er: string;
  pagibig_ee: string;
@@ -293,6 +345,13 @@ export interface PayrollAdjustment {
  period?: { id: string; label: string };
  employee?: { id: string; employee_no: string; full_name: string };
  original_payroll_id?: string;
+ source_leave_request?: {
+  id: string;
+  leave_request_no: string;
+  start_date: string | null;
+  end_date: string | null;
+ } | null;
+ target_period?: { id: string; label: string } | null;
  type: PayrollAdjustmentType;
  type_label: string;
  amount: string;
@@ -361,6 +420,8 @@ export interface CreatePayrollAdjustmentData {
  type: PayrollAdjustmentType;
  amount: string;
  reason: string;
+ source_leave_request_id?: string;
+ target_payroll_period_id?: string;
 }
 
 // Task 9 — Period-over-period variance report

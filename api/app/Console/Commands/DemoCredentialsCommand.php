@@ -14,7 +14,7 @@ class DemoCredentialsCommand extends Command
 {
     protected $signature = 'demo:credentials';
 
-    protected $description = 'List reserved-domain demo accounts and the configured shared demo password.';
+    protected $description = 'List demo accounts and the configured shared demo password.';
 
     public function handle(DemoSeedingGuard $guard): int
     {
@@ -28,7 +28,7 @@ class DemoCredentialsCommand extends Command
         }
 
         if ($accounts === []) {
-            $this->warn('No .test-domain demo accounts were found in this database.');
+            $this->warn('No user or portal accounts were found in this database.');
 
             return self::SUCCESS;
         }
@@ -57,7 +57,7 @@ class DemoCredentialsCommand extends Command
                 ->orderBy('r.slug')
                 ->orderBy('u.id')
                 ->cursor() as $row) {
-                if (is_string($row->email) && str_ends_with(strtolower($row->email), '.test')) {
+                if (is_string($row->email) && $row->email !== '') {
                     $accounts[] = [(string) ($row->role ?? 'unassigned'), (string) $row->name, $row->email];
                 }
             }
@@ -72,7 +72,7 @@ class DemoCredentialsCommand extends Command
             }
 
             foreach (DB::table($table)->select(['name', 'email'])->orderBy('id')->cursor() as $row) {
-                if (is_string($row->email) && str_ends_with(strtolower($row->email), '.test')) {
+                if (is_string($row->email) && $row->email !== '') {
                     $accounts[] = [$role, (string) $row->name, $row->email];
                 }
             }

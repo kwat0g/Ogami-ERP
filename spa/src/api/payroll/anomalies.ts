@@ -15,4 +15,9 @@ export const payrollAnomaliesApi = {
  client
  .patch<{ data: PayrollAnomalyFlag }>(`/payroll-anomalies/${flagId}/resolve`, { remarks })
  .then((r) => r.data.data),
+
+ resolveAll: (periodId: string, remarks: string) =>
+  client
+   .patch<{ data: { resolved_count: number } }>(`/payroll-periods/${periodId}/anomalies/resolve-all`, { remarks })
+   .then((r) => r.data.data),
 };

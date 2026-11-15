@@ -28,7 +28,7 @@ class Item extends Model
 
     protected $fillable = [
         'code', 'name', 'description', 'category_id', 'item_type',
-        'unit_of_measure', 'standard_cost', 'reorder_method',
+        'unit_of_measure', 'weight_kg_per_unit', 'standard_cost', 'reorder_method',
         'reorder_point', 'safety_stock', 'safety_stock_locked',
         'safety_stock_recomputed_at', 'minimum_order_quantity',
         'lead_time_days', 'is_critical', 'is_active', 'abc_class',
@@ -38,6 +38,7 @@ class Item extends Model
         'item_type'                  => ItemType::class,
         'reorder_method'             => ReorderMethod::class,
         'standard_cost'              => 'decimal:4',
+        'weight_kg_per_unit'         => 'decimal:6',
         'reorder_point'              => 'decimal:3',
         'safety_stock'               => 'decimal:3',
         'safety_stock_locked'        => 'boolean',

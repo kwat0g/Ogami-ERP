@@ -1,9 +1,9 @@
 /** Sprint 8 — Task 74 + Sprint P5. Self-service payslips, web table layout. */
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { sameQueryExceptPage } from '@/lib/queryKeys/pageScope';
 import { useQuery } from '@tanstack/react-query';
 import { LuCircleCheck, LuClock } from '@/lib/icons';
-import { downloadAuthenticatedFile } from '@/api/download';
 import { selfServiceApi } from '@/api/self-service';
 import type { PayrollListParams } from '@/api/payroll/payrolls';
 import { PageHeader } from '@/components/layout/PageHeader';
@@ -79,6 +79,7 @@ const columns: Column<Payroll>[] = [
 ];
 
 export default function SelfServicePayslipsPage() {
+ const navigate = useNavigate();
  const [filters, setFilters] = useState<PayrollListParams>({
  page: 1, per_page: 25, sort: 'created_at', direction: 'desc',
  });
@@ -124,12 +125,7 @@ export default function SelfServicePayslipsPage() {
  meta={data.meta}
  onPageChange={(page) => setFilters((f) => ({ ...f, page }))}
  onRowClick={(p) => {
- if (!p.error_message) {
- void downloadAuthenticatedFile(selfServiceApi.payslipUrl(p.id), {
- openInNewTab: true,
- errorMessage: 'Failed to generate the payslip.',
- });
- }
+ if (!p.error_message) navigate(`/self-service/payslips/${p.id}`);
  }}
  />
  </div>

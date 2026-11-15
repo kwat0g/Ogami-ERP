@@ -17,6 +17,7 @@ use App\Common\Support\SearchOperator;
 use App\Common\Support\TrashedFilter;
 use App\Modules\Accounting\Services\BudgetEnforcementService;
 use App\Modules\Auth\Models\User;
+use App\Modules\Inventory\Enums\ItemType;
 use App\Modules\Inventory\Models\Item;
 use App\Modules\Purchasing\Enums\PurchaseOrderStatus;
 use App\Modules\Purchasing\Enums\PurchaseRequestConversionStatus;
@@ -298,6 +299,9 @@ class PurchaseRequestService
             $item = Item::query()->find($itemId);
             if (! $item || ! $item->is_active) {
                 throw ValidationException::withMessages(["items.{$index}.item_id" => ['Select an active inventory item.']]);
+            }
+            if ($item->item_type === ItemType::FinishedGood) {
+                throw ValidationException::withMessages(["items.{$index}.item_id" => ['Finished Goods cannot be requested for purchase.']]);
             }
             try {
                 $item->convertToBase((string) $row['quantity'], trim((string) ($row['unit'] ?? '')) ?: null);

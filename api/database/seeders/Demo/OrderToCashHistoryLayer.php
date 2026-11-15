@@ -21,7 +21,7 @@ use RuntimeException;
 /** Creates one live Sales draft parked before confirmation starts MRP. */
 final class OrderToCashHistoryLayer extends DemoSeeder
 {
-    private const MARKER = 'DEMO-O2C-LIVE:SO-DRAFT-0001';
+    private const MARKER = 'OGI-O2C-LIVE:SO-DRAFT-0001';
 
     public function __construct(private readonly SalesOrderService $salesOrders) {}
 
@@ -169,7 +169,7 @@ final class OrderToCashHistoryLayer extends DemoSeeder
 
     private function salesActor(): User
     {
-        $sales = User::query()->where('email', 'sales.officer@accounts.ogami-demo.test')->first();
+        $sales = User::query()->where('email', 'abiera.shiela@gmail.com')->first();
         if (! $sales instanceof User || ! $sales->is_active
             || ! $sales->hasPermission('crm.sales_orders.create')
             || ! $sales->hasPermission('crm.sales_orders.confirm')

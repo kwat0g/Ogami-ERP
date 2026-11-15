@@ -4,11 +4,12 @@ declare(strict_types=1);
 
 namespace Database\Seeders;
 
-use App\Modules\Payroll\Models\GovernmentContributionTable;
 use Illuminate\Database\Seeder;
 
 /**
- * 2025 PH government contribution schedule (effective 2025-01-01).
+ * 2025 PH government contribution fixture (effective 2025-01-01).
+ * Rows are marked legacy_unverified until an operator imports and publishes
+ * an independently reviewed source schedule.
  *
  * SSS: contribution rate 15% (EE 5% / ER 10% of the Monthly Salary Credit),
  *      MSC ₱5,000–₱35,000 in ₱500 steps. (EC and WISP are employer-side /
@@ -37,30 +38,32 @@ class GovernmentTable2025Seeder extends Seeder
                 $min = 0.00;
             }
             $max = round($msc + 250.00, 2);
-            GovernmentContributionTable::updateOrCreate(
+            GovernmentScheduleSeederSupport::upsertUnversioned(
                 ['agency' => 'sss', 'bracket_min' => $min, 'effective_date' => self::EFFECTIVE],
                 [
                     'bracket_max' => $msc >= 35000.00 ? 999999.99 : $max,
-                    'ee_amount'   => round($msc * 0.05, 2),
-                    'er_amount'   => round($msc * 0.10, 2),
-                    'is_active'   => true,
+                    'ee_amount' => round($msc * 0.05, 2),
+                    'er_amount' => round($msc * 0.10, 2),
+                    'is_active' => true,
                 ],
             );
         }
 
         // ─── PhilHealth 2025 (rate-based single row) ───────────────────────
-        GovernmentContributionTable::updateOrCreate(
+        GovernmentScheduleSeederSupport::upsertUnversioned(
             ['agency' => 'philhealth', 'bracket_min' => 10000.00, 'effective_date' => self::EFFECTIVE],
             ['bracket_max' => 100000.00, 'ee_amount' => 0.0250, 'er_amount' => 0.0250, 'is_active' => true],
         );
 
         // ─── Pag-IBIG 2025 ─────────────────────────────────────────────────
         foreach ([[0.00, 1500.00, 0.0100, 0.0200], [1500.01, 999999.99, 0.0200, 0.0200]] as [$min, $max, $ee, $er]) {
-            GovernmentContributionTable::updateOrCreate(
+            GovernmentScheduleSeederSupport::upsertUnversioned(
                 ['agency' => 'pagibig', 'bracket_min' => $min, 'effective_date' => self::EFFECTIVE],
                 ['bracket_max' => $max, 'ee_amount' => $ee, 'er_amount' => $er, 'is_active' => true],
             );
         }
+
+        GovernmentScheduleSeederSupport::markUnverifiedRows();
 
         $this->command?->info('Government contribution tables seeded for 2025 (SSS/PhilHealth/Pag-IBIG).');
     }

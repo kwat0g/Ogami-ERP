@@ -39,7 +39,7 @@ class LoanWorkflowMigrationTest extends TestCase
         $workflow->update(['steps' => $oldSteps]);
         $employee = Employee::factory()->create(['basic_monthly_salary' => '20000.00']);
         $loan = app(LoanService::class)->request($employee->id, LoanType::CashAdvance, [
-            'principal' => '5000.00',
+            'principal' => '2000.00',
             'pay_periods' => 5,
         ]);
 
@@ -55,5 +55,35 @@ class LoanWorkflowMigrationTest extends TestCase
         $this->assertSame('vice_president', $pendingStep->role_slug);
         $this->assertSame('vice_president', $snapshot['steps'][2]['role']);
         $this->assertSame(hash('sha256', json_encode($snapshot, JSON_THROW_ON_ERROR)), $pendingStep->workflow_version);
+    }
+
+    public function test_new_loan_chain_migration_changes_definitions_but_preserves_submitted_approval_records(): void
+    {
+        $legacySteps = [
+            ['order' => 1, 'role' => 'department_head', 'label' => 'Department Head'],
+            ['order' => 2, 'role' => 'finance_officer', 'label' => 'Finance / Accounting'],
+            ['order' => 3, 'role' => 'vice_president', 'label' => 'VP / Approver'],
+        ];
+        WorkflowDefinition::query()
+            ->whereIn('workflow_type', ['cash_advance', 'company_loan'])
+            ->get()
+            ->each(static fn (WorkflowDefinition $workflow) => $workflow->update(['steps' => $legacySteps]));
+
+        $employee = Employee::factory()->create(['basic_monthly_salary' => '20000.00']);
+        $loan = app(LoanService::class)->request($employee->id, LoanType::CashAdvance, [
+            'principal' => '2000.00',
+            'pay_periods' => 5,
+        ]);
+        $approvalRecordsBefore = $loan->approvalRecords()->get()->toArray();
+
+        $migration = require database_path('migrations/2026_11_14_100000_update_employee_loan_approval_chain.php');
+        $migration->up();
+
+        foreach (['cash_advance', 'company_loan'] as $type) {
+            $workflow = WorkflowDefinition::query()->where('workflow_type', $type)->firstOrFail();
+            $this->assertSame(['hr_officer', 'finance_officer'], collect($workflow->steps)->pluck('role')->all());
+        }
+        $this->assertSame($approvalRecordsBefore, $loan->approvalRecords()->get()->toArray());
+        $this->assertSame('department_head', $loan->approvalRecords()->where('step_order', 1)->value('role_slug'));
     }
 }

@@ -144,6 +144,66 @@ class StockLocationSummaryService
         ];
     }
 
+    /** Total known physical stock weight in kilograms, using gross base-unit weights where configured. */
+    public function occupiedKg(Collection $stockLevels): string
+    {
+        $totalKg = '0.000000000';
+
+        foreach ($stockLevels as $stockLevel) {
+            if (bccomp((string) $stockLevel->quantity, '0', 3) <= 0) {
+                continue;
+            }
+
+            $item = $stockLevel->item;
+            if (strtolower(trim((string) $item?->unit_of_measure)) === 'kg') {
+                $totalKg = bcadd($totalKg, (string) $stockLevel->quantity, 9);
+                continue;
+            }
+
+            $weightPerUnit = $item?->weight_kg_per_unit;
+            if ($weightPerUnit !== null && bccomp((string) $weightPerUnit, '0', 6) > 0) {
+                $totalKg = bcadd($totalKg, bcmul((string) $stockLevel->quantity, (string) $weightPerUnit, 9), 9);
+            }
+        }
+
+        return $totalKg;
+    }
+
+    /** Count stocked item/location rows omitted from kg capacity usage. */
+    public function untrackedCapacityLineCount(Collection $stockLevels): int
+    {
+        return $stockLevels->filter(fn (StockLevel $stockLevel): bool => $this->isUntrackedCapacityLine($stockLevel))->count();
+    }
+
+    /** @return list<array{item_id: ?string, item_code: ?string, item_name: ?string, quantity: string, unit_of_measure: ?string}> */
+    public function untrackedCapacityItems(Collection $stockLevels): array
+    {
+        return $stockLevels
+            ->filter(fn (StockLevel $stockLevel): bool => $this->isUntrackedCapacityLine($stockLevel))
+            ->map(fn (StockLevel $stockLevel): array => [
+                'item_id' => $stockLevel->item?->hash_id,
+                'item_code' => $stockLevel->item?->code,
+                'item_name' => $stockLevel->item?->name,
+                'quantity' => (string) $stockLevel->quantity,
+                'unit_of_measure' => $stockLevel->item?->unit_of_measure,
+            ])->values()->all();
+    }
+
+    private function isUntrackedCapacityLine(StockLevel $stockLevel): bool
+    {
+        if (bccomp((string) $stockLevel->quantity, '0', 3) <= 0) {
+            return false;
+        }
+
+        $item = $stockLevel->item;
+        if (strtolower(trim((string) $item?->unit_of_measure)) === 'kg') {
+            return false;
+        }
+
+        return $item?->weight_kg_per_unit === null
+            || bccomp((string) $item->weight_kg_per_unit, '0', 6) <= 0;
+    }
+
     /**
      * Return the FEFO/FIFO lot that still has a positive net movement balance
      * at a location. Unknown-lot movements remain outside the lot suggestion,

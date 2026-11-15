@@ -23,7 +23,7 @@ use RuntimeException;
 /** Seeds synthetic product inspection specifications and reusable NCR templates. */
 final class QualityInspectionReferencesLayer extends DemoSeeder
 {
-    private const SPEC_NOTES = 'Synthetic demo inspection limits sourced from the demo product dimensions. These are not released customer drawings or production approvals.';
+    private const SPEC_NOTES = 'Baseline inspection limits derived from product master dimensions; verify against the released customer drawing before production use.';
 
     /** @var list<string> */
     private const PART_NUMBERS = [
@@ -35,22 +35,22 @@ final class QualityInspectionReferencesLayer extends DemoSeeder
      * @var list<array{name: string, source: string, severity: string, part_number: ?string, defect_description: string, active: bool}>
      */
     private const NCR_TEMPLATES = [
-        ['name' => 'DEMO — Incoming resin discoloration', 'source' => 'inspection_fail', 'severity' => 'high', 'part_number' => null, 'defect_description' => 'Synthetic example: incoming resin color is outside its illustrative reference range.', 'active' => true],
-        ['name' => 'DEMO — Insert plating contamination', 'source' => 'inspection_fail', 'severity' => 'medium', 'part_number' => null, 'defect_description' => 'Synthetic example: metal insert plating shows visible contamination or corrosion.', 'active' => true],
-        ['name' => 'DEMO — Parting-line flash', 'source' => 'inspection_fail', 'severity' => 'medium', 'part_number' => 'WB-001', 'defect_description' => 'Synthetic example: flash is present at the parting line of the wiper bushing.', 'active' => true],
-        ['name' => 'DEMO — Critical enclosure crack', 'source' => 'inspection_fail', 'severity' => 'critical', 'part_number' => 'BC-001', 'defect_description' => 'Synthetic example: a crack is visible at a battery-cover retention feature.', 'active' => true],
-        ['name' => 'DEMO — Connector latch retention', 'source' => 'inspection_fail', 'severity' => 'high', 'part_number' => 'CH-001', 'defect_description' => 'Synthetic example: connector latch does not meet the illustrative retention check.', 'active' => true],
-        ['name' => 'DEMO — Customer appearance complaint', 'source' => 'customer_complaint', 'severity' => 'low', 'part_number' => 'MH-001', 'defect_description' => 'Synthetic example: customer reports a visible surface blemish on the mirror housing.', 'active' => true],
-        ['name' => 'DEMO — Customer connector fit concern', 'source' => 'customer_complaint', 'severity' => 'critical', 'part_number' => 'CH-001', 'defect_description' => 'Synthetic example: customer reports a connector fit concern requiring containment review.', 'active' => true],
-        ['name' => 'DEMO — Obsolete revision or label mismatch', 'source' => 'customer_complaint', 'severity' => 'low', 'part_number' => null, 'defect_description' => 'Synthetic example: packaging carries an obsolete part revision or an incorrect label.', 'active' => false],
-        ['name' => 'DEMO — Short shot at terminal wall', 'source' => 'inspection_fail', 'severity' => 'medium', 'part_number' => 'PC-001', 'defect_description' => 'Synthetic example: terminal wall fill is incomplete on the connector cover.', 'active' => true],
-        ['name' => 'DEMO — Customer-reported fit variation', 'source' => 'customer_complaint', 'severity' => 'high', 'part_number' => 'FC-001', 'defect_description' => 'Synthetic example: customer reports variable snap-fit engagement on the fuse-box cover.', 'active' => true],
-        ['name' => 'DEMO — Supplier material contamination', 'source' => 'inspection_fail', 'severity' => 'critical', 'part_number' => null, 'defect_description' => 'Synthetic example: incoming lot contains foreign material and requires supplier containment.', 'active' => true],
-        ['name' => 'DEMO — Customer packaging quantity concern', 'source' => 'customer_complaint', 'severity' => 'low', 'part_number' => 'TC-001', 'defect_description' => 'Synthetic example: customer reports a mismatch between labeled and counted clip quantity.', 'active' => true],
-        ['name' => 'DEMO — Dimensional check outside tolerance', 'source' => 'inspection_fail', 'severity' => 'high', 'part_number' => 'BC-001', 'defect_description' => 'Synthetic example: a measured enclosure dimension is outside its demo inspection limits.', 'active' => true],
-        ['name' => 'DEMO — Customer field crack report', 'source' => 'customer_complaint', 'severity' => 'critical', 'part_number' => 'FC-001', 'defect_description' => 'Synthetic example: customer reports a field crack requiring risk and containment assessment.', 'active' => true],
-        ['name' => 'DEMO — Mold deposit burn mark', 'source' => 'inspection_fail', 'severity' => 'medium', 'part_number' => 'AD-001', 'defect_description' => 'Synthetic example: burn mark is observed near the air-duct connector gate.', 'active' => true],
-        ['name' => 'DEMO — Repeat customer appearance report', 'source' => 'customer_complaint', 'severity' => 'low', 'part_number' => 'RC-001', 'defect_description' => 'Synthetic example: customer reports a recurring appearance variation on a relay cover.', 'active' => true],
+        ['name' => 'Incoming resin discoloration', 'source' => 'inspection_fail', 'severity' => 'high', 'part_number' => null, 'defect_description' => 'Incoming resin color is outside the approved material reference range.', 'active' => true],
+        ['name' => 'Insert plating contamination', 'source' => 'inspection_fail', 'severity' => 'medium', 'part_number' => null, 'defect_description' => 'Metal insert plating shows visible contamination or corrosion.', 'active' => true],
+        ['name' => 'Parting-line flash', 'source' => 'inspection_fail', 'severity' => 'medium', 'part_number' => 'WB-001', 'defect_description' => 'Flash is present at the parting line of the wiper bushing.', 'active' => true],
+        ['name' => 'Critical enclosure crack', 'source' => 'inspection_fail', 'severity' => 'critical', 'part_number' => 'BC-001', 'defect_description' => 'A crack is visible at a battery-cover retention feature.', 'active' => true],
+        ['name' => 'Connector latch retention', 'source' => 'inspection_fail', 'severity' => 'high', 'part_number' => 'CH-001', 'defect_description' => 'Connector latch retention is below the approved acceptance limit.', 'active' => true],
+        ['name' => 'Customer appearance complaint', 'source' => 'customer_complaint', 'severity' => 'low', 'part_number' => 'MH-001', 'defect_description' => 'Customer reports a visible surface blemish on the mirror housing.', 'active' => true],
+        ['name' => 'Customer connector fit concern', 'source' => 'customer_complaint', 'severity' => 'critical', 'part_number' => 'CH-001', 'defect_description' => 'Customer reports a connector fit concern requiring containment review.', 'active' => true],
+        ['name' => 'Obsolete revision or label mismatch', 'source' => 'customer_complaint', 'severity' => 'low', 'part_number' => null, 'defect_description' => 'Packaging carries an obsolete part revision or an incorrect label.', 'active' => false],
+        ['name' => 'Short shot at terminal wall', 'source' => 'inspection_fail', 'severity' => 'medium', 'part_number' => 'PC-001', 'defect_description' => 'Terminal wall fill is incomplete on the connector cover.', 'active' => true],
+        ['name' => 'Customer-reported fit variation', 'source' => 'customer_complaint', 'severity' => 'high', 'part_number' => 'FC-001', 'defect_description' => 'Customer reports variable snap-fit engagement on the fuse-box cover.', 'active' => true],
+        ['name' => 'Supplier material contamination', 'source' => 'inspection_fail', 'severity' => 'critical', 'part_number' => null, 'defect_description' => 'Incoming lot contains foreign material and requires supplier containment.', 'active' => true],
+        ['name' => 'Customer packaging quantity concern', 'source' => 'customer_complaint', 'severity' => 'low', 'part_number' => 'TC-001', 'defect_description' => 'Customer reports a mismatch between labeled and counted clip quantity.', 'active' => true],
+        ['name' => 'Dimensional check outside tolerance', 'source' => 'inspection_fail', 'severity' => 'high', 'part_number' => 'BC-001', 'defect_description' => 'A measured enclosure dimension is outside its inspection limit.', 'active' => true],
+        ['name' => 'Customer field crack report', 'source' => 'customer_complaint', 'severity' => 'critical', 'part_number' => 'FC-001', 'defect_description' => 'Customer reports a field crack requiring risk and containment assessment.', 'active' => true],
+        ['name' => 'Mold deposit burn mark', 'source' => 'inspection_fail', 'severity' => 'medium', 'part_number' => 'AD-001', 'defect_description' => 'Burn mark is observed near the air-duct connector gate.', 'active' => true],
+        ['name' => 'Repeat customer appearance report', 'source' => 'customer_complaint', 'severity' => 'low', 'part_number' => 'RC-001', 'defect_description' => 'Customer reports a recurring appearance variation on a relay cover.', 'active' => true],
     ];
 
     public function __construct(
@@ -160,10 +160,10 @@ final class QualityInspectionReferencesLayer extends DemoSeeder
                 'nominal_value' => $this->decimal($value),
                 'tolerance_min' => $this->decimal($minimum),
                 'tolerance_max' => $this->decimal($maximum),
-                'acceptance_criterion' => 'Synthetic demo limits only; confirm the released customer drawing before production use.',
+                'acceptance_criterion' => 'Confirm the released customer drawing before production use.',
                 'is_critical' => $key === 'length',
                 'sort_order' => count($items) * 10,
-                'notes' => 'Synthetic demo dimensional reference; not an approved customer specification.',
+                'notes' => 'Dimensional reference derived from product master data; not an approved customer specification.',
             ];
         }
 
@@ -171,18 +171,18 @@ final class QualityInspectionReferencesLayer extends DemoSeeder
         $items[] = [
             'parameter_name' => 'Appearance and surface condition',
             'parameter_type' => 'visual',
-            'acceptance_criterion' => 'Check for flash, cracks, burns, short shots, and visible contamination. Demo finish reference: '.($finish !== '' ? $finish : 'as-molded appearance').'; verify against the current customer standard.',
+            'acceptance_criterion' => 'Check for flash, cracks, burns, short shots, and visible contamination. Finish reference: '.($finish !== '' ? $finish : 'as-molded appearance').'; verify against the current customer standard.',
             'is_critical' => false,
             'sort_order' => 40,
-            'notes' => 'Synthetic demo visual check; validate the appearance limit with Quality and the customer.',
+            'notes' => 'Validate the appearance limit with Quality and the customer.',
         ];
         $items[] = [
             'parameter_name' => 'Fit and retention function',
             'parameter_type' => 'functional',
-            'acceptance_criterion' => 'Demonstration check only: verify engagement using a fixture and limit approved by Engineering before production use.',
+            'acceptance_criterion' => 'Verify engagement using a fixture and limit approved by Engineering before production use.',
             'is_critical' => true,
             'sort_order' => 50,
-            'notes' => 'Synthetic demo functional check; no customer-approved fixture or acceptance limit is implied.',
+            'notes' => 'Use only the current customer-approved fixture and acceptance limit.',
         ];
 
         return $items;
@@ -256,7 +256,7 @@ final class QualityInspectionReferencesLayer extends DemoSeeder
                 'severity' => $definition['severity'],
                 'product_id' => $productId,
                 'defect_description' => $definition['defect_description'],
-                'notes' => 'Synthetic demo template only; this row does not represent an actual customer complaint, nonconformance, or supplier event.',
+                'notes' => 'Review applicability against current customer, product, and supplier requirements before use.',
                 'is_active' => $definition['active'],
             ];
             $template = NcrTemplate::query()->where('name', $definition['name'])->first();

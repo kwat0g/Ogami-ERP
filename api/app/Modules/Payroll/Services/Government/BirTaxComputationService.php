@@ -25,9 +25,9 @@ class BirTaxComputationService
     public function __construct(private readonly GovernmentContributionTableService $tables) {}
 
     /**
-     * @return string  Tax in pesos, 2 decimals.
+     * @return string Tax in pesos, 2 decimals.
      */
-    public function compute(string|float|int $taxablePay, string $periodType = 'semi_monthly', ?Carbon $effectiveDate = null): string
+    public function compute(string|float|int $taxablePay, string $periodType = 'semi_monthly', ?Carbon $effectiveDate = null, ?int $scheduleVersionId = null): string
     {
         if ($periodType !== 'semi_monthly') {
             throw new BusinessRuleException("BIR withholding tables do not support '{$periodType}' payroll periods.");
@@ -38,15 +38,18 @@ class BirTaxComputationService
             return '0.00';
         }
 
-        $brackets = $this->tables->bracketsEffectiveOn(ContributionAgency::Bir, $effectiveDate ?? now());
+        $brackets = $scheduleVersionId === null
+            ? $this->tables->bracketsEffectiveOn(ContributionAgency::Bir, $effectiveDate ?? now())
+            : $this->tables->bracketsForVersion($scheduleVersionId, ContributionAgency::Bir);
         foreach ($brackets as $row) {
             $min = (string) $row->bracket_min;
             $max = (string) $row->bracket_max;
             if (bccomp($taxable, $min, 2) >= 0 && bccomp($taxable, $max, 2) <= 0) {
                 $fixed = (string) $row->ee_amount;
-                $rate  = (string) $row->er_amount;
+                $rate = (string) $row->er_amount;
                 $excess = bcsub($taxable, $min, 4);
                 $tax = bcadd($fixed, bcmul($excess, $rate, 4), 4);
+
                 return self::round2($tax);
             }
         }
@@ -56,6 +59,7 @@ class BirTaxComputationService
         if ($top) {
             $excess = bcsub($taxable, (string) $top->bracket_min, 4);
             $tax = bcadd((string) $top->ee_amount, bcmul($excess, (string) $top->er_amount, 4), 4);
+
             return self::round2($tax);
         }
 
@@ -67,6 +71,7 @@ class BirTaxComputationService
         $sign = bccomp($v, '0', 4) >= 0 ? '1' : '-1';
         $abs = ltrim($v, '-');
         $rounded = bcadd($abs, '0.005', 2);
+
         return $sign === '-1' ? bcmul($rounded, '-1', 2) : bcadd($rounded, '0', 2);
     }
 }

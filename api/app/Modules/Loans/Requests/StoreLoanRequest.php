@@ -28,10 +28,18 @@ class StoreLoanRequest extends FormRequest
     public function rules(): array
     {
         $maxPeriods = app(SettingsService::class)->requiredInt('loans.max_pay_periods', 1, 120);
+        $type = LoanType::tryFrom((string) $this->input('loan_type'));
+        $minimum = $type?->principalMinimum() ?? '1.00';
+        $maximum = $type?->principalMaximum();
+        $principalRules = ['required', 'numeric', 'decimal:0,2', 'min:'.$minimum];
+        if ($maximum !== null) {
+            $principalRules[] = 'max:'.$maximum;
+        }
+
         return [
             'employee_id' => ['required', 'string'],
             'loan_type'   => ['required', Rule::in(LoanType::supportedValues())],
-            'principal'   => ['required', 'numeric', 'decimal:0,2', 'min:1'],
+            'principal'   => $principalRules,
             'pay_periods' => ['required', 'integer', 'min:1', 'max:'.$maxPeriods],
             'purpose'     => ['nullable', 'string', 'max:1000'],
         ];
@@ -39,12 +47,20 @@ class StoreLoanRequest extends FormRequest
 
     public function messages(): array
     {
-        $minimum = app(CurrencyDisplayService::class)->format(1);
+        $type = LoanType::tryFrom((string) $this->input('loan_type'));
+        $minimum = app(CurrencyDisplayService::class)->format($type?->principalMinimum() ?? '1.00');
+        $maximum = $type?->principalMaximum();
 
-        return [
+        $messages = [
             'principal.min'  => "Principal must be at least {$minimum}.",
             'pay_periods.max' => 'Pay periods exceed the configured maximum.',
         ];
+
+        if ($maximum !== null) {
+            $messages['principal.max'] = 'Principal cannot exceed '.app(CurrencyDisplayService::class)->format($maximum).'.';
+        }
+
+        return $messages;
     }
 
     public function validatedData(): array

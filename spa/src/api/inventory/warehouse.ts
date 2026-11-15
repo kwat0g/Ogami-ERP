@@ -14,6 +14,8 @@ export interface CreateZoneData {
  name: string;
  code: string;
  zone_type: string;
+ capacity_kg?: number | null;
+ capacity_status?: 'unverified' | 'estimated' | 'derived' | 'rated';
 }
 
 export interface CreateLocationData {
@@ -21,6 +23,8 @@ export interface CreateLocationData {
  code: string;
  rack?: string | null;
  bin?: string | null;
+ capacity_kg?: number | null;
+ capacity_status?: 'unverified' | 'estimated' | 'rated';
   is_active?: boolean;
   is_blocked?: boolean;
 }

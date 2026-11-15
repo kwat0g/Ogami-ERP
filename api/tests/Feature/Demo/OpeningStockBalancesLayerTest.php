@@ -72,20 +72,26 @@ class OpeningStockBalancesLayerTest extends TestCase
             && $movement->created_at->toDateString() === $openingDate->toDateString()
             && $movement->gl_handoff_status?->value === 'not_required'));
 
-        $warehouseActor = User::query()->where('email', 'warehouse.staff@accounts.ogami-demo.test')->firstOrFail();
+        $warehouseActor = User::query()->where('email', 'villanueva.aira@gmail.com')->firstOrFail();
         $this->assertTrue($movements->every(fn (StockMovement $movement): bool => (int) $movement->created_by === (int) $warehouseActor->id));
 
         $nearExpiryItem = Item::query()->where('code', 'RM-005')->firstOrFail();
         $nearExpiryLots = $movements->where('item_id', $nearExpiryItem->id);
-        $this->assertCount(2, $nearExpiryLots);
+        $this->assertCount(3, $nearExpiryLots);
         $this->assertSame(1, $nearExpiryLots->filter(fn (StockMovement $movement): bool => $movement->expiry_date !== null
             && $movement->expiry_date->gte($asOf)
             && $movement->expiry_date->lte($asOf->addDays(30)))->count());
         $this->assertSame(1, $nearExpiryLots->filter(fn (StockMovement $movement): bool => $movement->expiry_date?->gt($asOf->addDays(30)) ?? false)->count());
 
         $stockOutItem = Item::query()->where('code', 'RM-003')->firstOrFail();
-        $this->assertSame(0, $movements->where('item_id', $stockOutItem->id)->count());
-        $this->assertFalse(StockLevel::query()->where('item_id', $stockOutItem->id)->exists());
+        $this->assertSame(1, $movements->where('item_id', $stockOutItem->id)->count());
+        $this->assertGreaterThan(0, (float) StockLevel::query()->where('item_id', $stockOutItem->id)->value('quantity'));
+
+        $productItems = Item::query()->where('item_type', 'finished_good')->get();
+        $this->assertNotEmpty($productItems);
+        foreach ($productItems as $product) {
+            $this->assertGreaterThan(0, (float) StockLevel::query()->where('item_id', $product->id)->value('quantity'));
+        }
 
         foreach (StockLevel::query()->orderBy('item_id')->get() as $level) {
             $ledgerQuantity = $movements->where('item_id', $level->item_id)

@@ -1114,10 +1114,25 @@ class WorkOrderService
 
     public function cancel(WorkOrder $wo, ?string $reason = null): WorkOrder
     {
+        return $this->cancelWorkOrder($wo, $reason, false);
+    }
+
+    /**
+     * Retire an untouched MRP-created sales-order plan when fulfillment is
+     * switched to approved stock. The next MRP run will recreate only any
+     * remaining shortage.
+     */
+    public function cancelForFulfillmentReplan(WorkOrder $wo): WorkOrder
+    {
+        return $this->cancelWorkOrder($wo, 'Replanned for stock-first fulfillment.', true);
+    }
+
+    private function cancelWorkOrder(WorkOrder $wo, ?string $reason, bool $fulfillmentReplan): WorkOrder
+    {
         $this->assertTransition($wo, WorkOrderStatus::Cancelled);
         $from = $wo->status?->value ?? 'planned';
 
-        $result = DB::transaction(function () use ($wo, $reason, &$from) {
+        $result = DB::transaction(function () use ($wo, $reason, $fulfillmentReplan, &$from) {
             DB::statement('SELECT pg_advisory_xact_lock(20261009, 1)');
             $lockedWo = WorkOrder::query()->lockForUpdate()->find($wo->id);
             if (! $lockedWo) {
@@ -1126,14 +1141,36 @@ class WorkOrderService
             $this->assertTransition($lockedWo, WorkOrderStatus::Cancelled);
             if ($lockedWo->sales_order_id !== null) {
                 $salesOrder = SalesOrder::query()->lockForUpdate()->find($lockedWo->sales_order_id);
-                if ($salesOrder?->status !== SalesOrderStatus::Cancelled) {
+                if ($fulfillmentReplan) {
+                    $schedules = ProductionSchedule::query()->where('work_order_id', $lockedWo->id)
+                        ->whereIn('status', [ProductionScheduleStatus::Pending->value, ProductionScheduleStatus::Confirmed->value, ProductionScheduleStatus::Executed->value])
+                        ->lockForUpdate()->get();
+                    $hasCommittedSchedule = $schedules->contains(fn (ProductionSchedule $schedule): bool =>
+                        $schedule->status !== ProductionScheduleStatus::Pending
+                        || $schedule->is_confirmed
+                    );
+                    if ($salesOrder?->status !== SalesOrderStatus::Confirmed
+                        || $lockedWo->production_purpose !== 'order' || $lockedWo->mrp_plan_id === null
+                        || $lockedWo->parent_wo_id !== null || $lockedWo->status !== WorkOrderStatus::Planned
+                        || $lockedWo->actual_start !== null || $hasCommittedSchedule
+                        || $lockedWo->children()->where('status', '!=', WorkOrderStatus::Cancelled->value)->exists()
+                        || $lockedWo->materials()->where('actual_quantity_issued', '>', 0)->exists()
+                        || $lockedWo->operations()->where(function ($query): void {
+                            $query->where('status', '!=', WoOperationStatus::Pending->value)
+                                ->orWhereNotNull('setup_start')->orWhereNotNull('actual_start')
+                                ->orWhere('qty_completed', '>', 0)->orWhere('qty_scrapped', '>', 0);
+                        })->exists()
+                        || $lockedWo->crews()->exists()) {
+                        throw new BusinessRuleException('Only an untouched planned MRP work order can be replaced by approved stock.');
+                    }
+                } elseif ($salesOrder?->status !== SalesOrderStatus::Cancelled) {
                     throw new BusinessRuleException('Cancel the sales order to cancel its linked work orders.');
                 }
-                if ($lockedWo->actual_start !== null
-                    || $lockedWo->materials()->where('actual_quantity_issued', '>', 0)->exists()) {
+                if (! $fulfillmentReplan && ($lockedWo->actual_start !== null
+                    || $lockedWo->materials()->where('actual_quantity_issued', '>', 0)->exists())) {
                     throw new BusinessRuleException('Started work and issued materials must be reconciled before cancelling this work order.');
                 }
-            } elseif ($lockedWo->production_purpose !== 'stock') {
+            } elseif ($fulfillmentReplan || $lockedWo->production_purpose !== 'stock') {
                 throw new BusinessRuleException('Only stock production work orders can be cancelled directly.');
             }
             if ($lockedWo->rework_source_output_id) {

@@ -56,6 +56,7 @@ class UpdateItemRequest extends FormRequest
             'category_id' => ['sometimes', 'required', 'integer', 'exists:item_categories,id'],
             'item_type' => ['sometimes', 'required', Rule::in(ItemType::values())],
             'unit_of_measure' => ['sometimes', 'required', 'string', 'max:20', $this->uomExistsRule()],
+            'weight_kg_per_unit' => ['sometimes', 'nullable', 'decimal:0,6', 'gt:0', 'max:999999.999999'],
             'standard_cost' => ['sometimes', 'required', 'decimal:0,4', 'min:0'],
             'reorder_method' => ['sometimes', 'required', Rule::in(ReorderMethod::values())],
             'reorder_point' => ['sometimes', 'required', 'decimal:0,3', 'min:0'],

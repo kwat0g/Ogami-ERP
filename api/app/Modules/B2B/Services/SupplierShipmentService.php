@@ -15,6 +15,7 @@ use App\Modules\B2B\Models\PortalShippingDocument;
 use App\Modules\B2B\Models\SupplierShipment;
 use App\Modules\B2B\Models\SupplierShipmentUpdate;
 use App\Modules\B2B\Policies\SupplierPoCapabilities;
+use App\Modules\B2B\Support\SupplierShipmentDatePolicy;
 use App\Modules\Inventory\Services\GrnService;
 use App\Modules\Purchasing\Models\PurchaseOrder;
 use App\Modules\Purchasing\Models\PurchaseOrderItem;
@@ -160,6 +161,10 @@ class SupplierShipmentService
                     : optional($shipment->shipped_date)->toDateString(),
                 'carrier' => array_key_exists('carrier', $data) ? $this->clean($data['carrier']) : $shipment->carrier,
                 'tracking_number' => array_key_exists('tracking_number', $data) ? $this->clean($data['tracking_number']) : $shipment->tracking_number,
+                'vehicle' => array_key_exists('vehicle', $data) ? $this->clean($data['vehicle']) : $shipment->vehicle,
+                'driver_name' => array_key_exists('driver_name', $data) ? $this->clean($data['driver_name']) : $shipment->driver_name,
+                'driver_phone' => array_key_exists('driver_phone', $data) ? $this->clean($data['driver_phone']) : $shipment->driver_phone,
+                'plate_number' => array_key_exists('plate_number', $data) ? $this->clean($data['plate_number']) : $shipment->plate_number,
                 'estimated_arrival' => array_key_exists('estimated_arrival', $data)
                     ? $data['estimated_arrival']
                     : optional($shipment->estimated_arrival)->toDateString(),
@@ -312,6 +317,10 @@ class SupplierShipmentService
         }
         if (! empty($incoming['estimated_arrival']) && $incoming['estimated_arrival'] < $today) {
             throw new BusinessRuleException('Estimated arrival cannot be in the past.');
+        }
+        if (! empty($incoming['estimated_arrival'])
+            && $incoming['estimated_arrival'] > SupplierShipmentDatePolicy::latestEstimatedArrivalDate()) {
+            throw new BusinessRuleException('Estimated arrival cannot be more than 90 days from today.');
         }
         if (! empty($merged['shipped_date']) && ! empty($merged['estimated_arrival'])
             && $merged['estimated_arrival'] < $merged['shipped_date']) {

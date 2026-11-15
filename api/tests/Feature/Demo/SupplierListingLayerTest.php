@@ -10,6 +10,7 @@ use App\Common\Models\ApprovalDelegation;
 use App\Modules\Accounting\Models\Vendor;
 use App\Modules\Auth\Models\User;
 use App\Modules\Inventory\Models\Item;
+use App\Modules\Inventory\Models\ItemCategory;
 use App\Modules\Purchasing\Enums\SupplierListingStatus;
 use App\Modules\Purchasing\Events\SupplierCatalogChanged;
 use App\Modules\Purchasing\Models\ApprovedSupplier;
@@ -51,6 +52,17 @@ class SupplierListingLayerTest extends TestCase
 
     public function test_it_seeds_supplier_listing_states_and_is_idempotent_through_domain_services(): void
     {
+        $unrelatedCategory = ItemCategory::factory()->create([
+            'name' => 'E2E Adjustment Fixture Category',
+            'item_type' => 'raw_material',
+        ]);
+        $unrelatedItem = Item::factory()->create([
+            'code' => 'E2E-ADJ-fixture',
+            'name' => 'Existing E2E adjustment fixture',
+            'category_id' => $unrelatedCategory->id,
+            'item_type' => 'raw_material',
+            'standard_cost' => '100.0000',
+        ]);
         $options = new DemoSeedOptions(
             asOf: CarbonImmutable::parse('2026-11-14', 'Asia/Manila'),
             scale: 'small',
@@ -61,10 +73,11 @@ class SupplierListingLayerTest extends TestCase
 
         $runner->run($options);
 
+        $this->assertSame(0, SupplierItemListing::query()->where('item_id', $unrelatedItem->id)->count());
         $listings = SupplierItemListing::query()->orderBy('supplier_item_code')->get();
-        $this->assertCount(31, $listings);
+        $this->assertCount(25, $listings);
         $this->assertSame([
-            'approved' => 28,
+            'approved' => 22,
             'pending' => 1,
             'rejected' => 1,
             'superseded' => 1,
@@ -72,13 +85,13 @@ class SupplierListingLayerTest extends TestCase
             ->map(static fn ($group): int => $group->count())
             ->sortKeys()
             ->all());
-        $this->assertSame(28, ApprovedSupplier::query()->count());
+        $this->assertSame(22, ApprovedSupplier::query()->count());
 
-        $reviewer = User::query()->where('email', 'purchasing.officer@accounts.ogami-demo.test')->firstOrFail();
-        $olderRevision = $listings->firstWhere('supplier_item_code', 'D-LPR-RM-001-R1');
-        $currentRevision = $listings->firstWhere('supplier_item_code', 'D-LPR-RM-001-R2');
-        $rejected = $listings->firstWhere('supplier_item_code', 'D-LPR-RM-003-REJECTED');
-        $pending = $listings->firstWhere('supplier_item_code', 'D-LPR-RM-005-LIVE');
+        $reviewer = User::query()->where('email', 'agnas.shiernalhen@gmail.com')->firstOrFail();
+        $olderRevision = $listings->firstWhere('supplier_item_code', 'D-INABATA-RM-001-R1');
+        $currentRevision = $listings->firstWhere('supplier_item_code', 'D-INABATA-RM-001-R2');
+        $rejected = $listings->firstWhere('supplier_item_code', 'D-INABATA-RM-003-REJECTED');
+        $pending = $listings->firstWhere('supplier_item_code', 'D-INABATA-RM-005-LIVE');
 
         $this->assertSame(SupplierListingStatus::Superseded, $olderRevision->status);
         $this->assertSame(SupplierListingStatus::Approved, $currentRevision->status);
@@ -99,11 +112,11 @@ class SupplierListingLayerTest extends TestCase
         $this->assertSame($pending->submitted_at->toDateString(), $pending->updated_at->toDateString());
 
         $item = Item::query()->where('code', 'RM-001')->firstOrFail();
-        $vendor = Vendor::query()->where('name', 'Luzon Polymer Resins Corporation')->firstOrFail();
+        $vendor = Vendor::query()->where('name', 'Inabata Philippines Inc.')->firstOrFail();
         $approved = ApprovedSupplier::query()->where('item_id', $item->id)->where('vendor_id', $vendor->id)->firstOrFail();
         $this->assertSame($currentRevision->id, $approved->supplier_listing_id);
         $this->assertSame('123.60', (string) $approved->last_price);
-        $this->assertSame(61, DB::table('event_outbox')->where('event_type', SupplierCatalogChanged::class)->count());
+        $this->assertSame(49, DB::table('event_outbox')->where('event_type', SupplierCatalogChanged::class)->count());
         $actualReviewerIds = DB::table('notifications')
             ->where('type', 'supplier_listing_submitted')
             ->where('notifiable_type', User::class)

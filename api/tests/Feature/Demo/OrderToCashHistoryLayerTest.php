@@ -61,12 +61,12 @@ final class OrderToCashHistoryLayerTest extends TestCase
 
         app(DemoSeedRunner::class)->run($options);
 
-        $order = SalesOrder::query()->where('notes', 'DEMO-O2C-LIVE:SO-DRAFT-0001')->firstOrFail();
+        $order = SalesOrder::query()->where('notes', 'Pending confirmation — FC-001 customer replenishment')->firstOrFail();
         $this->assertSame(SalesOrderStatus::Draft, $order->status);
         $this->assertSame('internal', $order->submission_source->value);
         $this->assertSame('2026-11-16', $order->created_at->timezone('Asia/Manila')->toDateString());
         $this->assertSame(1, $order->items()->count());
-        $this->assertSame((int) $order->created_by, (int) User::query()->where('email', 'sales.officer@accounts.ogami-demo.test')->value('id'));
+        $this->assertSame((int) $order->created_by, (int) User::query()->where('email', 'abiera.shiela@gmail.com')->value('id'));
 
         $item = $order->items()->firstOrFail();
         $this->assertNotNull($item->price_agreement_id);

@@ -5,12 +5,16 @@ declare(strict_types=1);
 namespace Tests\Feature\Payroll;
 
 use App\Common\Exceptions\BusinessRuleException;
+use App\Modules\Auth\Models\User;
 use App\Modules\HR\Models\Employee;
+use App\Modules\Payroll\Enums\ContributionAgency;
 use App\Modules\Payroll\Enums\PayrollPeriodStatus;
 use App\Modules\Payroll\Models\GovernmentContributionTable;
+use App\Modules\Payroll\Models\GovernmentScheduleVersion;
 use App\Modules\Payroll\Models\PayrollPeriod;
+use App\Modules\Payroll\Services\GovernmentContributionTableImportService;
+use App\Modules\Payroll\Services\GovernmentScheduleVersionService;
 use App\Modules\Payroll\Services\PayrollCalculatorService;
-use Database\Seeders\GovernmentTableSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Tests\TestCase;
@@ -47,7 +51,36 @@ class MissingGovTableComputeBlockTest extends TestCase
     private function seedAllAgencies(string $effectiveDate = '2024-01-01'): void
     {
         foreach (['sss', 'philhealth', 'pagibig', 'bir'] as $agency) {
-            $this->seedAgencyRow($agency, $effectiveDate);
+            $this->publishAgency($agency, $effectiveDate);
+        }
+    }
+
+    private function publishAgency(string $agency, string $effectiveDate = '2024-01-01'): void
+    {
+        $path = tempnam(sys_get_temp_dir(), 'gov-compute-');
+        $amount = $agency === 'bir' ? '0' : '0.02';
+        file_put_contents($path, implode("\n", [
+            'bracket_min,bracket_max,ee_amount,er_amount,effective_date',
+            "0,999999.99,{$amount},{$amount},{$effectiveDate}",
+        ]));
+
+        try {
+            $maker = User::factory()->create();
+            $checker = User::factory()->create();
+            $result = app(GovernmentContributionTableImportService::class)->importFromPath(
+                ContributionAgency::from($agency),
+                $path,
+                strtoupper($agency).' test schedule',
+                'https://example.gov/schedule',
+                $maker->id,
+            );
+            app(GovernmentScheduleVersionService::class)->publish(
+                GovernmentScheduleVersion::query()->findOrFail($result['version_id']),
+                $checker,
+                completenessConfirmed: true,
+            );
+        } finally {
+            @unlink($path);
         }
     }
 
@@ -77,7 +110,7 @@ class MissingGovTableComputeBlockTest extends TestCase
         // every fresh database, so remove them to simulate the missing agency.
         GovernmentContributionTable::query()->where('agency', 'bir')->delete();
         foreach (['sss', 'philhealth', 'pagibig'] as $agency) {
-            $this->seedAgencyRow($agency, '2024-01-01');
+            $this->publishAgency($agency, '2024-01-01');
         }
         Cache::flush();
 
@@ -97,7 +130,7 @@ class MissingGovTableComputeBlockTest extends TestCase
 
     public function test_all_four_agencies_present_allows_compute(): void
     {
-        $this->seed(GovernmentTableSeeder::class);
+        $this->seedAllAgencies();
 
         $period = $this->makePeriod();
         $employee = $this->makeEmployee();
@@ -117,7 +150,7 @@ class MissingGovTableComputeBlockTest extends TestCase
         // row on/before it, and the active-set fallback is empty).
         $this->seedAgencyRow('sss', '2027-01-01', active: false);
         foreach (['philhealth', 'pagibig', 'bir'] as $agency) {
-            $this->seedAgencyRow($agency, '2024-01-01');
+            $this->publishAgency($agency, '2024-01-01');
         }
 
         $period = $this->makePeriod();

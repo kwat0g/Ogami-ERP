@@ -23,11 +23,12 @@ class WarehouseLocation extends Model
         return \Database\Factories\WarehouseLocationFactory::new();
     }
 
-    protected $fillable = ['zone_id', 'code', 'rack', 'bin', 'is_active', 'is_blocked'];
+    protected $fillable = ['zone_id', 'code', 'rack', 'bin', 'is_active', 'is_blocked', 'capacity_kg', 'capacity_status'];
 
     protected $casts = [
         'is_active' => 'boolean',
         'is_blocked' => 'boolean',
+        'capacity_kg' => 'decimal:2',
     ];
 
     public function zone(): BelongsTo

@@ -648,7 +648,7 @@ export const SECTIONS: NavSection[] = [
       },
       {
         to: '/accounting/vendors',
-        label: 'Vendors',
+        label: 'Suppliers',
         icon: LuStore,
         feature: 'accounting',
         permission: 'accounting.vendors.view',

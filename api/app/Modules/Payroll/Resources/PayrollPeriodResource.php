@@ -8,6 +8,7 @@ use App\Modules\Payroll\Enums\BankFileGenerationStatus;
 use App\Modules\Payroll\Enums\PayrollGlHandoffStatus;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * @mixin \App\Modules\Payroll\Models\PayrollPeriod
@@ -20,12 +21,32 @@ class PayrollPeriodResource extends JsonResource
         $actionContext = $hasDetailContext && $this->resource instanceof \App\Modules\Payroll\Models\PayrollPeriod
             ? app(\App\Modules\Payroll\Services\PayrollPeriodService::class)->actionContext($this->resource, $request->user())
             : null;
+        $hasScheduleVersionContext = $hasDetailContext && $this->is_first_half && ! $this->is_thirteenth_month;
+        $statutoryScheduleVersions = null;
+
+        if ($hasScheduleVersionContext) {
+            $statutoryScheduleVersions = Schema::hasTable('payroll_period_government_schedule_versions')
+                ? $this->governmentSchedulePins()
+                    ->with('scheduleVersion:id,agency,effective_date,version_number,status,source_title,source_file_sha256')
+                    ->orderBy('agency')
+                    ->get()
+                    ->map(fn ($pin) => [
+                        'agency' => $pin->agency?->value,
+                        'effective_date' => $pin->effective_date?->toDateString(),
+                        'version_number' => $pin->scheduleVersion?->version_number,
+                        'status' => $pin->scheduleVersion?->status?->value,
+                        'source_title' => $pin->scheduleVersion?->source_title,
+                        'source_file_sha256' => $pin->scheduleVersion?->source_file_sha256,
+                    ])->values()->all()
+                : [];
+        }
 
         return [
             'id'                  => $this->hash_id,
             'period_start'        => optional($this->period_start)->toDateString(),
             'period_end'          => optional($this->period_end)->toDateString(),
             'payroll_date'        => optional($this->payroll_date)->toDateString(),
+            'statutory_schedule_versions' => $statutoryScheduleVersions,
             'is_first_half'       => (bool) $this->is_first_half,
             'is_thirteenth_month' => (bool) $this->is_thirteenth_month,
             'status'              => $this->status?->value,
@@ -34,6 +55,7 @@ class PayrollPeriodResource extends JsonResource
             'is_locked'           => $this->isLocked(),
             'permissions'         => $this->when($actionContext !== null, $actionContext['permissions'] ?? []),
             'available_actions'   => $this->when($actionContext !== null, $actionContext['available_actions'] ?? []),
+            'computation_evaluation' => $this->when($actionContext !== null, $actionContext['computation_evaluation'] ?? null),
             'compute_available_on' => $this->when($actionContext !== null, $actionContext['compute_available_on'] ?? null),
             'label'               => $this->label(),
 
@@ -100,9 +122,9 @@ class PayrollPeriodResource extends JsonResource
                 'name' => $this->creator?->name,
             ]),
 
-            // REC-04 — maker-checker attribution. computer = HR maker who ran
-            // Compute; approver/finalizer = the checker(s) who signed off.
-            // Timestamps are ISO8601; user refs never leak the integer id.
+            // REC-04 — audit attribution. computer = HR user who ran Compute;
+            // approver/finalizer identify Finance sign-off steps and can be
+            // the same person. Timestamps are ISO8601; user refs never leak IDs.
             'approved_at'         => optional($this->approved_at)->toIso8601String(),
             'finalized_at'        => optional($this->finalized_at)->toIso8601String(),
             'correction_requested_at' => optional($this->correction_requested_at)->toIso8601String(),

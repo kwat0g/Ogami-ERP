@@ -4,24 +4,37 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Payroll;
 
+use App\Common\Support\Money;
+use App\Modules\Attendance\Enums\AttendanceStatus;
 use App\Modules\Attendance\Models\Attendance;
+use App\Modules\Auth\Models\Role;
+use App\Modules\Auth\Models\User;
 use App\Modules\HR\Models\Department;
 use App\Modules\HR\Models\Employee;
 use App\Modules\HR\Models\Position;
+use App\Modules\Leave\Enums\LeaveRequestStatus;
+use App\Modules\Leave\Models\LeaveRequest;
+use App\Modules\Leave\Models\LeaveType;
 use App\Modules\Loans\Enums\LoanStatus;
 use App\Modules\Loans\Enums\LoanType;
 use App\Modules\Loans\Models\EmployeeLoan;
 use App\Modules\Loans\Models\LoanPayment;
 use App\Modules\Payroll\Enums\PayrollAdjustmentStatus;
 use App\Modules\Payroll\Enums\PayrollAdjustmentType;
+use App\Modules\Payroll\Enums\PayrollAnomalyType;
 use App\Modules\Payroll\Enums\PayrollPeriodStatus;
+use App\Modules\Payroll\Models\Payroll;
 use App\Modules\Payroll\Models\PayrollAdjustment;
+use App\Modules\Payroll\Models\PayrollAnomalyFlag;
 use App\Modules\Payroll\Models\PayrollPeriod;
+use App\Modules\Payroll\Services\PayrollAnomalyService;
 use App\Modules\Payroll\Services\PayrollCalculatorService;
+use Carbon\Carbon;
 use Database\Seeders\GovernmentTableSeeder;
 use Database\Seeders\RolePermissionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
@@ -43,76 +56,78 @@ class PayrollCalculatorServiceTest extends TestCase
     private function makeEmployee(array $overrides = []): Employee
     {
         $dept = Department::create(['name' => 'Production', 'code' => 'PRD']);
-        $pos  = Position::create(['title' => 'Operator', 'department_id' => $dept->id]);
+        $pos = Position::create(['title' => 'Operator', 'department_id' => $dept->id]);
+
         return Employee::create(array_merge([
-            'employee_no'          => 'OGM-2026-'.str_pad((string) random_int(1, 9999), 4, '0', STR_PAD_LEFT),
-            'first_name'           => 'Juan',
-            'last_name'            => 'Dela Cruz',
-            'birth_date'           => '1990-01-01',
-            'gender'               => 'male',
-            'civil_status'         => 'single',
-            'nationality'          => 'Filipino',
-            'street_address'       => '123 Main',
-            'city'                 => 'Dasmariñas',
-            'province'             => 'Cavite',
-            'mobile_number'        => '09171234567',
-            'email'                => 'jdc@example.com',
-            'emergency_contact_name'  => 'Maria',
+            'employee_no' => 'OGM-2026-'.str_pad((string) random_int(1, 9999), 4, '0', STR_PAD_LEFT),
+            'first_name' => 'Juan',
+            'last_name' => 'Dela Cruz',
+            'birth_date' => '1990-01-01',
+            'gender' => 'male',
+            'civil_status' => 'single',
+            'nationality' => 'Filipino',
+            'street_address' => '123 Main',
+            'city' => 'Dasmariñas',
+            'province' => 'Cavite',
+            'mobile_number' => '09171234567',
+            'email' => 'jdc@example.com',
+            'emergency_contact_name' => 'Maria',
             'emergency_contact_phone' => '09181234567',
-            'department_id'        => $dept->id,
-            'position_id'          => $pos->id,
-            'employment_type'      => 'regular',
-            'pay_type'             => 'monthly',
-            'date_hired'           => '2025-01-01',
+            'department_id' => $dept->id,
+            'position_id' => $pos->id,
+            'employment_type' => 'regular',
+            'pay_type' => 'monthly',
+            'date_hired' => '2025-01-01',
             'basic_monthly_salary' => '20000.00',
         ], $overrides));
     }
 
     private function makePeriod(bool $firstHalf = true, ?string $start = null, ?string $end = null): PayrollPeriod
     {
-        $roleId = \App\Modules\Auth\Models\Role::query()->orderBy('id')->value('id');
-        $userId = \App\Modules\Auth\Models\User::create([
-            'name'     => 'Tester',
-            'email'    => 't_'.uniqid().'@x.test',
+        $roleId = Role::query()->orderBy('id')->value('id');
+        $userId = User::create([
+            'name' => 'Tester',
+            'email' => 't_'.uniqid().'@x.test',
             'password' => bcrypt('Password1!'),
-            'role_id'  => $roleId,
+            'role_id' => $roleId,
         ])->id;
 
         $start = $start ?? '2026-04-01';
-        $end   = $end   ?? '2026-04-15';
+        $end = $end ?? '2026-04-15';
 
         $period = PayrollPeriod::create([
-            'period_start'  => $start,
-            'period_end'    => $end,
-            'payroll_date'  => $end,
+            'period_start' => $start,
+            'period_end' => $end,
+            'payroll_date' => $end,
             'is_first_half' => $firstHalf,
             'is_thirteenth_month' => false,
-            'created_by'    => $userId,
+            'created_by' => $userId,
         ]);
         $period->forceFill(['status' => PayrollPeriodStatus::Draft->value])->save();
+
         return $period;
     }
 
     private function attendanceFor(Employee $emp, string $start, string $end, float $hoursPerDay = 8.0): void
     {
-        $cur = \Carbon\Carbon::parse($start);
-        $endC = \Carbon\Carbon::parse($end);
+        $cur = Carbon::parse($start);
+        $endC = Carbon::parse($end);
         while ($cur->lte($endC)) {
             // Skip Sundays for a 22-day month feel.
             if ($cur->dayOfWeek !== 0) {
                 Attendance::create([
-                    'employee_id'    => $emp->id,
-                    'date'           => $cur->toDateString(),
-                    'time_in'        => $cur->copy()->setTime(8, 0)->toDateTimeString(),
-                    'time_out'       => $cur->copy()->setTime((int) floor(8 + $hoursPerDay), (int) (60 * fmod(8 + $hoursPerDay, 1)))->toDateTimeString(),
-                    'regular_hours'  => $hoursPerDay,
+                    'employee_id' => $emp->id,
+                    'date' => $cur->toDateString(),
+                    'time_in' => $cur->copy()->setTime(8, 0)->toDateTimeString(),
+                    'time_out' => $cur->copy()->setTime((int) floor(8 + $hoursPerDay), (int) (60 * fmod(8 + $hoursPerDay, 1)))->toDateTimeString(),
+                    'regular_hours' => $hoursPerDay,
                     'overtime_hours' => 0,
                     'night_diff_hours' => 0,
                     'tardiness_minutes' => 0,
                     'undertime_minutes' => 0,
-                    'is_rest_day'    => false,
-                    'day_type_rate'  => 1.00,
-                    'status'         => 'present',
+                    'is_rest_day' => false,
+                    'day_type_rate' => 1.00,
+                    'status' => 'present',
                 ]);
             }
             $cur->addDay();
@@ -126,41 +141,41 @@ class PayrollCalculatorServiceTest extends TestCase
      */
     private function markLeave(Employee $emp, string $start, string $end, bool $isPaid): string
     {
-        $leaveType = \App\Modules\Leave\Models\LeaveType::create([
-            'name'            => $isPaid ? 'Vacation Leave' : 'Leave Without Pay',
-            'code'            => $isPaid ? 'VL-'.substr(uniqid(), -5) : 'LWOP-'.substr(uniqid(), -4),
+        $leaveType = LeaveType::create([
+            'name' => $isPaid ? 'Vacation Leave' : 'Leave Without Pay',
+            'code' => $isPaid ? 'VL-'.substr(uniqid(), -5) : 'LWOP-'.substr(uniqid(), -4),
             'default_balance' => '5.0',
-            'is_paid'         => $isPaid,
+            'is_paid' => $isPaid,
         ]);
 
         $leaveNo = 'LR-202604-'.str_pad((string) random_int(1, 9999), 4, '0', STR_PAD_LEFT);
-        $req = \App\Modules\Leave\Models\LeaveRequest::create([
+        $req = LeaveRequest::create([
             'leave_request_no' => $leaveNo,
-            'employee_id'      => $emp->id,
-            'leave_type_id'    => $leaveType->id,
-            'start_date'       => $start,
-            'end_date'         => $end,
-            'days'             => '1.0',
-            'reason'           => 'test',
+            'employee_id' => $emp->id,
+            'leave_type_id' => $leaveType->id,
+            'start_date' => $start,
+            'end_date' => $end,
+            'days' => '1.0',
+            'reason' => 'test',
         ]);
-        $req->forceFill(['status' => \App\Modules\Leave\Enums\LeaveRequestStatus::Approved->value])->save();
+        $req->forceFill(['status' => LeaveRequestStatus::Approved->value])->save();
 
-        $cur = \Carbon\Carbon::parse($start);
-        $endC = \Carbon\Carbon::parse($end);
+        $cur = Carbon::parse($start);
+        $endC = Carbon::parse($end);
         while ($cur->lte($endC)) {
             if ($cur->dayOfWeek !== 0) { // Sundays are not work/leave days
                 Attendance::updateOrCreate(
                     ['employee_id' => $emp->id, 'date' => $cur->toDateString()],
                     [
-                        'status'            => \App\Modules\Attendance\Enums\AttendanceStatus::OnLeave->value,
-                        'is_manual_entry'   => false,
-                        'remarks'           => "leave:{$leaveNo}",
-                        'regular_hours'     => 0,
-                        'overtime_hours'    => 0,
-                        'night_diff_hours'  => 0,
+                        'status' => AttendanceStatus::OnLeave->value,
+                        'is_manual_entry' => false,
+                        'remarks' => "leave:{$leaveNo}",
+                        'regular_hours' => 0,
+                        'overtime_hours' => 0,
+                        'night_diff_hours' => 0,
                         'tardiness_minutes' => 0,
                         'undertime_minutes' => 0,
-                        'day_type_rate'     => 1.00,
+                        'day_type_rate' => 1.00,
                     ],
                 );
             }
@@ -208,18 +223,18 @@ class PayrollCalculatorServiceTest extends TestCase
     }
 
     /**
-      * A semi-monthly employee's basic is the FLAT cutoff rate — it does not
-      * scale with days worked. That decoupling is the whole point of migration
-      * 0437: basic pay and the government-contribution basis now agree about
-      * what a month is, so an absence can no longer produce a full month of
-      * deductions against a partial month of pay.
-      */
+     * A semi-monthly employee's basic is the FLAT cutoff rate — it does not
+     * scale with days worked. That decoupling is the whole point of migration
+     * 0437: basic pay and the government-contribution basis now agree about
+     * what a month is, so an absence can no longer produce a full month of
+     * deductions against a partial month of pay.
+     */
     public function test_semi_monthly_employee_basic_is_the_flat_cutoff_rate(): void
     {
         $emp = $this->makeEmployee([
-            'pay_type'             => 'semi_monthly',
+            'pay_type' => 'semi_monthly',
             'basic_monthly_salary' => null,
-            'semi_monthly_rate'    => '6600.00',
+            'semi_monthly_rate' => '6600.00',
         ]);
         $period = $this->makePeriod(true, '2026-04-01', '2026-04-15');
         $this->attendanceFor($emp, '2026-04-01', '2026-04-15');
@@ -247,9 +262,9 @@ class PayrollCalculatorServiceTest extends TestCase
     public function test_semi_monthly_absences_do_not_produce_a_zero_net_with_full_deductions(): void
     {
         $emp = $this->makeEmployee([
-            'pay_type'             => 'semi_monthly',
+            'pay_type' => 'semi_monthly',
             'basic_monthly_salary' => null,
-            'semi_monthly_rate'    => '6600.00',
+            'semi_monthly_rate' => '6600.00',
         ]);
         // First half → government deductions ARE withheld (PH convention).
         $period = $this->makePeriod(true, '2026-04-01', '2026-04-15');
@@ -289,16 +304,16 @@ class PayrollCalculatorServiceTest extends TestCase
         $this->attendanceFor($emp, '2026-04-01', '2026-04-15');
 
         $loan = EmployeeLoan::create([
-            'loan_no'              => 'LN-202604-0001',
-            'employee_id'          => $emp->id,
-            'loan_type'            => LoanType::CompanyLoan->value,
-            'principal'            => '6000.00',
+            'loan_no' => 'LN-202604-0001',
+            'employee_id' => $emp->id,
+            'loan_type' => LoanType::CompanyLoan->value,
+            'principal' => '6000.00',
             'monthly_amortization' => '1000.00', // 6 months
-            'total_paid'           => '0.00',
-            'balance'              => '6000.00',
-            'pay_periods_total'    => 12,
+            'total_paid' => '0.00',
+            'balance' => '6000.00',
+            'pay_periods_total' => 12,
             'pay_periods_remaining' => 12,
-            'start_date'           => '2026-04-01',
+            'start_date' => '2026-04-01',
         ]);
         $loan->forceFill(['status' => LoanStatus::Active->value])->save();
 
@@ -310,6 +325,89 @@ class PayrollCalculatorServiceTest extends TestCase
         $loan->refresh();
         $this->assertSame('5500.00', (string) $loan->balance);
         $this->assertSame(11, $loan->pay_periods_remaining);
+    }
+
+    public function test_cash_advance_recovery_is_capped_to_available_net_and_unpaid_balance_carries_forward(): void
+    {
+        $emp = $this->makeEmployee();
+        $period = $this->makePeriod(true, '2026-04-01', '2026-04-15');
+        $this->attendanceFor($emp, '2026-04-01', '2026-04-15');
+
+        $cashAdvance = EmployeeLoan::create([
+            'loan_no' => 'LN-CA-CAP-0001',
+            'employee_id' => $emp->id,
+            'loan_type' => LoanType::CashAdvance->value,
+            'principal' => '20000.00',
+            'monthly_amortization' => '20000.00',
+            'total_paid' => '0.00',
+            'balance' => '20000.00',
+            'pay_periods_total' => 1,
+            'pay_periods_remaining' => 1,
+            'start_date' => '2026-04-01',
+        ]);
+        $cashAdvance->forceFill(['status' => LoanStatus::Active->value])->save();
+
+        $companyLoan = EmployeeLoan::create([
+            'loan_no' => 'LN-CO-CAP-0001',
+            'employee_id' => $emp->id,
+            'loan_type' => LoanType::CompanyLoan->value,
+            'principal' => '20000.00',
+            'monthly_amortization' => '20000.00',
+            'total_paid' => '0.00',
+            'balance' => '20000.00',
+            'pay_periods_total' => 2,
+            'pay_periods_remaining' => 2,
+            'start_date' => '2026-04-01',
+        ]);
+        $companyLoan->forceFill(['status' => LoanStatus::Active->value])->save();
+
+        $payroll = $this->calc->computeForEmployee($period, $emp);
+
+        $mandatoryDeductions = bcadd(
+            bcadd(
+                bcadd((string) $payroll->sss_ee, (string) $payroll->philhealth_ee, 2),
+                (string) $payroll->pagibig_ee,
+                2,
+            ),
+            (string) $payroll->withholding_tax,
+            2,
+        );
+        $availableNet = bcsub((string) $payroll->gross_pay, $mandatoryDeductions, 2);
+        $payments = LoanPayment::query()->where('payroll_id', $payroll->id)->get();
+        $cashAdvancePayment = $payments->firstWhere('loan_id', $cashAdvance->id);
+        $actualLoanRecovery = $payments->reduce(
+            static fn (string $total, LoanPayment $payment): string => bcadd($total, (string) $payment->amount, 2),
+            '0.00',
+        );
+
+        $this->assertGreaterThan('0.00', $availableNet);
+        $this->assertSame($availableNet, (string) $payroll->loan_deductions);
+        $this->assertSame($availableNet, $actualLoanRecovery);
+        $this->assertNotNull($cashAdvancePayment);
+
+        $allocations = DB::table('payroll_loan_recovery_allocations')
+            ->where('payroll_id', $payroll->id)
+            ->get()
+            ->keyBy('employee_loan_id');
+        $this->assertCount(2, $allocations);
+        $this->assertSame('20000.00', $allocations[$cashAdvance->id]->requested_amount);
+        $this->assertSame($availableNet, $allocations[$cashAdvance->id]->withheld_amount);
+        $this->assertSame(bcsub('20000.00', $availableNet, 2), $allocations[$cashAdvance->id]->deferred_amount);
+        $this->assertSame('10000.00', $allocations[$companyLoan->id]->requested_amount);
+        $this->assertSame('0.00', $allocations[$companyLoan->id]->withheld_amount);
+        $this->assertSame('10000.00', $allocations[$companyLoan->id]->deferred_amount);
+        $this->assertSame('insufficient_net_pay', $allocations[$companyLoan->id]->deferred_reason);
+        $this->assertSame((string) $payroll->loan_deductions, (string) $cashAdvancePayment->amount);
+        $this->assertDatabaseMissing('loan_payments', [
+            'payroll_id' => $payroll->id,
+            'loan_id' => $companyLoan->id,
+        ]);
+        $this->assertSame('0.00', (string) $payroll->net_pay);
+        $this->assertSame(
+            bcsub('20000.00', (string) $cashAdvancePayment->amount, 2),
+            (string) $cashAdvance->fresh()->balance,
+        );
+        $this->assertSame('20000.00', (string) $companyLoan->fresh()->balance);
     }
 
     public function test_payroll_reconciliation_preserves_payments_after_its_pay_date(): void
@@ -350,7 +448,7 @@ class PayrollCalculatorServiceTest extends TestCase
         $period = $this->makePeriod(true, '2026-04-01', '2026-04-15');
         $this->attendanceFor($emp, '2026-04-01', '2026-04-15');
 
-        $first  = $this->calc->computeForEmployee($period, $emp);
+        $first = $this->calc->computeForEmployee($period, $emp);
         $second = $this->calc->computeForEmployee($period, $emp);
 
         $this->assertNotSame($first->id, $second->id);
@@ -365,16 +463,16 @@ class PayrollCalculatorServiceTest extends TestCase
         $this->attendanceFor($emp, '2026-04-01', '2026-04-15');
 
         $loan = EmployeeLoan::create([
-            'loan_no'              => 'LN-RECOMPUTE-0001',
-            'employee_id'          => $emp->id,
-            'loan_type'            => LoanType::CompanyLoan->value,
-            'principal'            => '6000.00',
+            'loan_no' => 'LN-RECOMPUTE-0001',
+            'employee_id' => $emp->id,
+            'loan_type' => LoanType::CompanyLoan->value,
+            'principal' => '6000.00',
             'monthly_amortization' => '1000.00',
-            'total_paid'           => '0.00',
-            'balance'              => '6000.00',
-            'pay_periods_total'    => 12,
+            'total_paid' => '0.00',
+            'balance' => '6000.00',
+            'pay_periods_total' => 12,
             'pay_periods_remaining' => 12,
-            'start_date'           => '2026-04-01',
+            'start_date' => '2026-04-01',
         ]);
         $loan->forceFill(['status' => LoanStatus::Active->value])->save();
 
@@ -409,8 +507,8 @@ class PayrollCalculatorServiceTest extends TestCase
         $this->calc->computeForEmployee($period2, $emp);
 
         $this->assertDatabaseHas('thirteenth_month_accruals', [
-            'employee_id'        => $emp->id,
-            'year'               => 2026,
+            'employee_id' => $emp->id,
+            'year' => 2026,
             'total_basic_earned' => 20000.00,
         ]);
     }
@@ -419,9 +517,9 @@ class PayrollCalculatorServiceTest extends TestCase
     {
         // Tiny salary, mandatory loan that wipes out basic
         $emp = $this->makeEmployee([
-            'pay_type'             => 'semi_monthly',
+            'pay_type' => 'semi_monthly',
             'basic_monthly_salary' => null,
-            'semi_monthly_rate'    => '650.00',
+            'semi_monthly_rate' => '650.00',
         ]);
         $period = $this->makePeriod(true, '2026-04-01', '2026-04-15');
         $this->attendanceFor($emp, '2026-04-01', '2026-04-15');
@@ -456,30 +554,30 @@ class PayrollCalculatorServiceTest extends TestCase
      */
     public function test_monthly_ot_and_night_diff_stack_on_same_day(): void
     {
-        $emp    = $this->makeEmployee(); // 20,000 monthly
+        $emp = $this->makeEmployee(); // 20,000 monthly
         $period = $this->makePeriod(false, '2026-04-16', '2026-04-30'); // second half: no gov deductions
 
         // Single day with 8 regular hours + 2 OT hours + 3 night-diff hours.
         Attendance::create([
-            'employee_id'        => $emp->id,
-            'date'               => '2026-04-16',
-            'time_in'            => '2026-04-16 08:00:00',
-            'time_out'           => '2026-04-16 21:00:00',
-            'regular_hours'      => '8.00',
-            'overtime_hours'     => '2.00',
-            'night_diff_hours'   => '3.00',
-            'tardiness_minutes'  => 0,
-            'undertime_minutes'  => 0,
-            'is_rest_day'        => false,
-            'day_type_rate'      => '1.00',
-            'status'             => 'present',
+            'employee_id' => $emp->id,
+            'date' => '2026-04-16',
+            'time_in' => '2026-04-16 08:00:00',
+            'time_out' => '2026-04-16 21:00:00',
+            'regular_hours' => '8.00',
+            'overtime_hours' => '2.00',
+            'night_diff_hours' => '3.00',
+            'tardiness_minutes' => 0,
+            'undertime_minutes' => 0,
+            'is_rest_day' => false,
+            'day_type_rate' => '1.00',
+            'status' => 'present',
         ]);
 
         $payroll = $this->calc->computeForEmployee($period, $emp);
 
         // Each premium is independent: OT and ND do not cross-multiply.
         $this->assertSame('284.09', $payroll->overtime_pay);
-        $this->assertSame('34.09',  $payroll->night_diff_pay);
+        $this->assertSame('34.09', $payroll->night_diff_pay);
         $this->assertSame('10000.00', $payroll->basic_pay);
         $this->assertSame('10318.18', $payroll->gross_pay);
 
@@ -506,31 +604,31 @@ class PayrollCalculatorServiceTest extends TestCase
     public function test_semi_monthly_ot_and_night_diff_stack_on_same_day(): void
     {
         $emp = $this->makeEmployee([
-            'pay_type'             => 'semi_monthly',
+            'pay_type' => 'semi_monthly',
             'basic_monthly_salary' => null,
-            'semi_monthly_rate'    => '8800.00',
+            'semi_monthly_rate' => '8800.00',
         ]);
         $period = $this->makePeriod(false, '2026-04-16', '2026-04-30');
 
         Attendance::create([
-            'employee_id'        => $emp->id,
-            'date'               => '2026-04-16',
-            'time_in'            => '2026-04-16 08:00:00',
-            'time_out'           => '2026-04-16 21:00:00',
-            'regular_hours'      => '8.00',
-            'overtime_hours'     => '2.00',
-            'night_diff_hours'   => '3.00',
-            'tardiness_minutes'  => 0,
-            'undertime_minutes'  => 0,
-            'is_rest_day'        => false,
-            'day_type_rate'      => '1.00',
-            'status'             => 'present',
+            'employee_id' => $emp->id,
+            'date' => '2026-04-16',
+            'time_in' => '2026-04-16 08:00:00',
+            'time_out' => '2026-04-16 21:00:00',
+            'regular_hours' => '8.00',
+            'overtime_hours' => '2.00',
+            'night_diff_hours' => '3.00',
+            'tardiness_minutes' => 0,
+            'undertime_minutes' => 0,
+            'is_rest_day' => false,
+            'day_type_rate' => '1.00',
+            'status' => 'present',
         ]);
 
         $payroll = $this->calc->computeForEmployee($period, $emp);
 
         $this->assertSame('250.00', $payroll->overtime_pay);
-        $this->assertSame('30.00',  $payroll->night_diff_pay);
+        $this->assertSame('30.00', $payroll->night_diff_pay);
         $this->assertSame('8800.00', $payroll->basic_pay);
         $this->assertSame('9080.00', $payroll->gross_pay);
     }
@@ -554,25 +652,25 @@ class PayrollCalculatorServiceTest extends TestCase
     public function test_semi_monthly_regular_holiday_200_percent_rule(): void
     {
         $emp = $this->makeEmployee([
-            'pay_type'             => 'semi_monthly',
+            'pay_type' => 'semi_monthly',
             'basic_monthly_salary' => null,
-            'semi_monthly_rate'    => '6600.00',
+            'semi_monthly_rate' => '6600.00',
         ]);
         $period = $this->makePeriod(false, '2026-04-16', '2026-04-30');
 
         Attendance::create([
-            'employee_id'        => $emp->id,
-            'date'               => '2026-04-16',
-            'time_in'            => '2026-04-16 08:00:00',
-            'time_out'           => '2026-04-16 17:00:00',
-            'regular_hours'      => '8.00',
-            'overtime_hours'     => '0.00',
-            'night_diff_hours'   => '0.00',
-            'tardiness_minutes'  => 0,
-            'undertime_minutes'  => 0,
-            'is_rest_day'        => false,
-            'day_type_rate'      => '2.00',   // regular holiday → 200%
-            'status'             => 'present',
+            'employee_id' => $emp->id,
+            'date' => '2026-04-16',
+            'time_in' => '2026-04-16 08:00:00',
+            'time_out' => '2026-04-16 17:00:00',
+            'regular_hours' => '8.00',
+            'overtime_hours' => '0.00',
+            'night_diff_hours' => '0.00',
+            'tardiness_minutes' => 0,
+            'undertime_minutes' => 0,
+            'is_rest_day' => false,
+            'day_type_rate' => '2.00',   // regular holiday → 200%
+            'status' => 'present',
         ]);
 
         $payroll = $this->calc->computeForEmployee($period, $emp);
@@ -601,18 +699,18 @@ class PayrollCalculatorServiceTest extends TestCase
         $period = $this->makePeriod(false, '2026-04-16', '2026-04-30');
 
         Attendance::create([
-            'employee_id'       => $emp->id,
-            'date'              => '2026-04-16',
-            'time_in'           => '2026-04-16 18:00:00',
-            'time_out'          => '2026-04-17 06:00:00',
-            'regular_hours'     => '8.00',
-            'overtime_hours'    => '0.00',
-            'night_diff_hours'  => '8.00',
+            'employee_id' => $emp->id,
+            'date' => '2026-04-16',
+            'time_in' => '2026-04-16 18:00:00',
+            'time_out' => '2026-04-17 06:00:00',
+            'regular_hours' => '8.00',
+            'overtime_hours' => '0.00',
+            'night_diff_hours' => '8.00',
             'tardiness_minutes' => 0,
             'undertime_minutes' => 0,
-            'is_rest_day'       => true,
-            'day_type_rate'     => '2.60',
-            'status'            => 'present',
+            'is_rest_day' => true,
+            'day_type_rate' => '2.60',
+            'status' => 'present',
         ]);
 
         $payroll = $this->calc->computeForEmployee($period, $emp);
@@ -644,9 +742,9 @@ class PayrollCalculatorServiceTest extends TestCase
      */
     public function test_approved_adjustments_affect_net_and_recompute_does_not_double_apply(): void
     {
-        $emp         = $this->makeEmployee(); // 20,000 monthly
-        $period1     = $this->makePeriod(false, '2026-04-16', '2026-04-30'); // anchor period for FK
-        $period2     = $this->makePeriod(false, '2026-05-16', '2026-05-31'); // target period
+        $emp = $this->makeEmployee(); // 20,000 monthly
+        $period1 = $this->makePeriod(false, '2026-04-16', '2026-04-30'); // anchor period for FK
+        $period2 = $this->makePeriod(false, '2026-05-16', '2026-05-31'); // target period
 
         // Build a payroll row in period1 so we satisfy original_payroll_id FK.
         $this->attendanceFor($emp, '2026-04-16', '2026-04-30');
@@ -658,22 +756,22 @@ class PayrollCalculatorServiceTest extends TestCase
         // Create two adjustments referencing period1/original payroll.
         // (The service picks them up by employee + status + applied_at=null; period is ignored.)
         $underpay = PayrollAdjustment::create([
-            'payroll_period_id'   => $period1->id,
-            'employee_id'         => $emp->id,
+            'payroll_period_id' => $period1->id,
+            'employee_id' => $emp->id,
             'original_payroll_id' => $originalPayroll->id,
-            'type'                => PayrollAdjustmentType::Underpayment->value,
-            'amount'              => '500.00',
-            'reason'              => 'Missed allowance',
+            'type' => PayrollAdjustmentType::Underpayment->value,
+            'amount' => '500.00',
+            'reason' => 'Missed allowance',
         ]);
         $underpay->forceFill(['status' => PayrollAdjustmentStatus::Approved->value])->save();
 
         $overpay = PayrollAdjustment::create([
-            'payroll_period_id'   => $period1->id,
-            'employee_id'         => $emp->id,
+            'payroll_period_id' => $period1->id,
+            'employee_id' => $emp->id,
             'original_payroll_id' => $originalPayroll->id,
-            'type'                => PayrollAdjustmentType::Overpayment->value,
-            'amount'              => '300.00',
-            'reason'              => 'Extra paid last period',
+            'type' => PayrollAdjustmentType::Overpayment->value,
+            'amount' => '300.00',
+            'reason' => 'Extra paid last period',
         ]);
         $overpay->forceFill(['status' => PayrollAdjustmentStatus::Approved->value])->save();
 
@@ -684,8 +782,8 @@ class PayrollCalculatorServiceTest extends TestCase
         $this->assertSame('200.00', $payroll2->adjustment_amount);
 
         // Net must have increased by +200 compared to gross-minus-deductions
-        $expectedNet = \App\Common\Support\Money::add(
-            \App\Common\Support\Money::sub($payroll2->gross_pay, $payroll2->total_deductions),
+        $expectedNet = Money::add(
+            Money::sub($payroll2->gross_pay, $payroll2->total_deductions),
             '200.00'
         );
         // net_pay is clamped at 0 but for a 20k employee it won't be
@@ -706,8 +804,8 @@ class PayrollCalculatorServiceTest extends TestCase
 
         $this->assertSame('200.00', $recomputed->adjustment_amount,
             'Recompute must apply each adjustment exactly once — neither doubled nor dropped');
-        $expectedNetRecomputed = \App\Common\Support\Money::add(
-            \App\Common\Support\Money::sub($recomputed->gross_pay, $recomputed->total_deductions),
+        $expectedNetRecomputed = Money::add(
+            Money::sub($recomputed->gross_pay, $recomputed->total_deductions),
             '200.00',
         );
         $this->assertSame($expectedNetRecomputed, $recomputed->net_pay);
@@ -716,6 +814,52 @@ class PayrollCalculatorServiceTest extends TestCase
         // audit trail points at the row that actually paid them.
         $this->assertSame($recomputed->id, $underpay->fresh()->applied_to_payroll_id);
         $this->assertSame($recomputed->id, $overpay->fresh()->applied_to_payroll_id);
+    }
+
+    public function test_unpaid_absence_adjustment_only_applies_to_its_selected_cutoff(): void
+    {
+        $employee = $this->makeEmployee();
+        $origin = $this->makePeriod(false, '2026-03-16', '2026-03-31');
+        $origin->forceFill(['status' => PayrollPeriodStatus::Finalized->value])->save();
+        $originalPayroll = Payroll::factory()->create([
+            'payroll_period_id' => $origin->id,
+            'employee_id' => $employee->id,
+        ]);
+        $target = $this->makePeriod(true, '2026-04-01', '2026-04-15');
+        $adjacent = $this->makePeriod(false, '2026-04-16', '2026-04-30');
+        $leaveNo = $this->markLeave($employee, '2026-04-06', '2026-04-07', isPaid: false);
+        $leave = LeaveRequest::query()->where('leave_request_no', $leaveNo)->firstOrFail();
+
+        $adjustment = PayrollAdjustment::create([
+            'payroll_period_id' => $origin->id,
+            'employee_id' => $employee->id,
+            'original_payroll_id' => $originalPayroll->id,
+            'type' => PayrollAdjustmentType::UnpaidAbsence->value,
+            'amount' => '1250.00',
+            'reason' => 'Approved unpaid leave for April 6 and 7.',
+            'source_leave_request_id' => $leave->id,
+            'target_payroll_period_id' => $target->id,
+        ]);
+        $adjustment->forceFill(['status' => PayrollAdjustmentStatus::Approved->value])->save();
+
+        $this->attendanceFor($employee, '2026-04-16', '2026-04-30');
+        $adjacentPayroll = $this->calc->computeForEmployee($adjacent, $employee);
+        $this->assertSame('0.00', $adjacentPayroll->adjustment_amount);
+        $this->assertSame(PayrollAdjustmentStatus::Approved, $adjustment->fresh()->status);
+
+        $targetPayroll = $this->calc->computeForEmployee($target, $employee);
+        $this->assertSame('-1250.00', $targetPayroll->adjustment_amount);
+        $this->assertSame(PayrollAdjustmentStatus::Applied, $adjustment->fresh()->status);
+        $this->assertSame($targetPayroll->id, $adjustment->fresh()->applied_to_payroll_id);
+
+        $leave->forceFill(['status' => LeaveRequestStatus::Cancelled->value])->save();
+        $anomalies = app(PayrollAnomalyService::class);
+        $this->assertSame(1, $anomalies->unpaidAbsenceGapCount($target));
+        $anomalies->detect($target);
+        $this->assertTrue(PayrollAnomalyFlag::query()
+            ->where('payroll_id', $targetPayroll->id)
+            ->where('flag_type', PayrollAnomalyType::UnpaidAbsence->value)
+            ->exists());
     }
 
     /**
@@ -729,9 +873,9 @@ class PayrollCalculatorServiceTest extends TestCase
     public function test_semi_monthly_paid_leave_is_inside_flat_basic(): void
     {
         $emp = $this->makeEmployee([
-            'pay_type'             => 'semi_monthly',
+            'pay_type' => 'semi_monthly',
             'basic_monthly_salary' => null,
-            'semi_monthly_rate'    => '6600.00',
+            'semi_monthly_rate' => '6600.00',
         ]);
         $period = $this->makePeriod(false, '2026-04-01', '2026-04-15'); // 2nd-half flag → no gov noise
 
@@ -754,9 +898,9 @@ class PayrollCalculatorServiceTest extends TestCase
     public function test_semi_monthly_unpaid_leave_adds_no_leave_pay(): void
     {
         $emp = $this->makeEmployee([
-            'pay_type'             => 'semi_monthly',
+            'pay_type' => 'semi_monthly',
             'basic_monthly_salary' => null,
-            'semi_monthly_rate'    => '6600.00',
+            'semi_monthly_rate' => '6600.00',
         ]);
         $period = $this->makePeriod(false, '2026-04-01', '2026-04-15');
 
@@ -796,7 +940,6 @@ class PayrollCalculatorServiceTest extends TestCase
      * (e.g. rest-day OT at 1.25×1.30 = 1.625× instead of the lawful 1.69×).
      *
      * hourly = 20000 / 22 / 8 ≈ 113.6364; 4 OT hours per case.
-     *
      */
     #[DataProvider('otDayTypeProvider')]
     public function test_overtime_premium_stacks_day_type_factor(float $dayTypeRate, bool $isRestDay, string $expectedOt): void
@@ -805,18 +948,18 @@ class PayrollCalculatorServiceTest extends TestCase
         $period = $this->makePeriod(false, '2026-04-16', '2026-04-30'); // 2nd half: no gov deductions
 
         Attendance::create([
-            'employee_id'       => $emp->id,
-            'date'              => '2026-04-16',
-            'time_in'           => '2026-04-16 08:00:00',
-            'time_out'          => '2026-04-16 20:00:00',
-            'regular_hours'     => '8.00',
-            'overtime_hours'    => '4.00',
-            'night_diff_hours'  => '0.00',
+            'employee_id' => $emp->id,
+            'date' => '2026-04-16',
+            'time_in' => '2026-04-16 08:00:00',
+            'time_out' => '2026-04-16 20:00:00',
+            'regular_hours' => '8.00',
+            'overtime_hours' => '4.00',
+            'night_diff_hours' => '0.00',
             'tardiness_minutes' => 0,
             'undertime_minutes' => 0,
-            'is_rest_day'       => $isRestDay,
-            'day_type_rate'     => number_format($dayTypeRate, 2, '.', ''),
-            'status'            => 'present',
+            'is_rest_day' => $isRestDay,
+            'day_type_rate' => number_format($dayTypeRate, 2, '.', ''),
+            'status' => 'present',
         ]);
 
         $payroll = $this->calc->computeForEmployee($period, $emp);
@@ -833,10 +976,10 @@ class PayrollCalculatorServiceTest extends TestCase
         // DOLE (rest 1.69×, special+rest 1.95×, reg-holiday 2.60×, +rest 3.38×);
         // the sub-centavo values below are the engine's rounded output.
         return [
-            'ordinary day (+25%)'    => [1.00, false, '568.19'],   // × 1.25 × 1.00
-            'rest day (+30%)'        => [1.30, true,  '768.20'],   // × 1.30 × 1.30 (=1.69×)
-            'special + rest day'     => [1.50, true,  '886.38'],   // × 1.30 × 1.50 (=1.95×)
-            'regular holiday'        => [2.00, false, '1181.84'],  // × 1.30 × 2.00 (=2.60×)
+            'ordinary day (+25%)' => [1.00, false, '568.19'],   // × 1.25 × 1.00
+            'rest day (+30%)' => [1.30, true,  '768.20'],   // × 1.30 × 1.30 (=1.69×)
+            'special + rest day' => [1.50, true,  '886.38'],   // × 1.30 × 1.50 (=1.95×)
+            'regular holiday' => [2.00, false, '1181.84'],  // × 1.30 × 2.00 (=2.60×)
             'regular holiday + rest' => [2.60, true,  '1536.39'],  // × 1.30 × 2.60 (=3.38×)
         ];
     }
@@ -856,18 +999,18 @@ class PayrollCalculatorServiceTest extends TestCase
         $period = $this->makePeriod(false, '2026-04-16', '2026-04-30'); // 2nd half: no gov deductions
 
         Attendance::create([
-            'employee_id'       => $emp->id,
-            'date'              => '2026-04-16',
-            'time_in'           => '2026-04-16 22:00:00',
-            'time_out'          => '2026-04-17 06:00:00',
-            'regular_hours'     => '8.00',
-            'overtime_hours'    => '0.00',
-            'night_diff_hours'  => '8.00',
+            'employee_id' => $emp->id,
+            'date' => '2026-04-16',
+            'time_in' => '2026-04-16 22:00:00',
+            'time_out' => '2026-04-17 06:00:00',
+            'regular_hours' => '8.00',
+            'overtime_hours' => '0.00',
+            'night_diff_hours' => '8.00',
             'tardiness_minutes' => 0,
             'undertime_minutes' => 0,
-            'is_rest_day'       => $isRestDay,
-            'day_type_rate'     => number_format($dayTypeRate, 2, '.', ''),
-            'status'            => 'present',
+            'is_rest_day' => $isRestDay,
+            'day_type_rate' => number_format($dayTypeRate, 2, '.', ''),
+            'status' => 'present',
         ]);
 
         $payroll = $this->calc->computeForEmployee($period, $emp);
@@ -884,10 +1027,10 @@ class PayrollCalculatorServiceTest extends TestCase
         // pins the pre-fix behaviour, which was already correct at rate 1.00.
         return [
             'ordinary day (rate 1.00)' => [1.00, false, '90.91'],   // × 0.10 × 1.00
-            'rest day'                 => [1.30, true,  '118.18'],   // × 0.10 × 1.30
-            'special + rest day'       => [1.50, true,  '136.37'],   // × 0.10 × 1.50
-            'regular holiday'          => [2.00, false, '181.82'],   // × 0.10 × 2.00
-            'regular holiday + rest'   => [2.60, true,  '236.37'],   // × 0.10 × 2.60
+            'rest day' => [1.30, true,  '118.18'],   // × 0.10 × 1.30
+            'special + rest day' => [1.50, true,  '136.37'],   // × 0.10 × 1.50
+            'regular holiday' => [2.00, false, '181.82'],   // × 0.10 × 2.00
+            'regular holiday + rest' => [2.60, true,  '236.37'],   // × 0.10 × 2.60
         ];
     }
 
@@ -907,25 +1050,25 @@ class PayrollCalculatorServiceTest extends TestCase
     public function test_monster_regular_holiday_rest_day_night_shift_pays_nd_on_rated_rate(): void
     {
         $emp = $this->makeEmployee([
-            'pay_type'             => 'semi_monthly',
+            'pay_type' => 'semi_monthly',
             'basic_monthly_salary' => null,
-            'semi_monthly_rate'    => '8800.00',
+            'semi_monthly_rate' => '8800.00',
         ]);
         $period = $this->makePeriod(false, '2026-04-16', '2026-04-30'); // 2nd half: no gov deductions
 
         Attendance::create([
-            'employee_id'       => $emp->id,
-            'date'              => '2026-04-16',
-            'time_in'           => '2026-04-16 18:00:00',
-            'time_out'          => '2026-04-17 10:00:00',
-            'regular_hours'     => '11.50',
-            'overtime_hours'    => '4.00',
-            'night_diff_hours'  => '8.00',
+            'employee_id' => $emp->id,
+            'date' => '2026-04-16',
+            'time_in' => '2026-04-16 18:00:00',
+            'time_out' => '2026-04-17 10:00:00',
+            'regular_hours' => '11.50',
+            'overtime_hours' => '4.00',
+            'night_diff_hours' => '8.00',
             'tardiness_minutes' => 0,
             'undertime_minutes' => 0,
-            'is_rest_day'       => true,
-            'day_type_rate'     => '2.60',
-            'status'            => 'present',
+            'is_rest_day' => true,
+            'day_type_rate' => '2.60',
+            'status' => 'present',
         ]);
 
         $payroll = $this->calc->computeForEmployee($period, $emp);

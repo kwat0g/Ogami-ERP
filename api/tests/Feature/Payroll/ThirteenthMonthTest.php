@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature\Payroll;
 
 use App\Common\Exceptions\BusinessRuleException;
+use App\Common\Services\SettingsService;
 use App\Common\Support\Money;
 use App\Modules\Auth\Models\Role;
 use App\Modules\Auth\Models\User;
@@ -16,6 +17,7 @@ use App\Modules\Payroll\Enums\PayrollPeriodStatus;
 use App\Modules\Payroll\Models\Payroll;
 use App\Modules\Payroll\Models\PayrollPeriod;
 use App\Modules\Payroll\Models\ThirteenthMonthAccrual;
+use App\Modules\Payroll\Services\PayrollPeriodService;
 use App\Modules\Payroll\Services\ThirteenthMonthService;
 use Database\Seeders\GovernmentTableSeeder;
 use Database\Seeders\RolePermissionSeeder;
@@ -35,6 +37,7 @@ class ThirteenthMonthTest extends TestCase
     use RefreshDatabase;
 
     private ThirteenthMonthService $svc;
+
     private User $adminUser;
 
     protected function setUp(): void
@@ -44,6 +47,12 @@ class ThirteenthMonthTest extends TestCase
         $this->seed(GovernmentTableSeeder::class);
         $this->svc = app(ThirteenthMonthService::class);
         $this->adminUser = $this->makeUser();
+
+        // These legacy calculation tests exercise historical source data. A
+        // voided annual run represents the explicit correction boundary now
+        // required before the service accepts a prior calendar year.
+        $this->authorizeHistoricalAnnualCorrection(2025);
+        $this->authorizeHistoricalAnnualCorrection(2022);
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -51,39 +60,41 @@ class ThirteenthMonthTest extends TestCase
     private function makeUser(): User
     {
         $roleId = Role::query()->orderBy('id')->value('id');
+
         return User::create([
-            'name'     => 'Tester '.uniqid(),
-            'email'    => 't_'.uniqid().'@x.test',
+            'name' => 'Tester '.uniqid(),
+            'email' => 't_'.uniqid().'@x.test',
             'password' => bcrypt('Password1!'),
-            'role_id'  => $roleId,
+            'role_id' => $roleId,
         ]);
     }
 
     private function makeEmployee(array $overrides = []): Employee
     {
         $dept = Department::create(['name' => 'Production '.uniqid(), 'code' => 'PRD'.substr(uniqid(), -4)]);
-        $pos  = Position::create(['title' => 'Operator', 'department_id' => $dept->id]);
+        $pos = Position::create(['title' => 'Operator', 'department_id' => $dept->id]);
+
         return Employee::create(array_merge([
-            'employee_no'             => 'OGM-2025-'.str_pad((string) random_int(1, 9999), 4, '0', STR_PAD_LEFT),
-            'first_name'              => 'Juan',
-            'last_name'               => 'Dela Cruz',
-            'birth_date'              => '1990-01-01',
-            'gender'                  => 'male',
-            'civil_status'            => 'single',
-            'nationality'             => 'Filipino',
-            'street_address'          => '123 Main',
-            'city'                    => 'Dasmariñas',
-            'province'                => 'Cavite',
-            'mobile_number'           => '09171234567',
-            'email'                   => 'jdc_'.uniqid().'@example.com',
-            'emergency_contact_name'  => 'Maria',
+            'employee_no' => 'OGM-2025-'.str_pad((string) random_int(1, 9999), 4, '0', STR_PAD_LEFT),
+            'first_name' => 'Juan',
+            'last_name' => 'Dela Cruz',
+            'birth_date' => '1990-01-01',
+            'gender' => 'male',
+            'civil_status' => 'single',
+            'nationality' => 'Filipino',
+            'street_address' => '123 Main',
+            'city' => 'Dasmariñas',
+            'province' => 'Cavite',
+            'mobile_number' => '09171234567',
+            'email' => 'jdc_'.uniqid().'@example.com',
+            'emergency_contact_name' => 'Maria',
             'emergency_contact_phone' => '09181234567',
-            'department_id'           => $dept->id,
-            'position_id'             => $pos->id,
-            'employment_type'         => 'regular',
-            'pay_type'                => 'monthly',
-            'date_hired'              => '2025-01-01',
-            'basic_monthly_salary'    => '24000.00',
+            'department_id' => $dept->id,
+            'position_id' => $pos->id,
+            'employment_type' => 'regular',
+            'pay_type' => 'monthly',
+            'date_hired' => '2025-01-01',
+            'basic_monthly_salary' => '24000.00',
         ], $overrides));
     }
 
@@ -94,12 +105,25 @@ class ThirteenthMonthTest extends TestCase
     private function seedAccrual(Employee $emp, int $year, string $totalBasicEarned): ThirteenthMonthAccrual
     {
         return ThirteenthMonthAccrual::create([
-            'employee_id'        => $emp->id,
-            'year'               => $year,
+            'employee_id' => $emp->id,
+            'year' => $year,
             'total_basic_earned' => $totalBasicEarned,
-            'accrued_amount'     => Money::div($totalBasicEarned, '12', 2), // running estimate
-            'is_paid'            => false,
+            'accrued_amount' => Money::div($totalBasicEarned, '12', 2), // running estimate
+            'is_paid' => false,
         ]);
+    }
+
+    private function authorizeHistoricalAnnualCorrection(int $year): void
+    {
+        $period = PayrollPeriod::factory()->create([
+            'period_start' => "{$year}-12-01",
+            'period_end' => "{$year}-12-31",
+            'payroll_date' => "{$year}-12-24",
+            'is_first_half' => false,
+            'is_thirteenth_month' => true,
+            'created_by' => $this->adminUser->id,
+        ]);
+        $period->forceFill(['status' => PayrollPeriodStatus::Voided->value])->save();
     }
 
     public function test_13th_month_below_and_at_exemption_has_no_tax_correction(): void
@@ -115,6 +139,27 @@ class ThirteenthMonthTest extends TestCase
             $this->assertSame('0.00', (string) $payroll->thirteenth_month_correction_delta);
             $this->assertSame((string) $payroll->gross_pay, (string) $payroll->net_pay);
         }
+    }
+
+    public function test_13th_month_run_fails_closed_when_anomaly_evaluation_fails(): void
+    {
+        $employee = $this->makeEmployee();
+        $accrual = $this->seedAccrual($employee, 2025, '288000.00');
+        app(SettingsService::class)->set('payroll.anomaly.deduction_ratio', 'invalid', 'payroll');
+
+        try {
+            $this->svc->computeAndPay(2025, $this->adminUser);
+            $this->fail('The annual payroll must not be marked computed when anomaly evaluation fails.');
+        } catch (BusinessRuleException $exception) {
+            $this->assertStringContainsString('payroll setting payroll.anomaly.deduction_ratio', $exception->getMessage());
+        }
+
+        $this->assertFalse(PayrollPeriod::query()
+            ->where('is_thirteenth_month', true)
+            ->where('status', '!=', PayrollPeriodStatus::Voided->value)
+            ->where('period_start', '2025-12-01')
+            ->exists());
+        $this->assertFalse((bool) $accrual->fresh()->is_paid);
     }
 
     public function test_13th_month_above_exemption_posts_annual_tax_correction(): void
@@ -178,7 +223,7 @@ class ThirteenthMonthTest extends TestCase
     {
         $emp = $this->makeEmployee();
         $this->seedAccrual($emp, 2025, '12000000.00');
-        $periods = app(\App\Modules\Payroll\Services\PayrollPeriodService::class);
+        $periods = app(PayrollPeriodService::class);
         $checker = User::factory()->create(['role_id' => Role::where('slug', 'finance_officer')->value('id')]);
         $finalizer = User::factory()->create(['role_id' => Role::where('slug', 'finance_officer')->value('id')]);
         $period = $this->svc->computeAndPay(2025, $this->adminUser);
@@ -301,7 +346,7 @@ class ThirteenthMonthTest extends TestCase
         $this->assertNull($accrual->paid_date, 'paid_date must wait for finalize');
 
         // Approve (a different actor — maker-checker) then finalize.
-        $periods = app(\App\Modules\Payroll\Services\PayrollPeriodService::class);
+        $periods = app(PayrollPeriodService::class);
         $checker = User::factory()->create([
             'role_id' => Role::where('slug', 'finance_officer')->value('id'),
         ]);
@@ -374,7 +419,7 @@ class ThirteenthMonthTest extends TestCase
         $emp = $this->makeEmployee();
         $this->seedAccrual($emp, 2025, '240000.00');
 
-        $periods = app(\App\Modules\Payroll\Services\PayrollPeriodService::class);
+        $periods = app(PayrollPeriodService::class);
         $checker = User::factory()->create([
             'role_id' => Role::where('slug', 'finance_officer')->value('id'),
         ]);
@@ -495,7 +540,7 @@ class ThirteenthMonthTest extends TestCase
      */
     public function test_inactive_employee_accrual_is_skipped(): void
     {
-        $activeEmp   = $this->makeEmployee();
+        $activeEmp = $this->makeEmployee();
         $resignedEmp = $this->makeEmployee();
         $resignedEmp->forceFill(['status' => EmployeeStatus::Resigned])->save();
 
@@ -541,6 +586,44 @@ class ThirteenthMonthTest extends TestCase
         $this->expectExceptionMessage('13th-month payroll date');
 
         $this->svc->computeAndPay(2025, $this->adminUser, '2027-01-01');
+    }
+
+    public function test_13th_month_rejects_future_calendar_year(): void
+    {
+        $this->expectException(BusinessRuleException::class);
+        $this->expectExceptionMessage('cannot be computed for future year');
+
+        $this->svc->computeAndPay((int) now()->year + 1, $this->adminUser);
+    }
+
+    public function test_13th_month_rejects_historical_year_without_voided_correction_run(): void
+    {
+        PayrollPeriod::query()
+            ->where('is_thirteenth_month', true)
+            ->whereYear('period_start', 2025)
+            ->delete();
+
+        $this->expectException(BusinessRuleException::class);
+        $this->expectExceptionMessage('requires a previously voided annual run as correction authorization');
+
+        $this->svc->computeAndPay(2025, $this->adminUser);
+    }
+
+    public function test_13th_month_run_refuses_to_omit_an_unfinalized_regular_source_period(): void
+    {
+        PayrollPeriod::factory()->create([
+            'period_start' => '2025-11-01',
+            'period_end' => '2025-11-15',
+            'payroll_date' => '2025-11-17',
+            'is_first_half' => true,
+            'is_thirteenth_month' => false,
+            'status' => PayrollPeriodStatus::Computed,
+        ]);
+
+        $this->expectException(BusinessRuleException::class);
+        $this->expectExceptionMessage('unfinished regular payroll period');
+
+        $this->svc->computeAndPay(2025, $this->adminUser, '2025-12-15');
     }
 
     /**

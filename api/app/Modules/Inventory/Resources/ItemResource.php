@@ -52,6 +52,7 @@ class ItemResource extends JsonResource
             'item_type_label' => $this->item_type?->label(),
             'classification_needs_review' => $this->whenLoaded('category', fn () => ! $this->category || $this->category->item_type !== $this->item_type?->value),
             'unit_of_measure' => $this->unit_of_measure,
+            'weight_kg_per_unit' => $this->weight_kg_per_unit,
             'standard_cost' => (string) $this->standard_cost,
             'reorder_method' => (string) $this->reorder_method?->value,
             'reorder_point' => (string) $this->reorder_point,

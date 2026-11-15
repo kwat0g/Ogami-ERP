@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useForm } from 'react-hook-form';
+import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import toast from 'react-hot-toast';
@@ -25,6 +25,15 @@ const schema = z.object({
  type: z.string().min(1, 'Adjustment type is required'),
  amount: z.string().min(1, 'Amount is required'),
  reason: z.string().min(5, 'Reason is required (min 5 chars)').max(1000),
+ source_leave_request_id: z.string().optional(),
+ target_payroll_period_id: z.string().optional(),
+}).superRefine((values, context) => {
+ if (values.type === 'unpaid_absence' && !values.source_leave_request_id) {
+  context.addIssue({ code: 'custom', path: ['source_leave_request_id'], message: 'Approved unpaid leave is required' });
+ }
+ if (values.type === 'unpaid_absence' && !values.target_payroll_period_id) {
+  context.addIssue({ code: 'custom', path: ['target_payroll_period_id'], message: 'Target payroll cutoff is required' });
+ }
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -51,10 +60,45 @@ export default function CreatePayrollAdjustmentPage() {
  type: '',
  },
  });
- const { register, handleSubmit, setError, formState: { errors } } = form;
+ const { register, handleSubmit, setError, setValue, control, formState: { errors } } = form;
+ const selectedType = useWatch({ control, name: 'type' });
+ const originalPayrollId = useWatch({ control, name: 'original_payroll_id' });
+ const selectedLeaveRequestId = useWatch({ control, name: 'source_leave_request_id' });
+ const {
+  data: unpaidAbsenceOptions,
+  isFetching: unpaidAbsenceOptionsLoading,
+  isError: unpaidAbsenceOptionsError,
+  refetch: refetchUnpaidAbsenceOptions,
+ } = useQuery({
+  queryKey: ['payroll-adjustments', 'unpaid-absence-options', originalPayrollId, selectedLeaveRequestId],
+  queryFn: () => adjustmentsApi.unpaidAbsenceOptions({
+   original_payroll_id: originalPayrollId,
+   leave_request_id: selectedLeaveRequestId || undefined,
+  }),
+  enabled: selectedType === 'unpaid_absence' && !!originalPayrollId,
+ });
+
+ useEffect(() => {
+  setValue('source_leave_request_id', '');
+  setValue('target_payroll_period_id', '');
+ }, [originalPayrollId, setValue]);
+
+ useEffect(() => {
+  if (selectedType !== 'unpaid_absence') {
+   setValue('source_leave_request_id', '');
+   setValue('target_payroll_period_id', '');
+  }
+ }, [selectedType, setValue]);
 
  const mutation = useMutation({
- mutationFn: (data: FormValues) => adjustmentsApi.create(data as Parameters<typeof adjustmentsApi.create>[0]),
+ mutationFn: (data: FormValues) => {
+  const payload = { ...data };
+  if (payload.type !== 'unpaid_absence') {
+   delete payload.source_leave_request_id;
+   delete payload.target_payroll_period_id;
+  }
+  return adjustmentsApi.create(payload as Parameters<typeof adjustmentsApi.create>[0]);
+ },
  onSuccess: (created) => {
  reconcileRealtimeMutationResponse(
   qc,
@@ -117,8 +161,61 @@ navigate('/payroll/adjustments');
  <option value="">— Select —</option>
  {(adjustmentOptions?.types ?? []).map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
  </Select>
+ {selectedType === 'unpaid_absence' && (
+  <>
+   <Select
+    label="Approved unpaid leave"
+    helper={unpaidAbsenceOptionsError
+     ? 'Could not load leave requests.'
+     : !originalPayrollId
+      ? 'Select a source payroll first.'
+      : unpaidAbsenceOptions && unpaidAbsenceOptions.leave_requests.length === 0
+       ? 'No approved unpaid leave found for this employee.'
+       : 'Only approved unpaid leave for the source employee is listed.'}
+    loading={unpaidAbsenceOptionsLoading}
+    required
+    {...register('source_leave_request_id')}
+    error={errors.source_leave_request_id?.message}
+   >
+    <option value="">— Select leave request —</option>
+    {(unpaidAbsenceOptions?.leave_requests ?? []).map((leave) => (
+     <option key={leave.id} value={leave.id}>
+      {leave.leave_request_no} · {leave.start_date} to {leave.end_date} · {leave.days} day(s)
+     </option>
+    ))}
+   </Select>
+   <Select
+    label="Target payroll cutoff"
+    helper={!selectedLeaveRequestId
+     ? 'Choose the leave request first.'
+     : unpaidAbsenceOptions && unpaidAbsenceOptions.target_periods.length === 0
+      ? 'No draft or computed cutoff overlaps these dates and includes this employee.'
+      : 'The deduction applies only to this cutoff.'}
+    loading={unpaidAbsenceOptionsLoading}
+    disabled={!selectedLeaveRequestId}
+    required
+    {...register('target_payroll_period_id')}
+    error={errors.target_payroll_period_id?.message}
+   >
+    <option value="">— Select cutoff —</option>
+    {(unpaidAbsenceOptions?.target_periods ?? []).map((period) => (
+     <option key={period.id} value={period.id}>
+      {period.label} · {period.status}
+     </option>
+    ))}
+   </Select>
+   {unpaidAbsenceOptionsError && (
+    <div role="alert" className="col-span-2 flex items-center gap-2 text-xs text-danger-fg">
+     <span>Unpaid leave options could not be loaded.</span>
+     <Button type="button" variant="secondary" size="xs" onClick={() => void refetchUnpaidAbsenceOptions()}>
+      Retry options
+     </Button>
+    </div>
+   )}
+  </>
+ )}
  <Input
- label="Amount"
+ label={selectedType === 'unpaid_absence' ? 'Deduction amount for this cutoff' : 'Amount'}
  {...register('amount')}
  error={errors.amount?.message}
  prefix="₱"
@@ -140,7 +237,9 @@ navigate('/payroll/adjustments');
  required
  />
  <p className="text-xs text-muted mt-2">
- The adjustment will be queued for approval. Once approved, it applies automatically to the next non-finalized period.
+ {selectedType === 'unpaid_absence'
+  ? 'Enter the approved deduction amount for the selected cutoff. It will be queued for approval and will apply only when that payroll is computed or recomputed.'
+  : 'The adjustment will be queued for approval. Once approved, it applies automatically to the next non-finalized period.'}
  </p>
  </fieldset>
 

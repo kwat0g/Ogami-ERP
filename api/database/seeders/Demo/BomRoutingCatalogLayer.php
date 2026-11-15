@@ -22,7 +22,7 @@ final class BomRoutingCatalogLayer extends DemoSeeder
 {
     private const COST_BATCH_SIZE = '5000';
 
-    private const ROUTING_NOTES = 'Synthetic demonstration route; confirm process times, machine rates, labor rates, and overhead with plant engineering and Finance before production use.';
+    private const ROUTING_NOTES = 'Illustrative routing baseline; confirm process times, machine rates, labor rates, and overhead with plant engineering and Finance before production use.';
 
     /** @var array<string, array{resin: string, quantity: string, black: bool, insert?: string}> */
     private const RECIPES = [

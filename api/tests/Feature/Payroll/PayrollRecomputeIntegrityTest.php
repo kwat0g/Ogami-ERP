@@ -4,23 +4,27 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Payroll;
 
+use App\Common\Exceptions\BusinessRuleException;
 use App\Modules\Attendance\Models\Attendance;
+use App\Modules\Auth\Models\Role;
+use App\Modules\Auth\Models\User;
 use App\Modules\HR\Models\Department;
 use App\Modules\HR\Models\Employee;
 use App\Modules\HR\Models\Position;
-use App\Modules\Auth\Models\Role;
-use App\Modules\Auth\Models\User;
 use App\Modules\Loans\Enums\LoanStatus;
 use App\Modules\Loans\Enums\LoanType;
 use App\Modules\Loans\Models\EmployeeLoan;
 use App\Modules\Loans\Models\LoanPayment;
 use App\Modules\Payroll\Enums\PayrollAdjustmentStatus;
 use App\Modules\Payroll\Enums\PayrollAdjustmentType;
+use App\Modules\Payroll\Enums\PayrollAnomalyType;
 use App\Modules\Payroll\Enums\PayrollPeriodStatus;
 use App\Modules\Payroll\Models\PayrollAdjustment;
+use App\Modules\Payroll\Models\PayrollAnomalyFlag;
 use App\Modules\Payroll\Models\PayrollPeriod;
 use App\Modules\Payroll\Models\ThirteenthMonthAccrual;
 use App\Modules\Payroll\Services\PayrollCalculatorService;
+use Carbon\Carbon;
 use Database\Seeders\GovernmentTableSeeder;
 use Database\Seeders\RolePermissionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -61,28 +65,28 @@ class PayrollRecomputeIntegrityTest extends TestCase
     private function makeEmployee(array $overrides = []): Employee
     {
         $dept = Department::create(['name' => 'Production', 'code' => 'PRD']);
-        $pos  = Position::create(['title' => 'Operator', 'department_id' => $dept->id]);
+        $pos = Position::create(['title' => 'Operator', 'department_id' => $dept->id]);
 
         return Employee::create(array_merge([
-            'employee_no'          => 'OGM-2026-'.str_pad((string) random_int(1, 9999), 4, '0', STR_PAD_LEFT),
-            'first_name'           => 'Juan',
-            'last_name'            => 'Dela Cruz',
-            'birth_date'           => '1990-01-01',
-            'gender'               => 'male',
-            'civil_status'         => 'single',
-            'nationality'          => 'Filipino',
-            'street_address'       => '123 Main',
-            'city'                 => 'Dasmariñas',
-            'province'             => 'Cavite',
-            'mobile_number'        => '09171234567',
-            'email'                => 'jdc@example.com',
-            'emergency_contact_name'  => 'Maria',
+            'employee_no' => 'OGM-2026-'.str_pad((string) random_int(1, 9999), 4, '0', STR_PAD_LEFT),
+            'first_name' => 'Juan',
+            'last_name' => 'Dela Cruz',
+            'birth_date' => '1990-01-01',
+            'gender' => 'male',
+            'civil_status' => 'single',
+            'nationality' => 'Filipino',
+            'street_address' => '123 Main',
+            'city' => 'Dasmariñas',
+            'province' => 'Cavite',
+            'mobile_number' => '09171234567',
+            'email' => 'jdc@example.com',
+            'emergency_contact_name' => 'Maria',
             'emergency_contact_phone' => '09181234567',
-            'department_id'        => $dept->id,
-            'position_id'          => $pos->id,
-            'employment_type'      => 'regular',
-            'pay_type'             => 'monthly',
-            'date_hired'           => '2025-01-01',
+            'department_id' => $dept->id,
+            'position_id' => $pos->id,
+            'employment_type' => 'regular',
+            'pay_type' => 'monthly',
+            'date_hired' => '2025-01-01',
             'basic_monthly_salary' => '20000.00',
         ], $overrides));
     }
@@ -94,12 +98,12 @@ class PayrollRecomputeIntegrityTest extends TestCase
         ])->id;
 
         $period = PayrollPeriod::create([
-            'period_start'         => '2026-04-01',
-            'period_end'           => '2026-04-15',
-            'payroll_date'         => '2026-04-15',
-            'is_first_half'        => true,
-            'is_thirteenth_month'  => false,
-            'created_by'           => $userId,
+            'period_start' => '2026-04-01',
+            'period_end' => '2026-04-15',
+            'payroll_date' => '2026-04-15',
+            'is_first_half' => true,
+            'is_thirteenth_month' => false,
+            'created_by' => $userId,
         ]);
         $period->forceFill(['status' => PayrollPeriodStatus::Draft->value])->save();
 
@@ -109,38 +113,69 @@ class PayrollRecomputeIntegrityTest extends TestCase
     private function attend(Employee $emp, string $date, int $tardyMins = 0): void
     {
         Attendance::create([
-            'employee_id'       => $emp->id,
-            'date'             => $date,
-            'time_in'          => $date.' 08:00:00',
-            'time_out'         => $date.' 17:00:00',
-            'regular_hours'    => 8,
-            'overtime_hours'   => 0,
+            'employee_id' => $emp->id,
+            'date' => $date,
+            'time_in' => $date.' 08:00:00',
+            'time_out' => $date.' 17:00:00',
+            'regular_hours' => 8,
+            'overtime_hours' => 0,
             'night_diff_hours' => 0,
             'tardiness_minutes' => $tardyMins,
             'undertime_minutes' => 0,
-            'is_rest_day'      => false,
-            'day_type_rate'    => 1.00,
-            'status'           => 'present',
+            'is_rest_day' => false,
+            'day_type_rate' => 1.00,
+            'status' => 'present',
+        ]);
+    }
+
+    public function test_employee_recompute_is_rejected_before_cutoff_end_without_writing_payroll(): void
+    {
+        $emp = $this->makeEmployee();
+        $period = $this->makePeriod();
+        $period->forceFill([
+            'period_start' => '2026-11-01',
+            'period_end' => '2026-11-15',
+            'payroll_date' => '2026-11-20',
+        ])->save();
+
+        Carbon::setTestNow('2026-11-03 09:00:00');
+        try {
+            try {
+                $this->calc->computeForEmployee($period, $emp);
+                $this->fail('An employee recompute must be rejected before its cutoff ends.');
+            } catch (BusinessRuleException $exception) {
+                $this->assertStringContainsString(
+                    'Payroll actions are unavailable until the cutoff ends',
+                    $exception->getMessage(),
+                );
+            }
+        } finally {
+            Carbon::setTestNow();
+        }
+
+        $this->assertDatabaseMissing('payrolls', [
+            'payroll_period_id' => $period->id,
+            'employee_id' => $emp->id,
         ]);
     }
 
     public function test_recompute_does_not_double_deduct_a_loan(): void
     {
-        $emp    = $this->makeEmployee();
+        $emp = $this->makeEmployee();
         $period = $this->makePeriod();
         $this->attend($emp, '2026-04-01');
 
         $loan = EmployeeLoan::create([
-            'employee_id'           => $emp->id,
-            'loan_no'               => 'LN-T-'.substr(uniqid(), -5),
-            'loan_type'             => LoanType::CompanyLoan->value,
-            'principal'             => '12000.00',
-            'pay_periods_total'     => 12,
-            'monthly_amortization'  => '2000.00',
-            'balance'               => '12000.00',
-            'total_paid'            => '0.00',
+            'employee_id' => $emp->id,
+            'loan_no' => 'LN-T-'.substr(uniqid(), -5),
+            'loan_type' => LoanType::CompanyLoan->value,
+            'principal' => '12000.00',
+            'pay_periods_total' => 12,
+            'monthly_amortization' => '2000.00',
+            'balance' => '12000.00',
+            'total_paid' => '0.00',
             'pay_periods_remaining' => 12,
-            'start_date'            => '2026-01-01',
+            'start_date' => '2026-01-01',
         ]);
         $loan->forceFill(['status' => LoanStatus::Active->value])->save();
 
@@ -170,9 +205,23 @@ class PayrollRecomputeIntegrityTest extends TestCase
         $this->assertSame(1, LoanPayment::where('loan_id', $loan->id)->count());
     }
 
+    public function test_direct_employee_compute_evaluates_anomalies_for_the_updated_period(): void
+    {
+        $emp = $this->makeEmployee();
+        $period = $this->makePeriod();
+        $this->attend($emp, '2026-04-01');
+
+        $payroll = $this->calc->computeForEmployee($period, $emp);
+
+        $this->assertTrue(PayrollAnomalyFlag::query()
+            ->where('payroll_id', $payroll->id)
+            ->where('flag_type', PayrollAnomalyType::FirstPayroll->value)
+            ->exists());
+    }
+
     public function test_recompute_reapplies_an_adjustment_instead_of_dropping_it(): void
     {
-        $emp    = $this->makeEmployee();
+        $emp = $this->makeEmployee();
         $period = $this->makePeriod();
         $this->attend($emp, '2026-04-01');
 
@@ -189,13 +238,13 @@ class PayrollRecomputeIntegrityTest extends TestCase
         $priorPeriod->forceFill(['status' => PayrollPeriodStatus::Finalized->value])->save();
 
         $adj = PayrollAdjustment::create([
-            'payroll_period_id'   => $priorPeriod->id,
-            'employee_id'         => $emp->id,
+            'payroll_period_id' => $priorPeriod->id,
+            'employee_id' => $emp->id,
             'original_payroll_id' => $priorPayroll->id,
-            'type'                => PayrollAdjustmentType::Underpayment->value,
-            'amount'              => '1500.00',
-            'reason'              => 'Missed OT on Mar 10',
-            'created_by'          => $period->created_by,
+            'type' => PayrollAdjustmentType::Underpayment->value,
+            'amount' => '1500.00',
+            'reason' => 'Missed OT on Mar 10',
+            'created_by' => $period->created_by,
         ]);
         $adj->forceFill(['status' => PayrollAdjustmentStatus::Approved->value])->save();
 
@@ -221,7 +270,7 @@ class PayrollRecomputeIntegrityTest extends TestCase
 
     public function test_recompute_does_not_double_accrue_thirteenth_month(): void
     {
-        $emp    = $this->makeEmployee();
+        $emp = $this->makeEmployee();
         $period = $this->makePeriod();
         $this->attend($emp, '2026-04-01');
 
@@ -246,7 +295,7 @@ class PayrollRecomputeIntegrityTest extends TestCase
     /** Money already paid out must be immutable. */
     public function test_disbursed_period_cannot_be_recomputed(): void
     {
-        $emp    = $this->makeEmployee();
+        $emp = $this->makeEmployee();
         $period = $this->makePeriod();
         $this->attend($emp, '2026-04-01');
         $this->calc->computeForEmployee($period, $emp);
@@ -260,7 +309,7 @@ class PayrollRecomputeIntegrityTest extends TestCase
 
     public function test_voided_period_cannot_be_recomputed(): void
     {
-        $emp    = $this->makeEmployee();
+        $emp = $this->makeEmployee();
         $period = $this->makePeriod();
         $this->attend($emp, '2026-04-01');
         $this->calc->computeForEmployee($period, $emp);
@@ -274,7 +323,7 @@ class PayrollRecomputeIntegrityTest extends TestCase
     /** Tardiness must be persisted so the GL can balance and the payslip can show it. */
     public function test_tardiness_and_undertime_are_persisted(): void
     {
-        $emp    = $this->makeEmployee();
+        $emp = $this->makeEmployee();
         $period = $this->makePeriod();
         $this->attend($emp, '2026-04-01', tardyMins: 60);
 

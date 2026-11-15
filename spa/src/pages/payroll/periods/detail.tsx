@@ -38,7 +38,6 @@ import { Modal, ModalFooter } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { usePermission } from '@/hooks/usePermission';
-import { useAuthStore } from '@/stores/authStore';
 import { useFeature } from '@/hooks/useFeature';
 import { useEcho } from '@/hooks/useEcho';
 import { useRealtimeRecord } from '@/hooks/useRealtimeRecord';
@@ -85,12 +84,109 @@ function PayrollStakes({ summary }: { summary: PayrollPeriodSummary | null | und
   );
 }
 
+function StatutoryScheduleSnapshot({ period }: { period: PayrollPeriod }) {
+  if (!period.is_first_half || period.is_thirteenth_month) return null;
+
+  const schedules = period.statutory_schedule_versions ?? [];
+  const agencyNames: Record<string, string> = {
+    sss: 'SSS', philhealth: 'PhilHealth', pagibig: 'Pag-IBIG', bir: 'BIR',
+  };
+
+  return (
+    <Panel title="Statutory schedule snapshot">
+      {schedules.length === 0 ? (
+        period.status === 'draft' ? (
+          <p className="text-sm text-muted">The latest reviewed versions effective on this payroll date will be pinned when computation starts.</p>
+        ) : (
+          <p className="text-sm text-warning-fg" role="status">
+            No statutory schedule snapshot was recorded for this run. Review it before requesting a recompute.
+          </p>
+        )
+      ) : (
+        <div className="divide-y divide-default">
+          {schedules.map((schedule) => (
+            <div key={schedule.agency} className="grid gap-1 py-3 first:pt-0 last:pb-0 sm:grid-cols-[10rem_1fr] sm:gap-4">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium">{agencyNames[schedule.agency] ?? schedule.agency}</span>
+                <Chip variant={schedule.status === 'published' || schedule.status === 'superseded' ? 'success' : 'warning'}>
+                  {schedule.status ?? 'Missing status'}
+                </Chip>
+              </div>
+              <div className="min-w-0 text-sm">
+                <p>{schedule.source_title ?? 'Source evidence unavailable'} · v{schedule.version_number} · effective {formatDate(schedule.effective_date)}</p>
+                {schedule.source_file_sha256
+                  ? <code className="mt-1 block break-all text-xs text-muted">SHA-256 {schedule.source_file_sha256}</code>
+                  : <p className="mt-1 text-xs text-warning-fg">No verified source file hash is recorded.</p>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function ComputationEvaluationSnapshot({ period }: { period: PayrollPeriod }) {
+  const evaluation = period.computation_evaluation;
+  if (!evaluation) return null;
+  if (period.status === 'draft' && evaluation.status === 'missing') return null;
+  if (period.status === 'processing' && evaluation.status === 'missing') return null;
+
+  const passed = evaluation.status === 'passed';
+  const variant = !passed || evaluation.freshness === 'failed'
+    ? 'danger'
+    : evaluation.freshness === 'stale' || evaluation.freshness === 'missing'
+      ? 'warning'
+      : 'success';
+  const label = evaluation.freshness === 'current'
+    ? 'Current'
+    : evaluation.freshness === 'locked_snapshot'
+      ? 'Locked snapshot'
+      : evaluation.freshness === 'stale'
+        ? 'Stale'
+        : evaluation.freshness === 'failed' || evaluation.status === 'failed'
+          ? 'Failed'
+          : 'Missing';
+  const message = evaluation.freshness === 'current'
+    ? 'Payroll inputs and policy still match the successful evaluation.'
+    : evaluation.freshness === 'locked_snapshot'
+      ? 'This saved evaluation was checked before the payroll period was locked.'
+      : evaluation.freshness === 'stale'
+        ? 'Payroll inputs or policy changed after evaluation. Recompute before approval or finalization.'
+        : evaluation.freshness === 'failed' || evaluation.status === 'failed'
+          ? 'Anomaly evaluation failed. Correct the issue, then recompute this period.'
+          : 'No successful anomaly evaluation is saved for this payroll.';
+  const evaluatedAt = evaluation.evaluated_at
+    ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(evaluation.evaluated_at))
+    : null;
+  const unresolvedNow = evaluation.unresolved_now ?? evaluation.unresolved_finding_count;
+  const nextStep = period.status === 'approved' ? 'finalization' : 'approval';
+  const currentMessage = unresolvedNow > 0
+    ? `Payroll inputs and policy still match the successful evaluation. Review ${unresolvedNow} unresolved ${unresolvedNow === 1 ? 'finding' : 'findings'} before ${nextStep}.`
+    : 'Payroll inputs and policy still match the successful evaluation.';
+
+  return (
+    <Panel title="Computation evaluation">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-sm text-primary">{evaluation.freshness === 'current' ? currentMessage : message}</p>
+          <p className="mt-1 text-xs text-muted">
+            {evaluation.finding_count} finding{evaluation.finding_count === 1 ? '' : 's'} ·{' '}
+            {unresolvedNow} unresolved now · {evaluation.unresolved_finding_count} at evaluation
+            {evaluatedAt ? ` · evaluated ${evaluatedAt}` : ''}
+          </p>
+        </div>
+        <Chip variant={variant}>{label}</Chip>
+      </div>
+    </Panel>
+  );
+}
+
 export default function PayrollPeriodDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { can } = usePermission();
-  const actorId = useAuthStore((state) => state.user?.id);
   const accountingEnabled = useFeature('accounting');
   const journalEntryReference = (entryId: string, entryNumber: string): ReactNode => {
     const label = <span className="font-mono">{entryNumber}</span>;
@@ -426,7 +522,6 @@ export default function PayrollPeriodDetailPage() {
   const canApprove = period.available_actions?.approve === true;
   const isApprovedWithoutApprover = period.status === 'approved' && !period.approver;
   const canRequestCorrection = period.available_actions?.request_correction === true;
-  const isApprover = period.approver?.id === actorId;
   const canFinalize = period.available_actions?.finalize === true;
   const canBankFile = period.available_actions?.bank_file === true;
   const canDisburse = period.available_actions?.disburse === true;
@@ -518,7 +613,7 @@ export default function PayrollPeriodDetailPage() {
           <>
             Payroll date <span className="font-mono">{formatDate(period.payroll_date)}</span> ·
             created by {period.creator?.name ?? '—'}
-            {/* REC-04 — maker-checker attribution trail. */}
+            {/* Payroll lifecycle audit attribution. */}
             {period.computer?.name && <> · computed by {period.computer.name}</>}
             {period.approver?.name && <> · approved by {period.approver.name}</>}
             {period.finalizer?.name && <> · finalized by {period.finalizer.name}</>}
@@ -636,11 +731,6 @@ export default function PayrollPeriodDetailPage() {
                 Finalize
               </Button>
             )}
-            {can('payroll.periods.finalize') && period.status === 'approved' && isApprover && (
-              <span role="note" className="text-xs text-warning-fg">
-                A different finance user must finalize this payroll.
-              </span>
-            )}
             {can('payroll.periods.finalize') && isApprovedWithoutApprover && (
               <span role="note" className="text-xs text-warning-fg">
                 No approver is recorded. Request correction before finalizing.
@@ -755,6 +845,9 @@ export default function PayrollPeriodDetailPage() {
               forceUnlockPending={forceUnlockMutation.isPending}
             />
           )}
+
+          <StatutoryScheduleSnapshot period={period} />
+          <ComputationEvaluationSnapshot period={period} />
 
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-8">
             <StatCard label="Employees" value={summary ? summary.employee_count : '—'} />

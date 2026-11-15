@@ -16,7 +16,7 @@ import { Panel } from '@/components/ui/Panel';
 import { StatCard } from '@/components/ui/StatCard';
 import { Chip } from '@/components/ui/Chip';
 import { StatusDot } from '@/components/ui/StatusDot';
-import { DashboardAttentionList, DashboardShell, DashSection, DashTail, KpiGrid, PanelRow } from '@/components/dashboard/DashboardShell';
+import { DashboardShell, DashSection, DashTail, KpiGrid, PanelRow } from '@/components/dashboard/DashboardShell';
 import { KpiStrip } from '@/components/dashboard/KpiStrip';
 import { ADMIN_KPIS } from '@/lib/dashboardKpis';
 import { formatDateTime, formatRelative } from '@/lib/formatDate';
@@ -68,7 +68,6 @@ export default function AdminDashboard() {
   subtitle="Security, accounts, and platform health."
   query={q}
   kpiCount={5}
-  attentionPlacement="after-kpis"
   refreshingQueryKey={['dashboard', 'admin']}
   // Shared KPI strip slot. ADMIN_KPIS is intentionally empty — this surface
   // uses operational signals instead of business KPI snapshots — so this renders nothing,
@@ -133,8 +132,6 @@ export default function AdminDashboard() {
         </KpiGrid>
        </DashSection>
       )}
-
-      <DashboardAttentionList />
 
       {(panels.queue_health || panels.open_alerts) && (
        <DashSection title="System issues">
