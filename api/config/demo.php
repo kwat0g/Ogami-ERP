@@ -4,15 +4,16 @@ declare(strict_types=1);
 
 use Database\Seeders\Demo\BomRoutingCatalogLayer;
 use Database\Seeders\Demo\BusinessPartnerCatalogLayer;
+use Database\Seeders\Demo\CrmPricingLayer;
 use Database\Seeders\Demo\FinishedProductCatalogLayer;
 use Database\Seeders\Demo\InventoryCatalogLayer;
 use Database\Seeders\Demo\MaintenanceMasterDataLayer;
 use Database\Seeders\Demo\MaintenanceSparePartsCatalogLayer;
-use Database\Seeders\Demo\OrganizationReferenceDataLayer;
 use Database\Seeders\Demo\OpeningStockBalancesLayer;
+use Database\Seeders\Demo\OrganizationReferenceDataLayer;
 use Database\Seeders\Demo\ProductionAssetsLayer;
-use Database\Seeders\Demo\QualityPlanLayer;
 use Database\Seeders\Demo\QualityInspectionReferencesLayer;
+use Database\Seeders\Demo\QualityPlanLayer;
 use Database\Seeders\Demo\SupplierListingLayer;
 use Database\Seeders\Demo\WorkforceIdentityLayer;
 
@@ -55,5 +56,6 @@ return [
         MaintenanceSparePartsCatalogLayer::class,
         SupplierListingLayer::class,
         OpeningStockBalancesLayer::class,
+        CrmPricingLayer::class,
     ],
 ];
