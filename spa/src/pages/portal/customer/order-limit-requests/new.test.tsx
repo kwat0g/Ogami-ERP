@@ -31,7 +31,7 @@ function renderPage() {
       <MemoryRouter initialEntries={['/portal/customer/order-limit-requests/new?product_id=product-1&requested_maximum_quantity=35']}>
         <Routes>
           <Route path="/portal/customer/order-limit-requests/new" element={<CustomerOrderLimitIncreaseRequestPage />} />
-          <Route path="/portal/customer/order-limit-requests" element={<div>Order limit requests</div>} />
+          <Route path="/portal/customer/order-limit-requests" element={<div data-testid="order-limit-requests-list">Order limit requests</div>} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -64,6 +64,6 @@ describe('customer order-limit increase request form', () => {
       requested_maximum_quantity: 35,
       customer_notes: 'Our monthly replenishment is increasing.',
     }));
-    expect(await screen.findByText('Order limit requests')).toBeVisible();
+    expect(await screen.findByTestId('order-limit-requests-list')).toBeVisible();
   });
 });
