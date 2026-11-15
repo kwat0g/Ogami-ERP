@@ -31,7 +31,7 @@ class FinishedProductCatalogLayerTest extends TestCase
         $runner->run($options);
 
         $this->assertSame(16, Product::query()->count());
-        $this->assertSame(43, Item::query()->count());
+        $this->assertSame(44, Item::query()->count());
         $this->assertSame(0, Bom::query()->count());
 
         $product = Product::query()->where('part_number', 'WB-001')->firstOrFail();
@@ -47,7 +47,7 @@ class FinishedProductCatalogLayerTest extends TestCase
         $runner->run($options);
 
         $this->assertSame(16, Product::query()->count());
-        $this->assertSame(43, Item::query()->count());
+        $this->assertSame(44, Item::query()->count());
         $this->assertSame($partNumbers, Product::query()->orderBy('part_number')->pluck('part_number')->all());
     }
 }

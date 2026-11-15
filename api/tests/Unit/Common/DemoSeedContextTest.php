@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Common;
 
+use App\Common\DemoData\DemoNotificationService;
 use App\Common\DemoData\DemoSeedContext;
 use App\Common\DemoData\DemoSeedOptions;
+use App\Common\Services\NotificationService;
 use App\Modules\Auth\Models\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Notifications\Dispatcher;
@@ -91,14 +93,24 @@ class DemoSeedContextTest extends TestCase
         $receiver = new NotificationFixtureReceiver;
         $notification = new NotificationFixtureMessage;
         $previousDispatcher = app(Dispatcher::class);
+        $previousNotificationService = new NotificationService;
+        app()->instance(NotificationService::class, $previousNotificationService);
 
-        $context->withoutNotifications(function () use ($receiver, $notification): void {
-            NotificationFacade::send($receiver, $notification);
-            NotificationFacade::assertSentTo($receiver, NotificationFixtureMessage::class);
-        });
+        try {
+            $context->withoutNotifications(function () use ($receiver, $notification): void {
+                NotificationFacade::send($receiver, $notification);
+                NotificationFacade::assertSentTo($receiver, NotificationFixtureMessage::class);
+                $this->assertInstanceOf(DemoNotificationService::class, app(NotificationService::class));
+                throw new \RuntimeException('expected notification-suppression unwind');
+            });
+            $this->fail('The notification suppression callback should propagate its exception.');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame('expected notification-suppression unwind', $exception->getMessage());
+        }
 
         $this->assertSame($previousDispatcher, app(Dispatcher::class));
         $this->assertSame($previousDispatcher, NotificationFacade::getFacadeRoot());
+        $this->assertSame($previousNotificationService, app(NotificationService::class));
     }
 }
 
