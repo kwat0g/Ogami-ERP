@@ -10,6 +10,7 @@ use Database\Seeders\Demo\MaintenanceMasterDataLayer;
 use Database\Seeders\Demo\OrganizationReferenceDataLayer;
 use Database\Seeders\Demo\ProductionAssetsLayer;
 use Database\Seeders\Demo\QualityPlanLayer;
+use Database\Seeders\Demo\QualityInspectionReferencesLayer;
 use Database\Seeders\Demo\SupplierListingLayer;
 use Database\Seeders\Demo\WorkforceIdentityLayer;
 
@@ -48,6 +49,7 @@ return [
         WorkforceIdentityLayer::class,
         QualityPlanLayer::class,
         MaintenanceMasterDataLayer::class,
+        QualityInspectionReferencesLayer::class,
         SupplierListingLayer::class,
     ],
 ];
