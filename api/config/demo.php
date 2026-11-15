@@ -11,6 +11,7 @@ use Database\Seeders\Demo\MaintenanceHistoryLayer;
 use Database\Seeders\Demo\MaintenanceMasterDataLayer;
 use Database\Seeders\Demo\MaintenanceSparePartsCatalogLayer;
 use Database\Seeders\Demo\OpeningStockBalancesLayer;
+use Database\Seeders\Demo\OrderToCashHistoryLayer;
 use Database\Seeders\Demo\OrganizationReferenceDataLayer;
 use Database\Seeders\Demo\ProductionAssetsLayer;
 use Database\Seeders\Demo\ProductionExecutionHistoryLayer;
@@ -69,5 +70,6 @@ return [
         ProductionHistoryLayer::class,
         ProductionExecutionHistoryLayer::class,
         MaintenanceHistoryLayer::class,
+        OrderToCashHistoryLayer::class,
     ],
 ];
