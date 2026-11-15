@@ -147,6 +147,9 @@ final class WorkOrderFinalInspectionService
                     || ($entry['coverage_confirmed'] ?? null) !== true || ($entry['inspected_quantity'] ?? null) !== (int) $inspection->batch_quantity) {
                     throw new BusinessRuleException('Confirm every physical piece was inspected.');
                 }
+                if ((int) $inspection->sample_defect_count === 0 && $inspection->defectSummary()->exists()) {
+                    app(InspectionDefectSummaryService::class)->clearDraft($inspection);
+                }
                 $inspection->forceFill(['coverage_confirmed_at' => now(), 'inspected_quantity' => (int) $inspection->batch_quantity])->save();
                 $this->inspections->recordFullPieceOutcome($inspection, $by);
             }
@@ -260,7 +263,7 @@ final class WorkOrderFinalInspectionService
     {
         return Inspection::query()->whereIn('work_order_output_id', $outputs->pluck('id'))->where('stage', 'outgoing')
             ->where('status', '!=', 'cancelled')->orderBy('id')->when($lock, fn ($query) => $query->lockForUpdate())
-            ->with(['measurements', 'resultAuthors.user', 'ncr', 'product', 'workOrderOutput.workOrder', 'inspector', 'reviewer', 'spec', 'specRevision'])->get();
+            ->with(['measurements', 'resultAuthors.user', 'ncr', 'product', 'workOrderOutput.workOrder', 'inspector', 'reviewer', 'spec', 'specRevision', 'defectSummary.photos.uploader'])->get();
     }
 
     private function manifest(Collection $batches): array

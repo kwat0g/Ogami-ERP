@@ -70,14 +70,6 @@ export interface FinalInspectionEvidence {
   expected_result_version: number;
   defective_quantity: number;
   page?: number;
-  defect_page?: number;
-  reset_defects?: boolean;
-  remove_piece_numbers?: number[];
-  pieces: Array<{
-    piece_number: number;
-    problem_description: string | null;
-    requirement_id?: string | null;
-  }>;
   readings: Array<{ piece_number: number; requirement_id: string; measured_value: string | null }>;
 }
 export interface FinalInspectionSubmission {

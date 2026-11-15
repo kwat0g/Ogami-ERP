@@ -11,6 +11,8 @@ import { Button } from '@/components/ui/Button';
 import { Checkbox } from '@/components/ui/Checkbox';
 import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
+import { InspectionDefectSummaryEditor } from '@/components/quality/InspectionDefectSummaryEditor';
+import { inspectionDefectSummaryMatches } from '@/lib/inspectionDefectSummary';
 import { DraftRestoreBanner } from '@/components/ui/DraftRestoreBanner';
 import { useFormDraftAutosave } from '@/hooks/useFormDraftAutosave';
 import { usePendingProductionSubmission } from '@/hooks/usePendingProductionSubmission';
@@ -31,12 +33,6 @@ const numeric = (row: {
   row.evaluation_mode === 'numeric' ||
   (row.parameter_type === 'dimensional' &&
     (row.tolerance_min != null || row.tolerance_max != null));
-type Problem = {
-  piece_number: number;
-  problem_description: string;
-  requirement_id?: string | null;
-};
-
 export function WorkOrderFinalInspectionPanel({
   group,
   canManage,
@@ -59,17 +55,12 @@ export function WorkOrderFinalInspectionPanel({
   const [count, setCount] = useState(
     String(batch?.defective_quantity ?? batch?.sample_defect_count ?? 0),
   );
+  const [summary, setSummary] = useState(batch?.defect_summary ?? null);
   const [passAllBatchId, setPassAllBatchId] = useState<string | null>(null);
-  const [problems, setProblems] = useState<Problem[]>(current.defect_page?.pieces ?? []);
   const [readingValues, setReadingValues] = useState<Record<string, string>>({});
-  const [defectPage, setDefectPage] = useState(1);
   const [readingPage, setReadingPage] = useState(1);
-  const [sharedProblem, setSharedProblem] = useState('');
-  const [sharedRequirement, setSharedRequirement] = useState('');
-  const [selectedProblems, setSelectedProblems] = useState<number[]>([]);
   const [confirmed, setConfirmed] = useState(false);
   const [dirty, setDirty] = useState(false);
-  const [resetDefects, setResetDefects] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [remarks, setRemarks] = useState('');
@@ -92,25 +83,7 @@ export function WorkOrderFinalInspectionPanel({
   const passAllSelected = passAllBatchId === batchId && defectCount === 0;
   const countValid =
     Number.isSafeInteger(defectCount) && defectCount >= 0 && defectCount <= quantity;
-  const problemStart = (defectPage - 1) * 50;
-  const problemRows = countValid
-    ? Array.from(
-        { length: Math.min(50, Math.max(0, defectCount - problemStart)) },
-        (_, i) =>
-          problems[i] ?? {
-            piece_number: problemStart + i + 1,
-            problem_description: '',
-            requirement_id: '',
-          },
-      )
-    : [];
-  const problemRowsValid = problemRows.every(
-    (row) =>
-      row.problem_description.trim() &&
-      row.problem_description.length <= 500 &&
-      (!confirmedChecks || (row.requirement_id !== '' && row.requirement_id !== undefined)),
-  );
-  const canSave = countValid && (!confirmedChecks || problemRowsValid);
+  const canSave = countValid;
   const readingStart = (readingPage - 1) * 50;
   const readingNumbers = sizes.length
     ? Array.from(
@@ -133,44 +106,29 @@ export function WorkOrderFinalInspectionPanel({
   const blocked = busy || Boolean(pending.pending);
   const otherDraftsReady = drafts
     .filter((row) => row.id !== batchId)
-    .every(
-      (row) =>
-        (row.described_defective_quantity ?? 0) ===
-        (row.defective_quantity ?? row.sample_defect_count ?? 0),
-    );
+    .every((row) => {
+      const defects = row.defective_quantity ?? row.sample_defect_count ?? 0;
+      return defects === 0 || inspectionDefectSummaryMatches(row.defect_summary ?? null, String(defects));
+    });
   const canSubmit =
     editable &&
     confirmed &&
     countValid &&
     missingReadings === 0 &&
     otherDraftsReady &&
-    problemRowsValid &&
+    (defectCount === 0 || inspectionDefectSummaryMatches(summary, String(defectCount))) &&
     !blocked &&
     !current.blocker;
   const draftRef = useRef({
     count,
-    problems,
     readingValues,
-    defectPage,
     readingPage,
-    resetDefects,
   });
-  draftRef.current = { count, problems, readingValues, defectPage, readingPage, resetDefects };
+  draftRef.current = { count, readingValues, readingPage };
   const getValues = useCallback(() => draftRef.current, []);
   const restoreValues = useCallback((values: Record<string, unknown>) => {
     setPassAllBatchId(null);
     if (typeof values.count === 'string') setCount(values.count);
-    if (Array.isArray(values.problems))
-      setProblems(
-        values.problems.filter((v): v is Problem =>
-          Boolean(
-            v &&
-            typeof v === 'object' &&
-            typeof v.piece_number === 'number' &&
-            typeof v.problem_description === 'string',
-          ),
-        ),
-      );
     if (values.readingValues && typeof values.readingValues === 'object')
       setReadingValues(
         Object.fromEntries(
@@ -179,9 +137,7 @@ export function WorkOrderFinalInspectionPanel({
           ),
         ),
       );
-    if (typeof values.defectPage === 'number') setDefectPage(values.defectPage);
     if (typeof values.readingPage === 'number') setReadingPage(values.readingPage);
-    if (typeof values.resetDefects === 'boolean') setResetDefects(values.resetDefects);
     setConfirmed(false);
     setDirty(true);
   }, []);
@@ -196,7 +152,7 @@ export function WorkOrderFinalInspectionPanel({
     if (!dirty || !editable) return;
     const timer = window.setTimeout(recovery.saveNow, 500);
     return () => window.clearTimeout(timer);
-  }, [dirty, editable, count, problems, readingValues, recovery.saveNow]);
+  }, [dirty, editable, count, readingValues, recovery.saveNow]);
   useUnsavedChangesGuard(dirty || Boolean(pending.pending), true);
 
   const accept = (result: WorkOrderFinalInspection, clear = true) => {
@@ -205,7 +161,6 @@ export function WorkOrderFinalInspectionPanel({
     setError('');
     if (clear) {
       setDirty(false);
-      setResetDefects(false);
       recovery.discard();
     }
   };
@@ -218,24 +173,6 @@ export function WorkOrderFinalInspectionPanel({
     expected_result_version: source.batches.find((row) => row.id === batchId)?.result_version ?? 0,
     defective_quantity: defectCount,
     page: readingPage,
-    defect_page: defectPage,
-    ...(resetDefects && !readingsOnly ? { reset_defects: true } : {}),
-    pieces: readingsOnly
-      ? []
-      : problemRows.map((row) => ({
-          ...row,
-          problem_description: row.problem_description.trim() || null,
-          ...(confirmedChecks
-            ? { requirement_id: row.requirement_id === 'other' ? null : row.requirement_id }
-            : {}),
-        })),
-    ...(!readingsOnly
-      ? {
-          remove_piece_numbers: (current.defect_page?.pieces ?? [])
-            .map((row) => row.piece_number)
-            .filter((number) => !problemRows.some((row) => row.piece_number === number)),
-        }
-      : {}),
     readings: readingsOnly
       ? readingNumbers.flatMap((piece) =>
           sizes.map((row) => ({
@@ -268,7 +205,6 @@ export function WorkOrderFinalInspectionPanel({
     try {
       const saved = await saveDraft();
       accept(saved);
-      setProblems(saved.defect_page?.pieces ?? []);
       setReadingValues({});
       setFeedback('Progress saved.');
     } catch (cause) {
@@ -277,7 +213,7 @@ export function WorkOrderFinalInspectionPanel({
       setBusy(false);
     }
   };
-  const load = async (nextBatch = batchId, nextDefect = defectPage, nextReading = readingPage) => {
+  const load = async (nextBatch = batchId, nextReading = readingPage) => {
     if (dirty) {
       setError('Save this page before changing pages or batches.');
       return;
@@ -286,18 +222,15 @@ export function WorkOrderFinalInspectionPanel({
     try {
       const result = await inspectionsApi.getWorkOrderFinalInspection(group.work_order_id, {
         inspection_id: nextBatch,
-        defect_page: nextDefect,
         page: nextReading,
         per_page: 50,
       });
       accept(result);
       setBatchId(nextBatch);
-      setDefectPage(nextDefect);
       setReadingPage(nextReading);
       const next = result.batches.find((row) => row.id === nextBatch);
       setCount(String(next?.defective_quantity ?? next?.sample_defect_count ?? 0));
-      setProblems(result.defect_page?.pieces ?? []);
-      setSelectedProblems([]);
+      setSummary(next?.defect_summary ?? null);
       setReadingValues({});
       setConfirmed(false);
     } catch (cause) {
@@ -356,7 +289,6 @@ export function WorkOrderFinalInspectionPanel({
     try {
       const result = await inspectionsApi.getWorkOrderFinalInspection(group.work_order_id, {
         inspection_id: batchId,
-        defect_page: defectPage,
         page: readingPage,
         per_page: 50,
       });
@@ -448,8 +380,9 @@ export function WorkOrderFinalInspectionPanel({
       const nextId = result.evidence_page?.inspection_id ?? replacement?.id ?? batchId;
       accept(result);
       setBatchId(nextId);
-      setCount(String(result.batches.find((row) => row.id === nextId)?.defective_quantity ?? 0));
-      setProblems(result.defect_page?.pieces ?? []);
+      const next = result.batches.find((row) => row.id === nextId);
+      setCount(String(next?.defective_quantity ?? next?.sample_defect_count ?? 0));
+      setSummary(next?.defect_summary ?? null);
       setReadingValues({});
       setConfirmed(false);
       setReplaceOpen(false);
@@ -608,7 +541,7 @@ export function WorkOrderFinalInspectionPanel({
                   value={batchId}
                   disabled={blocked || dirty}
                   helper={dirty ? 'Save this batch before switching.' : undefined}
-                  onChange={(event) => void load(event.target.value, 1, 1)}
+                  onChange={(event) => void load(event.target.value, 1)}
                 >
                   {current.batches.map((row) => (
                     <option key={row.id} value={row.id}>
@@ -700,30 +633,30 @@ export function WorkOrderFinalInspectionPanel({
                 <fieldset disabled={blocked} className="min-w-0 space-y-4">
                   <legend className="mb-2 text-sm font-medium">{confirmedChecks ? 'Defect assessment' : 'Visual checks and defects'}</legend>
                   <p className="text-xs text-muted">
-                    {confirmedChecks
-                      ? 'Enter each defective piece once: its number, failed check, and problem.'
-                      : 'All pieces good? Use PASS ALL. Otherwise, enter the defective count and each problem.'}
+                    Record one affected quantity and a shared description with photo evidence for the batch.
                   </p>
-                  <div className="flex flex-wrap items-end gap-3">
-                    <Input
-                      label="Defective pieces"
-                      containerClassName="w-36"
-                      type="number"
-                      min={0}
-                      max={quantity}
-                      step={1}
-                      value={count}
-                      error={
-                        !countValid ? `Enter a whole number from 0 to ${quantity}.` : undefined
-                      }
-                      onChange={(event) => {
-                        setCount(event.target.value);
-                        setPassAllBatchId(null);
-                        setSelectedProblems([]);
+                  <InspectionDefectSummaryEditor
+                    key={batchId}
+                    inspectionId={batchId}
+                    sourceQuantity={String(quantity)}
+                    unit="PCS"
+                    quantity={count}
+                    onQuantityChange={(value) => {
+                      setCount(value);
+                      setPassAllBatchId(null);
+                      setDirty(true);
+                      setConfirmed(false);
+                    }}
+                    canManage={editable && !blocked}
+                    onSaved={(saved) => {
+                      setSummary(saved);
+                      if (!saved) {
                         setDirty(true);
                         setConfirmed(false);
-                      }}
-                    />
+                      }
+                    }}
+                  />
+                  <div className="flex flex-wrap items-center gap-3">
                     <Button
                       variant="secondary"
                       aria-pressed={passAllSelected}
@@ -731,234 +664,23 @@ export function WorkOrderFinalInspectionPanel({
                       onClick={() => {
                         setPassAllBatchId(batchId);
                         setCount('0');
-                        setProblems([]);
-                        setDefectPage(1);
-                        setResetDefects(true);
+                        setSummary(null);
                         setDirty(true);
                         setConfirmed(false);
                       }}
                     >
                       PASS ALL
                     </Button>
-                  </div>
-                  {editable &&
-                    !resetDefects &&
-                    (batch?.described_defective_quantity ?? 0) > (countValid ? defectCount : 0) && (
-                      <div>
-                        <p className="text-sm text-warning-fg">
-                          Saved problems exceed this count. Clear them, then enter the remaining
-                          defects.
-                        </p>
-                        <Button
-                          variant="secondary"
-                          onClick={() => {
-                            setProblems([]);
-                            setDefectPage(1);
-                            setResetDefects(true);
-                            setDirty(true);
-                            setConfirmed(false);
-                          }}
-                        >
-                          Clear saved problems
-                        </Button>
-                      </div>
-                    )}
-                  {countValid && defectCount > 0 && (
-                    <div className="space-y-3">
+                    {countValid && defectCount > 0 && (
                       <p className="text-sm">
                         {defectCount} defective · {quantity - defectCount} without reported defects.
                       </p>
-                      {defectCount > 1 && (
-                        <details className="rounded-md border border-default p-3">
-                          <summary className="cursor-pointer text-sm font-medium focus-visible:outline-accent">
-                            Apply same problem to several pieces
-                          </summary>
-                          <div className="mt-3 space-y-3">
-                            <Checkbox
-                              label="Select all problems on this page"
-                              checked={
-                                problemRows.length > 0 && selectedProblems.length === problemRows.length
-                              }
-                              onChange={(event) =>
-                                setSelectedProblems(
-                                  event.target.checked ? problemRows.map((_, index) => index) : [],
-                                )
-                              }
-                            />
-                            <div className="flex flex-wrap items-end gap-2">
-                              <Input
-                                label="Shared problem"
-                                containerClassName="min-w-0 flex-1 basis-48"
-                                value={sharedProblem}
-                                maxLength={500}
-                                onChange={(event) => setSharedProblem(event.target.value)}
-                              />
-                              {confirmedChecks && (
-                                <Select
-                                  label="Shared failed check"
-                                  aria-label="Shared failed check"
-                                  containerClassName="min-w-0 flex-1 basis-40"
-                                  value={sharedRequirement}
-                                  onChange={(event) => setSharedRequirement(event.target.value)}
-                                >
-                                  <option value="">Select a check</option>
-                                  {requirements.map((row) => (
-                                    <option key={row.id} value={row.id}>{row.parameter_name}</option>
-                                  ))}
-                                  <option value="other">Other / not classified</option>
-                                </Select>
-                              )}
-                              <Button
-                                variant="secondary"
-                                disabled={
-                                  !sharedProblem.trim() ||
-                                  selectedProblems.length === 0 ||
-                                  (confirmedChecks && !sharedRequirement)
-                                }
-                                onClick={() => {
-                                  setProblems(
-                                    problemRows.map((row, index) =>
-                                      selectedProblems.includes(index)
-                                      ? {
-                                          ...row,
-                                          problem_description: sharedProblem,
-                                          ...(confirmedChecks
-                                            ? { requirement_id: sharedRequirement === 'other' ? null : sharedRequirement }
-                                            : {}),
-                                        }
-                                        : row,
-                                    ),
-                                  );
-                                  setDirty(true);
-                                  setConfirmed(false);
-                                }}
-                              >
-                                Apply to selected pieces
-                              </Button>
-                            </div>
-                            <p className="text-xs text-muted">
-                              Select pieces using their checkboxes. Only selected pieces will change.
-                            </p>
-                          </div>
-                        </details>
-                      )}
-                      <div className={problemRows.length > 5 ? 'max-h-96 overflow-y-auto pr-2' : undefined}>
-                        {problemRows.map((row, i) => (
-                          <div
-                            key={i}
-                            className={confirmedChecks
-                              ? 'grid gap-3 border-b border-default py-3 sm:grid-cols-[8rem_minmax(0,1fr)] lg:grid-cols-[8rem_minmax(0,12rem)_minmax(0,1fr)]'
-                              : 'grid gap-3 border-b border-default py-3 sm:grid-cols-[8rem_minmax(0,1fr)]'}
-                          >
-                            <div className="flex items-start gap-2">
-                              <Checkbox
-                                aria-label={`Select problem ${problemStart + i + 1}`}
-                                className="mt-6"
-                                checked={selectedProblems.includes(i)}
-                                onChange={(event) =>
-                                  setSelectedProblems((previous) =>
-                                    event.target.checked
-                                      ? [...previous, i]
-                                      : previous.filter((index) => index !== i),
-                                  )
-                                }
-                              />
-                              <Input
-                                label="Piece number"
-                                aria-label={`Piece number ${problemStart + i + 1}`}
-                                containerClassName="min-w-0 flex-1"
-                                type="number"
-                                min={1}
-                                max={quantity}
-                                value={row.piece_number}
-                                onChange={(event) => {
-                                  const next = [...problemRows];
-                                  next[i] = { ...row, piece_number: Number(event.target.value) };
-                                  setProblems(next);
-                                  setDirty(true);
-                                  setConfirmed(false);
-                                }}
-                              />
-                            </div>
-                            {confirmedChecks && (
-                              <Select
-                                label="Failed check"
-                                aria-label={`Failed check for piece ${problemStart + i + 1}`}
-                                containerClassName="min-w-0"
-                                value={row.requirement_id === null ? 'other' : row.requirement_id ?? ''}
-                                onChange={(event) => {
-                                  const next = [...problemRows];
-                                  next[i] = {
-                                    ...row,
-                                    requirement_id: event.target.value === 'other' ? null : event.target.value,
-                                  };
-                                  setProblems(next);
-                                  setDirty(true);
-                                  setConfirmed(false);
-                                }}
-                              >
-                                <option value="">Select a check</option>
-                                {requirements.map((requirement) => (
-                                  <option key={requirement.id} value={requirement.id}>
-                                    {requirement.parameter_name}
-                                  </option>
-                                ))}
-                                <option value="other">Other / not classified</option>
-                              </Select>
-                            )}
-                            <Textarea
-                              label="Problem"
-                              aria-label={`Problem for piece ${problemStart + i + 1}`}
-                              placeholder="Describe what failed, e.g. cracked edge"
-                              containerClassName={confirmedChecks ? 'min-w-0 sm:col-span-2 lg:col-span-1' : 'min-w-0'}
-                              className="min-h-14"
-                              rows={2}
-                              showCounter={false}
-                              maxLength={500}
-                              value={row.problem_description}
-                              onChange={(event) => {
-                                const next = [...problemRows];
-                                next[i] = { ...row, problem_description: event.target.value };
-                                setProblems(next);
-                                setDirty(true);
-                                setConfirmed(false);
-                              }}
-                            />
-                          </div>
-                        ))}
-                      </div>
-                      {defectCount > 50 && (
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Button
-                            variant="secondary"
-                            disabled={dirty || defectPage === 1}
-                            onClick={() => void load(batchId, defectPage - 1, readingPage)}
-                          >
-                            Previous problems
-                          </Button>
-                          <span className="text-sm">
-                            Page {defectPage} of {Math.ceil(defectCount / 50)}
-                          </span>
-                          <Button
-                            variant="secondary"
-                            disabled={dirty || defectPage * 50 >= defectCount}
-                            onClick={() => void load(batchId, defectPage + 1, readingPage)}
-                          >
-                            Next problems
-                          </Button>
-                        </div>
-                      )}
-                      {confirmedChecks && !problemRowsValid && (
-                        <p className="text-xs text-warning-fg">
-                          Add a problem and failed check for each defective piece before saving.
-                        </p>
-                      )}
-                    </div>
-                  )}
+                    )}
+                  </div>
                   <div className="space-y-2">
                     <p className="text-xs text-muted">
                       {confirmedChecks
-                        ? 'PASS ALL records a zero-defect assessment; the confirmation records full physical coverage.'
+                        ? 'The summary covers the defective group; confirm every listed requirement before submitting.'
                         : 'PASS ALL records zero defects; required size readings still apply.'}
                     </p>
                     <Button
@@ -967,7 +689,7 @@ export function WorkOrderFinalInspectionPanel({
                       disabled={!canSave}
                       onClick={() => void save()}
                     >
-                      {confirmedChecks ? 'Save draft' : 'Save problems'}
+                      Save draft
                     </Button>
                   </div>
                   {!confirmedChecks && sizes.length > 0 && (
@@ -1050,7 +772,7 @@ export function WorkOrderFinalInspectionPanel({
                         <Button
                           variant="secondary"
                           disabled={dirty || readingPage === 1}
-                          onClick={() => void load(batchId, defectPage, readingPage - 1)}
+                          onClick={() => void load(batchId, readingPage - 1)}
                         >
                           Previous readings
                         </Button>
@@ -1060,7 +782,7 @@ export function WorkOrderFinalInspectionPanel({
                         <Button
                           variant="secondary"
                           disabled={dirty || readingPage * 50 >= quantity}
-                          onClick={() => void load(batchId, defectPage, readingPage + 1)}
+                          onClick={() => void load(batchId, readingPage + 1)}
                         >
                           Next readings
                         </Button>
@@ -1100,6 +822,37 @@ export function WorkOrderFinalInspectionPanel({
                   </div>
                 </fieldset>
               )}
+              {!editable && batch?.defect_summary && (
+                <section aria-label="Saved defect summary" className="space-y-3 rounded-md border border-default p-3">
+                  <h3 className="text-sm font-medium">Defect summary</h3>
+                  <p className="text-sm">
+                    {batch.defect_summary.affected_quantity} PCS · {batch.defect_summary.category_label} · {batch.defect_summary.severity_label}
+                  </p>
+                  <p className="whitespace-pre-wrap text-sm">{batch.defect_summary.description}</p>
+                  <ul className="grid gap-3 sm:grid-cols-2">
+                    {batch.defect_summary.photos.map((photo) => (
+                      <li key={photo.id}>
+                        <img src={photo.file_url} alt={`Defect proof: ${photo.file_name}`} loading="lazy" className="h-32 w-full rounded-md border border-default bg-subtle object-contain" />
+                        <p className="mt-1 truncate text-xs text-muted">{photo.file_name}</p>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+              {!editable && (batch?.defective_quantity ?? batch?.sample_defect_count ?? 0) > 0 && (current.defect_page?.pieces.length ?? 0) > 0 && (
+                <details className="rounded-md border border-default p-3">
+                  <summary className="cursor-pointer text-sm font-medium">Historical per-piece notes</summary>
+                  <div className="mt-2 space-y-2">
+                    {current.defect_page?.pieces.map((row) => (
+                      <div key={row.piece_number} className="border-t border-subtle py-2 text-sm">
+                        <p className="font-medium">Piece {row.piece_number}</p>
+                        <p>{row.problem_description}</p>
+                        <p className="text-xs text-muted">Primary failed check: {requirementName(row.requirement_id)}</p>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
               {!editable && confirmedChecks && (
                 <section aria-label="Saved confirmed-check evidence" className="space-y-3">
                   <h3 className="text-sm font-medium">Saved inspection evidence</h3>
@@ -1110,43 +863,6 @@ export function WorkOrderFinalInspectionPanel({
                       ? ` · ${dateTime(batch.checks_confirmed_at ?? batch.coverage_confirmed_at)}`
                       : ''}
                   </p>
-                  {(batch?.defective_quantity ?? 0) > 0 && (
-                    <div className="space-y-2">
-                      <p className="text-sm font-medium">
-                        {batch?.defective_quantity?.toLocaleString()} defective pieces · saved descriptions
-                      </p>
-                      {current.defect_page?.pieces.map((row) => (
-                        <div key={row.piece_number} className="border-t border-subtle py-2 text-sm">
-                          <p className="font-medium">Piece {row.piece_number}</p>
-                          <p>{row.problem_description}</p>
-                          <p className="text-xs text-muted">
-                            Primary failed check: {requirementName(row.requirement_id)}
-                          </p>
-                        </div>
-                      ))}
-                      {(current.defect_page?.total ?? 0) > (current.defect_page?.pieces.length ?? 0) && (
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-xs text-muted">
-                            Page {defectPage} of {Math.ceil((current.defect_page?.total ?? 0) / 50)} saved defects
-                          </span>
-                          <Button
-                            variant="secondary"
-                            disabled={busy || defectPage === 1}
-                            onClick={() => void load(batchId, defectPage - 1, readingPage)}
-                          >
-                            Previous problems
-                          </Button>
-                          <Button
-                            variant="secondary"
-                            disabled={busy || defectPage * 50 >= (current.defect_page?.total ?? 0)}
-                            onClick={() => void load(batchId, defectPage + 1, readingPage)}
-                          >
-                            Next problems
-                          </Button>
-                        </div>
-                      )}
-                    </div>
-                  )}
                   {batch?.proposed_result && (
                     <p className="text-sm font-medium">
                       Submitted result: {batch.proposed_result.toUpperCase()}

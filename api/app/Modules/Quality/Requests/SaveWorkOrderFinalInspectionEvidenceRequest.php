@@ -31,7 +31,7 @@ class SaveWorkOrderFinalInspectionEvidenceRequest extends FormRequest
             'reset_defects' => ['sometimes', 'boolean'],
             'remove_piece_numbers' => ['sometimes', 'array', 'max:50'],
             'remove_piece_numbers.*' => ['integer', 'min:1', 'distinct'],
-            'pieces' => ['present', 'array', 'max:50'],
+            'pieces' => ['sometimes', 'array', 'max:50'],
             'pieces.*' => ['array:piece_number,problem_description,requirement_id'],
             'pieces.*.piece_number' => ['required', 'integer', 'min:1', 'distinct'],
             'pieces.*.requirement_id' => ['sometimes', 'nullable', 'string'],

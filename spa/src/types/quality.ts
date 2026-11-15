@@ -107,10 +107,38 @@ export interface CountedInspectionSubmission {
 
 export interface QuantityInspectionSubmission {
   expected_result_version: number;
-  quantity_result: { defective_quantity: string; descriptions: string[] };
+  quantity_result: { defective_quantity: string; descriptions?: string[] };
+}
+
+export type InspectionDefectCategory = 'surface_damage' | 'contamination' | 'dimensional' | 'material' | 'packaging' | 'other';
+export type InspectionDefectSeverity = 'minor' | 'major' | 'critical';
+
+export interface InspectionDefectSummaryPhoto {
+  id: string;
+  file_name: string;
+  mime_type: string;
+  file_size: number;
+  file_url: string;
+  created_by?: { id: string; name: string } | null;
+  created_at: string | null;
+}
+
+export interface InspectionDefectSummary {
+  id: string;
+  category: InspectionDefectCategory;
+  category_label: string;
+  other_category: string | null;
+  severity: InspectionDefectSeverity;
+  severity_label: string;
+  affected_quantity: string;
+  description: string;
+  photos: InspectionDefectSummaryPhoto[];
+  created_at: string | null;
+  updated_at: string | null;
 }
 
 export interface Inspection {
+  defect_summary?: InspectionDefectSummary | null;
   quantity_result?: { defective_quantity: string; source_quantity: string; unit: string; descriptions: string[] } | null;
   final_work_order_id?: string | null;
   work_order_quality?: {

@@ -3,6 +3,8 @@ import { QuantityInspectionPanel } from './QuantityInspectionPanel';
 import { CountedBatchInspectionPanel } from './CountedBatchInspectionPanel';
 import { ChecklistDecisionPanel } from './ChecklistDecisionPanel';
 import { FullCountDecisionPanel } from './FullCountDecisionPanel';
+import { InspectionDefectSummaryEditor } from '@/components/quality/InspectionDefectSummaryEditor';
+import { inspectionDefectSummaryMatches } from '@/lib/inspectionDefectSummary';
 import { useMemo, useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { AxiosError } from 'axios';
@@ -119,6 +121,7 @@ function LegacyInspectionChecklistPanel({ inspection, canManage }: Props) {
     Boolean(inspection.defects_removed_confirmed),
   );
   const [batchProblem, setBatchProblem] = useState('');
+  const [defectSummary, setDefectSummary] = useState<import('@/types/quality').InspectionDefectSummary | null>(null);
   const current = saved && saved.updated_at >= inspection.updated_at ? saved : inspection;
   const requirements = useMemo(() => {
     const groups = new Map<string, InspectionMeasurement[]>();
@@ -174,7 +177,9 @@ function LegacyInspectionChecklistPanel({ inspection, canManage }: Props) {
   const acceptedWithinAql =
     failedRequirements.length === 0 && !criticalDefect && defectiveCount !== null && defectiveCount <= current.accept_count;
   const removalRequired = isLotChecklist && acceptedWithinAql && defectiveCount > 0;
-  const batchProblemRequired = isLotChecklist && result === 'failed' && failedRequirementDetails === '';
+  const batchProblemRequired = isLotChecklist && result === 'failed' && failedRequirementDetails === '' && (defectiveCount ?? 0) === 0;
+  const defectSummaryReady = defectiveCount === null || defectiveCount === 0
+    || inspectionDefectSummaryMatches(defectSummary, String(defectiveCount));
   const coverageReady =
     inspectedCount !== null && Number.isInteger(inspectedCount)
     && inspectedCount >= current.sample_size && inspectedCount <= (current.startup_trial_required ? current.startup_trial!.recorded_quantity : current.batch_quantity)
@@ -191,6 +196,7 @@ function LegacyInspectionChecklistPanel({ inspection, canManage }: Props) {
   const lotReady = !isLotChecklist || (
     coverageReady && coverageConfirmed
     && (!removalRequired || defectsRemovedConfirmed)
+    && defectSummaryReady
     && (!batchProblemRequired || batchProblem.trim() !== '')
   );
   const ready = requirementsReady && lotReady;
@@ -426,18 +432,16 @@ function LegacyInspectionChecklistPanel({ inspection, canManage }: Props) {
                   disabled={save.isPending || saveMeasurements.isPending}
                   onChange={(event) => setInspectedQuantity(event.target.value)}
                 />
-                <Input
-                  type="number"
-                  label="Defective pieces found"
-                  min={0}
-                  max={inspectedCount ?? current.batch_quantity}
-                  step="1"
-                  required
-                  value={sampleDefectCount}
-                  disabled={save.isPending || saveMeasurements.isPending}
-                  onChange={(event) => setSampleDefectCount(event.target.value)}
-                />
               </div>
+                <InspectionDefectSummaryEditor
+                  inspectionId={current.id}
+                  sourceQuantity={String(inspectedCount ?? current.batch_quantity)}
+                  unit={current.source_uom_code || 'PCS'}
+                  quantity={sampleDefectCount}
+                  onQuantityChange={setSampleDefectCount}
+                  canManage={editable && !save.isPending && !saveMeasurements.isPending}
+                  onSaved={setDefectSummary}
+                />
               <Checkbox
                 checked={coverageConfirmed}
                 label="I confirm all required checks on the planned sample were completed"

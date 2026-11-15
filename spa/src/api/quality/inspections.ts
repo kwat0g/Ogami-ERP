@@ -30,7 +30,7 @@ export interface InspectionListParams extends ListParams {
 }
 
 export const inspectionsApi = {
-  getWorkOrderFinalInspection: (id: string, params?: { inspection_id?: string; page?: number; defect_page?: number; per_page?: number }) =>
+  getWorkOrderFinalInspection: (id: string, params?: { inspection_id?: string; page?: number; per_page?: number }) =>
     client.get<ApiSuccess<WorkOrderFinalInspection>>(`/quality/work-orders/${id}/final-inspection`, { params }).then(r => r.data.data),
   saveWorkOrderFinalEvidence: (id: string, data: FinalInspectionEvidence) =>
     client.patch<ApiSuccess<WorkOrderFinalInspection>>(`/quality/work-orders/${id}/final-inspection/evidence`, data).then(r => r.data.data),

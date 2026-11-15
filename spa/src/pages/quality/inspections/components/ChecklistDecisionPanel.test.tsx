@@ -5,11 +5,13 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import toast from 'react-hot-toast';
 import { inspectionsApi } from '@/api/quality/inspections';
+import { defectSummaryApi } from '@/api/quality/defectSummary';
 import { formDraftScopeFingerprint, formDraftStorageKey } from '@/lib/formDraftStorage';
 import type { Inspection } from '@/types/quality';
 import { ChecklistDecisionPanel } from './ChecklistDecisionPanel';
 
 vi.mock('@/api/quality/inspections', () => ({ inspectionsApi: { recordBatchResult: vi.fn(), recordItemResults: vi.fn() } }));
+vi.mock('@/api/quality/defectSummary', () => ({ defectSummaryApi: { show: vi.fn(), save: vi.fn(), clear: vi.fn() } }));
 
 const inspection = {
   id: 'qc-check', entity_hash_id: 'source-1', capture_method: 'checklist', status: 'draft', result_version: 0,
@@ -26,8 +28,25 @@ function panel(record = inspection) {
   </QueryClientProvider>);
 }
 
-beforeEach(() => { vi.clearAllMocks(); vi.mocked(inspectionsApi.recordBatchResult).mockResolvedValue({ ...inspection, status: 'passed', result_version: 1 }); });
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(inspectionsApi.recordBatchResult).mockResolvedValue({ ...inspection, status: 'passed', result_version: 1 });
+  vi.mocked(defectSummaryApi.show).mockResolvedValue(null);
+  vi.mocked(defectSummaryApi.save).mockImplementation(async (_id, data) => ({
+    id: 'summary', category: data.category, category_label: 'Surface damage', other_category: null,
+    severity: data.severity, severity_label: 'Minor', affected_quantity: data.affected_quantity,
+    description: data.description, photos: [{ id: 'photo', file_name: 'proof.jpg', mime_type: 'image/jpeg', file_size: 1, file_url: '/proof.jpg', created_at: null }], created_at: null, updated_at: null,
+  }));
+});
 afterEach(() => vi.restoreAllMocks());
+
+async function saveSummary(quantity: string, description: string) {
+  fireEvent.change(await screen.findByRole('spinbutton', { name: /Affected quantity/ }), { target: { value: quantity } });
+  fireEvent.change(screen.getByLabelText(/Shared description/), { target: { value: description } });
+  fireEvent.change(screen.getByLabelText('Defect photos'), { target: { files: [new File(['proof'], 'proof.jpg', { type: 'image/jpeg' })] } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save defect summary' }));
+  await waitFor(() => expect(defectSummaryApi.save).toHaveBeenCalled());
+}
 
 it('submits one atomic request without numeric measurements or separate zero input', async () => {
   panel();
@@ -44,13 +63,55 @@ it('submits one atomic request without numeric measurements or separate zero inp
   });
 });
 
-it('reveals failure description and physical count only when needed', () => {
+it('reveals one shared defect summary for physical defects', async () => {
   panel();
   fireEvent.click(screen.getByRole('button', { name: 'FAIL Fit' }));
   expect(screen.getByRole('textbox', { name: 'Problem for Fit' })).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: /^Yes$/ }));
-  expect(screen.getByRole('spinbutton', { name: 'Unique defective pieces' })).toBeInTheDocument();
+  expect(screen.getByRole('spinbutton', { name: /Affected quantity/ })).toBeInTheDocument();
+  expect(screen.queryByLabelText(/Defective piece \d+/)).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Submit inspection' })).toBeDisabled();
+});
+
+it('uses source-unit affected quantity instead of a yes/no toggle for material lots', async () => {
+  const lot = { ...inspection, sampling_basis: 'lot' as const, batch_quantity: 1, sample_size: 1,
+    source_quantity: '200.500', source_uom_code: 'kg', accept_count: 0, reject_count: 1 };
+  panel(lot);
+  fireEvent.click(screen.getByRole('button', { name: 'FAIL Surface' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Problem for Surface' }), { target: { value: 'Contamination found.' } });
+  fireEvent.click(screen.getByRole('button', { name: 'PASS Color' }));
+  fireEvent.click(screen.getByRole('button', { name: 'PASS Fit' }));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'I confirm all required checks on the planned sample were completed' }));
+
+  expect(screen.queryByRole('button', { name: /^Yes$/ })).not.toBeInTheDocument();
+  await saveSummary('4.5', 'Contamination in the lot.');
+  fireEvent.click(screen.getByRole('button', { name: 'Submit inspection' }));
+
+  await waitFor(() => expect(inspectionsApi.recordBatchResult).toHaveBeenCalledOnce());
+  const payload = vi.mocked(inspectionsApi.recordBatchResult).mock.calls[0][1];
+  expect(payload).toMatchObject({ physical_defects_confirmed: true });
+  expect(payload).not.toHaveProperty('sample_defect_count');
+});
+
+it('requires zero or a positive affected quantity when a lot check fails', async () => {
+  const lot = { ...inspection, sampling_basis: 'lot' as const, batch_quantity: 1, sample_size: 1,
+    source_quantity: '200.500', source_uom_code: 'kg', accept_count: 0, reject_count: 1 };
+  panel(lot);
+  fireEvent.click(screen.getByRole('button', { name: 'FAIL Surface' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Problem for Surface' }), { target: { value: 'Required certificate is missing.' } });
+  fireEvent.click(screen.getByRole('button', { name: 'PASS Color' }));
+  fireEvent.click(screen.getByRole('button', { name: 'PASS Fit' }));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'I confirm all required checks on the planned sample were completed' }));
+  expect(screen.getByRole('button', { name: 'Submit inspection' })).toBeDisabled();
+
+  fireEvent.change(await screen.findByRole('spinbutton', { name: /Affected quantity/ }), { target: { value: '0' } });
+  expect(screen.queryByText('At least one photo is required.')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Submit inspection' }));
+
+  await waitFor(() => expect(inspectionsApi.recordBatchResult).toHaveBeenCalledOnce());
+  const payload = vi.mocked(inspectionsApi.recordBatchResult).mock.calls[0][1];
+  expect(payload).toMatchObject({ physical_defects_confirmed: false });
+  expect(payload).not.toHaveProperty('sample_defect_count');
 });
 
 it('requires removal confirmation for physical defects within the approved acceptance count', async () => {
@@ -58,8 +119,7 @@ it('requires removal confirmation for physical defects within the approved accep
   for (const name of ['Surface', 'Color', 'Fit']) fireEvent.click(screen.getByRole('button', { name: `PASS ${name}` }));
   fireEvent.click(screen.getByRole('checkbox', { name: 'I confirm all required checks on the planned sample were completed' }));
   fireEvent.click(screen.getByRole('checkbox', { name: 'Physical batch defect outside these checks' }));
-  fireEvent.change(screen.getByRole('spinbutton', { name: 'Unique defective pieces' }), { target: { value: '1' } });
-  fireEvent.change(screen.getByRole('textbox', { name: 'Batch problem description' }), { target: { value: 'One chipped piece.' } });
+  await saveSummary('1', 'One chipped piece.');
 
   const removed = screen.getByRole('checkbox', { name: 'I confirm the defective pieces were segregated before accepting this batch' });
   expect(removed).not.toBeChecked();
@@ -71,7 +131,6 @@ it('requires removal confirmation for physical defects within the approved accep
   expect(vi.mocked(inspectionsApi.recordBatchResult).mock.calls[0][1]).toMatchObject({
     physical_defects_confirmed: true,
     sample_defect_count: 1,
-    problem_description: 'One chipped piece.',
     defects_removed_confirmed: true,
   });
 });
@@ -215,7 +274,7 @@ it('retains actual size and failure description after a rejected submission', as
   panel({ ...inspection, measurements: [size] });
   fireEvent.change(screen.getByRole('textbox', { name: 'Actual size for Diameter' }), { target: { value: '10.2' } });
   fireEvent.change(screen.getByRole('textbox', { name: 'Problem for Diameter' }), { target: { value: 'Measured oversize.' } });
-  fireEvent.change(screen.getByRole('spinbutton', { name: 'Unique defective pieces' }), { target: { value: '1' } });
+  await saveSummary('1', 'Measured oversize.');
   fireEvent.click(screen.getByRole('checkbox', { name: 'I confirm all required checks on the planned sample were completed' }));
   fireEvent.click(screen.getByRole('button', { name: 'Submit inspection' }));
   await screen.findByText('Source quantity changed.');

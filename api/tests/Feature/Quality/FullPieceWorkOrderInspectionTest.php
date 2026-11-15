@@ -21,7 +21,9 @@ use App\Modules\Quality\Models\NonConformanceReport;
 use App\Modules\Production\Events\WorkOrderCompleted;
 use Database\Seeders\RolePermissionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 class FullPieceWorkOrderInspectionTest extends TestCase
@@ -34,6 +36,7 @@ class FullPieceWorkOrderInspectionTest extends TestCase
     {
         parent::setUp();
         Queue::fake();
+        Storage::fake('local');
         $this->seed(RolePermissionSeeder::class);
         config(['inspection.finish_first_wo_enabled' => true, 'inspection.outgoing_confirmed_checks_enabled' => false]);
         $this->maker = User::factory()->withRole('qc_inspector')->create(['is_active' => true]);
@@ -61,18 +64,54 @@ class FullPieceWorkOrderInspectionTest extends TestCase
         }
     }
 
-    public function test_simple_final_failure_keeps_per_piece_reasons_and_requires_group_review(): void
+    public function test_simple_final_failure_uses_one_shared_summary_and_requires_group_review(): void
     {
         $wo = $this->workOrder([5]);
         app(TriggerOutgoingQC::class)->handle(new WorkOrderCompleted($wo));
         $inspection = Inspection::query()->where('entity_id', $wo->id)->where('stage', 'outgoing')->firstOrFail();
+        $this->actingAs($this->maker)->put('/api/v1/quality/inspections/'.$inspection->hash_id.'/defect-summary', [
+            'category' => 'surface_damage', 'severity' => 'major', 'affected_quantity' => 2,
+            'description' => 'Two pieces have surface cracks.',
+            'photos' => [UploadedFile::fake()->image('cracks.jpg')],
+        ])->assertSuccessful();
         $this->actingAs($this->maker)->postJson('/api/v1/quality/inspections/'.$inspection->hash_id.'/batch-result', [
-            'expected_result_version' => 0, 'quantity_result' => ['defective_quantity' => '2', 'descriptions' => ['Cracked', 'Short shot']],
+            'expected_result_version' => 0, 'quantity_result' => ['defective_quantity' => '2', 'descriptions' => []],
         ])->assertSuccessful()->assertJsonPath('data.proposed_result', 'failed');
-        $this->assertSame(['Cracked', 'Short shot'], $inspection->defectivePieces()->pluck('problem_description')->all());
+        $this->assertSame(0, $inspection->defectivePieces()->count());
+        $this->assertSame('Two pieces have surface cracks.', $inspection->fresh()->problem_description);
         $this->assertSame(0, $inspection->pieceReadings()->count());
         $this->assertSame(0, $inspection->fresh()->accepted_quantity);
         $this->assertFalse($inspection->fresh()->canReleaseOutgoing());
+    }
+
+    public function test_aggregate_summary_submits_many_defects_without_per_piece_description_rows(): void
+    {
+        config(['inspection.outgoing_confirmed_checks_enabled' => true]);
+        $wo = $this->workOrder([5]);
+        app(\App\Modules\Quality\Services\WorkOrderFinalInspectionService::class)
+            ->ensureForCompletedWorkOrder($wo, $this->maker);
+        $inspection = Inspection::query()->where('entity_id', $wo->id)->where('stage', 'outgoing')->firstOrFail();
+        $url = '/api/v1/quality/work-orders/'.$wo->hash_id.'/final-inspection';
+        $group = $this->actingAs($this->maker)->getJson($url)->assertSuccessful()->json('data');
+
+        $this->patchJson($url.'/evidence', [
+            'manifest' => $group['manifest'], 'inspection_id' => $inspection->hash_id,
+            'expected_result_version' => 0, 'defective_quantity' => 2, 'pieces' => [], 'readings' => [],
+        ])->assertSuccessful();
+        $this->put('/api/v1/quality/inspections/'.$inspection->hash_id.'/defect-summary', [
+            'category' => 'surface_damage', 'severity' => 'major', 'affected_quantity' => 2,
+            'description' => 'Two pieces have the same surface crack.',
+            'photos' => [UploadedFile::fake()->image('crack.jpg'), UploadedFile::fake()->image('crack-detail.png')],
+        ])->assertSuccessful();
+        $group = $this->getJson($url)->assertSuccessful()->json('data');
+
+        $this->postJson($url.'/submit', ['manifest' => $group['manifest'], 'batches' => [[
+            'inspection_id' => $inspection->hash_id, 'coverage_confirmed' => true,
+            'checks_confirmed' => true, 'inspected_quantity' => 5,
+        ]]])->assertSuccessful()->assertJsonPath('data.batches.0.proposed_result', 'failed');
+
+        $this->assertSame(0, $inspection->fresh()->defectivePieces()->count());
+        $this->assertSame('Two pieces have the same surface crack.', $inspection->fresh()->problem_description);
     }
 
     public function test_completed_work_order_gets_idempotent_version_two_batch_inspections(): void
@@ -233,7 +272,7 @@ class FullPieceWorkOrderInspectionTest extends TestCase
         $this->assertSame(60, $inspection->fresh()->accepted_quantity);
     }
 
-    public function test_five_unique_defect_descriptions_make_failed_full_coverage_result(): void
+    public function test_five_unique_defects_use_one_summary_and_keep_size_readings(): void
     {
         $wo = $this->workOrder([60]);
         app(TriggerOutgoingQC::class)->handle(new WorkOrderCompleted($wo));
@@ -249,16 +288,14 @@ class FullPieceWorkOrderInspectionTest extends TestCase
                     $readings[] = ['piece_number' => $piece, 'requirement_id' => $size->hash_id, 'measured_value' => $value];
                 }
             }
-            $pieces = $first === 1 ? collect([1, 2, 3, 4, 7])->map(fn ($piece) => [
-                'piece_number' => $piece, 'problem_description' => 'Out of specification',
-            ])->all() : [];
             $group = $this->patchJson($url.'/evidence', [
                 'manifest' => $group['manifest'], 'inspection_id' => $inspection->hash_id,
                 'expected_result_version' => $inspection->fresh()->result_version,
-                'defective_quantity' => 5, 'pieces' => $pieces, 'readings' => $readings,
+                'defective_quantity' => 5, 'pieces' => [], 'readings' => $readings,
             ])->assertSuccessful()->json('data');
         }
-        $this->assertSame(5, InspectionDefectivePiece::query()->where('inspection_id', $inspection->id)->count());
+        $this->saveDefectSummary($inspection, 5, 'Five pieces are outside the dimensional specification.');
+        $this->assertSame(0, InspectionDefectivePiece::query()->where('inspection_id', $inspection->id)->count());
         $this->postJson($url.'/submit', ['manifest' => $group['manifest'],
             'batches' => [['inspection_id' => $inspection->hash_id, 'coverage_confirmed' => true, 'inspected_quantity' => 60]]])
             ->assertSuccessful()->assertJsonPath('data.batches.0.proposed_result', 'failed');
@@ -311,12 +348,10 @@ class FullPieceWorkOrderInspectionTest extends TestCase
         $saved = $this->patchJson($url.'/evidence', [
             'manifest' => $group['manifest'], 'inspection_id' => $inspection->hash_id,
             'expected_result_version' => 0, 'defective_quantity' => 2,
-            'pieces' => [
-                ['piece_number' => 1, 'problem_description' => 'Out of tolerance.'],
-                ['piece_number' => 2, 'problem_description' => 'Out of tolerance.'],
-            ],
+            'pieces' => [],
             'readings' => $readings,
         ])->assertSuccessful()->json('data');
+        $this->saveDefectSummary($inspection, 2, 'Both pieces are below the allowed size.');
         $submitted = $this->postJson($url.'/submit', ['manifest' => $saved['manifest'],
             'batches' => [['inspection_id' => $inspection->hash_id, 'coverage_confirmed' => true, 'inspected_quantity' => 2]]])
             ->assertSuccessful()->json('data');
@@ -329,6 +364,15 @@ class FullPieceWorkOrderInspectionTest extends TestCase
         $this->assertSame('failed', $result['state']);
         $this->assertSame(0, $result['accepted_quantity']);
         $this->assertSame(0, $inspection->fresh()->accepted_quantity);
+    }
+
+    private function saveDefectSummary(Inspection $inspection, int $quantity, string $description): void
+    {
+        $this->actingAs($this->maker)->put('/api/v1/quality/inspections/'.$inspection->hash_id.'/defect-summary', [
+            'category' => 'dimensional', 'severity' => 'major', 'affected_quantity' => $quantity,
+            'description' => $description,
+            'photos' => [UploadedFile::fake()->image('defect.jpg')],
+        ])->assertSuccessful();
     }
 
     public function test_new_child_after_approved_snapshot_preserves_terminal_batch(): void

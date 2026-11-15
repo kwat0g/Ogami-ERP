@@ -25,7 +25,9 @@ use App\Modules\Quality\Models\NonConformanceReport;
 use App\Modules\Quality\Services\InspectionService;
 use App\Modules\Quality\Services\NcrService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 /**
@@ -88,6 +90,7 @@ class InspectionNcrTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        Storage::fake('local');
 
         $role = Role::firstOrCreate(['slug' => 'qc_inspector'], ['name' => 'QC Inspector']);
 
@@ -257,6 +260,11 @@ class InspectionNcrTest extends TestCase
             'is_critical'             => true,
             'is_pass'                 => false,
         ]);
+
+        app(\App\Modules\Quality\Services\InspectionDefectSummaryService::class)->save($insp, [
+            'category' => 'dimensional', 'severity' => 'critical', 'affected_quantity' => 1,
+            'description' => 'One piece is below the critical shaft diameter tolerance.',
+        ], [UploadedFile::fake()->image('shaft-diameter.jpg')], [], $this->user);
 
         return $insp->fresh(['measurements']);
     }

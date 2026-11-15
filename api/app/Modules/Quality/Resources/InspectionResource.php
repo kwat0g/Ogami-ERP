@@ -66,6 +66,9 @@ class InspectionResource extends JsonResource
             'work_order_quality' => $this->resource->getAttribute('work_order_quality'),
             'counted_capture' => $this->counted_capture,
             'quantity_result' => $this->quantity_result,
+            'defect_summary' => $this->whenLoaded('defectSummary', fn () => $this->defectSummary
+                ? (new InspectionDefectSummaryResource($this->defectSummary))->resolve($request)
+                : null),
             'historical_held' => (bool) ($this->work_order_output_id && $this->workOrderOutput?->held_quantity > 0),
             'coverage_confirmed_at' => $this->coverage_confirmed_at?->toISOString(),
             'startup_trial_required' => (bool) $this->startup_trial_required,

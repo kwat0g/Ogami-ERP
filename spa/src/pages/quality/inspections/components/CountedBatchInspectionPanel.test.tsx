@@ -1,11 +1,13 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { expect, it, vi } from 'vitest';
+import { beforeEach, expect, it, vi } from 'vitest';
 import { inspectionsApi } from '@/api/quality/inspections';
 import type { Inspection } from '@/types/quality';
 import { CountedBatchInspectionPanel } from './CountedBatchInspectionPanel';
 vi.mock('@/api/quality/inspections', () => ({ inspectionsApi: { recordBatchResult: vi.fn() } }));
+vi.mock('@/api/quality/defectSummary', () => ({ defectSummaryApi: { show: vi.fn(), save: vi.fn(), clear: vi.fn() } }));
+import { defectSummaryApi } from '@/api/quality/defectSummary';
 const inspection = {
   id: 'counted',
   status: 'draft',
@@ -30,16 +32,32 @@ function panel(source = inspection) {
     </QueryClientProvider>,
   );
 }
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(defectSummaryApi.show).mockResolvedValue(null);
+  vi.mocked(defectSummaryApi.save).mockImplementation(async (_id, data) => ({
+    id: 'summary', category: data.category, category_label: 'Surface damage', other_category: null,
+    severity: data.severity, severity_label: 'Minor', affected_quantity: data.affected_quantity,
+    description: data.description, photos: [{ id: 'photo', file_name: 'proof.jpg', mime_type: 'image/jpeg', file_size: 1, file_url: '/proof.jpg', created_at: null }], created_at: null, updated_at: null,
+  }));
+});
+async function saveSummary(description = 'Shared defect description') {
+  fireEvent.change(await screen.findByLabelText(/Shared description/), { target: { value: description } });
+  fireEvent.change(screen.getByLabelText('Defect photos'), { target: { files: [new File(['proof'], 'proof.jpg', { type: 'image/jpeg' })] } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save defect summary' }));
+  await waitFor(() => expect(defectSummaryApi.save).toHaveBeenCalled());
+}
 it('keeps a 200-piece inspection bounded and never sends per-piece answers', async () => {
   vi.mocked(inspectionsApi.recordBatchResult).mockResolvedValue({
     ...inspection,
     status: 'awaiting_review',
   });
   panel();
+  await waitFor(() => expect(defectSummaryApi.show).toHaveBeenCalled());
   expect(screen.getAllByRole('spinbutton')).toHaveLength(1);
   expect(screen.queryByRole('button', { name: 'PASS' })).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Submit inspection' })).toBeDisabled();
-  fireEvent.change(screen.getByRole('spinbutton', { name: 'Defective pieces' }), {
+  fireEvent.change(screen.getByRole('spinbutton', { name: /Affected quantity/ }), {
     target: { value: '0' },
   });
   fireEvent.click(screen.getByRole('checkbox', { name: /I checked all 200 pieces/ }));
@@ -55,18 +73,16 @@ it('keeps a 200-piece inspection bounded and never sends per-piece answers', asy
     }),
   );
 });
-it('requires a problem for defective pieces and holds the entire batch', () => {
+it('requires one saved summary for defective pieces and holds the entire batch', async () => {
   panel();
-  fireEvent.change(screen.getByRole('spinbutton', { name: 'Defective pieces' }), {
+  fireEvent.change(screen.getByRole('spinbutton', { name: /Affected quantity/ }), {
     target: { value: '2' },
   });
   expect(screen.getAllByRole('checkbox')).toHaveLength(1);
   fireEvent.click(screen.getByRole('checkbox', { name: /I checked all 200 pieces/ }));
   expect(screen.getByRole('button', { name: 'Submit inspection' })).toBeDisabled();
   expect(screen.getByText(/FAIL.*batch stays on hold/)).toBeVisible();
-  fireEvent.change(screen.getByRole('textbox', { name: 'Describe the problem' }), {
-    target: { value: 'Two cracked pieces' },
-  });
+  await saveSummary('Two cracked pieces');
   expect(screen.getByRole('button', { name: 'Submit inspection' })).toBeEnabled();
 });
 
@@ -74,8 +90,8 @@ it('requires defective supplier pieces to be separated before submission', async
   const incoming = { ...inspection, count_only_incoming: true };
   vi.mocked(inspectionsApi.recordBatchResult).mockResolvedValue({ ...incoming, status: 'awaiting_review' });
   panel(incoming);
-  fireEvent.change(screen.getByRole('spinbutton', { name: 'Defective pieces' }), { target: { value: '2' } });
-  fireEvent.change(screen.getByRole('textbox', { name: 'Describe the problem' }), { target: { value: 'Two torn bags' } });
+  fireEvent.change(screen.getByRole('spinbutton', { name: /Affected quantity/ }), { target: { value: '2' } });
+  await saveSummary('Two torn bags');
   fireEvent.click(screen.getByRole('checkbox', { name: /I checked all 200 pieces/ }));
   expect(screen.getByRole('button', { name: 'Submit inspection' })).toBeDisabled();
   fireEvent.click(screen.getByRole('checkbox', { name: /I separated the 2 defective pieces/ }));
@@ -90,7 +106,7 @@ it('keeps fallback supplier QC focused on defective pieces', async () => {
   const incoming = { ...inspection, count_only_incoming: true };
   vi.mocked(inspectionsApi.recordBatchResult).mockResolvedValue({ ...incoming, status: 'awaiting_review' });
   panel(incoming);
-  fireEvent.change(screen.getByRole('spinbutton', { name: 'Defective pieces' }), { target: { value: '0' } });
+  fireEvent.change(screen.getByRole('spinbutton', { name: /Affected quantity/ }), { target: { value: '0' } });
   expect(screen.queryByRole('checkbox', { name: 'Other inspection requirement failed' })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('checkbox', { name: /I checked all 200 pieces/ }));
   fireEvent.click(screen.getByRole('button', { name: 'Submit inspection' }));
@@ -106,7 +122,7 @@ it('lets QC report a separate batch problem when no pieces are defective', async
     status: 'awaiting_review',
   });
   panel();
-  fireEvent.change(screen.getByRole('spinbutton', { name: 'Defective pieces' }), {
+  fireEvent.change(screen.getByRole('spinbutton', { name: /Affected quantity/ }), {
     target: { value: '0' },
   });
   fireEvent.click(screen.getByRole('checkbox', { name: 'Other inspection requirement failed' }));
@@ -126,20 +142,35 @@ it('lets QC report a separate batch problem when no pieces are defective', async
   );
 });
 
-it('uses an affected-lot confirmation instead of a piece count for material lots', async () => {
+it('uses the affected quantity as the material-lot defect confirmation', async () => {
   const lot = { ...inspection, sampling_basis: 'lot' as const, source_quantity: '200.500', source_uom_code: 'kg',
     batch_quantity: 1, counted_capture: { ...inspection.counted_capture!, required_quantity: 1 } };
   vi.mocked(inspectionsApi.recordBatchResult).mockClear();
   vi.mocked(inspectionsApi.recordBatchResult).mockResolvedValue({ ...lot, status: 'awaiting_review' });
   panel(lot);
-  expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument();
-  expect(screen.getByText(/200.500 kg/)).toBeVisible();
-  fireEvent.click(screen.getByRole('checkbox', { name: 'Material lot has defects' }));
-  fireEvent.change(screen.getByRole('textbox', { name: 'Describe the problem' }), { target: { value: 'Contaminated resin' } });
+  expect(screen.getByText(/Check the material lot \(200.500 kg\)/)).toBeVisible();
+  expect(screen.queryByRole('checkbox', { name: 'Material lot has defects' })).not.toBeInTheDocument();
+  expect(screen.getByRole('spinbutton', { name: /Affected quantity/ })).toBeVisible();
+  fireEvent.change(screen.getByRole('spinbutton', { name: /Affected quantity/ }), { target: { value: '4.5' } });
+  await saveSummary('Contaminated resin');
   fireEvent.click(screen.getByRole('checkbox', { name: /I checked all 1 lot/ }));
   fireEvent.click(screen.getByRole('button', { name: 'Submit inspection' }));
   await waitFor(() => expect(inspectionsApi.recordBatchResult).toHaveBeenCalledWith('counted', expect.objectContaining({
-    physical_defects_confirmed: true, inspected_quantity: 1, problem_description: 'Contaminated resin',
+    physical_defects_confirmed: true, inspected_quantity: 1,
   })));
   expect(vi.mocked(inspectionsApi.recordBatchResult).mock.calls[0][1]).not.toHaveProperty('sample_defect_count');
+});
+
+it('uses zero affected lot quantity to confirm no physical defects', async () => {
+  const lot = { ...inspection, sampling_basis: 'lot' as const, source_quantity: '200.500', source_uom_code: 'kg',
+    batch_quantity: 1, counted_capture: { ...inspection.counted_capture!, required_quantity: 1 } };
+  vi.mocked(inspectionsApi.recordBatchResult).mockResolvedValue({ ...lot, status: 'awaiting_review' });
+  panel(lot);
+  fireEvent.change(await screen.findByRole('spinbutton', { name: /Affected quantity/ }), { target: { value: '0' } });
+  fireEvent.click(screen.getByRole('checkbox', { name: /I checked all 1 lot/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Submit inspection' }));
+  await waitFor(() => expect(inspectionsApi.recordBatchResult).toHaveBeenCalledWith('counted', expect.objectContaining({
+    physical_defects_confirmed: false,
+    inspected_quantity: 1,
+  })));
 });

@@ -11,6 +11,8 @@ import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
 import { useFormDraftAutosave } from '@/hooks/useFormDraftAutosave';
 import { DraftRestoreBanner } from '@/components/ui/DraftRestoreBanner';
+import { InspectionDefectSummaryEditor } from '@/components/quality/InspectionDefectSummaryEditor';
+import { inspectionDefectQuantityIsValid, inspectionDefectSummaryMatches } from '@/lib/inspectionDefectSummary';
 import { useAuthStore } from '@/stores/authStore';
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
 import type { Inspection, InspectionMeasurement } from '@/types/quality';
@@ -32,7 +34,8 @@ export function CountedBatchInspectionPanel({
   const queryClient = useQueryClient();
   const [saved, setSaved] = useState(inspection);
   const [defects, setDefects] = useState('');
-  const [defectReasons, setDefectReasons] = useState<string[]>([]);
+  const [lotDefectQuantity, setLotDefectQuantity] = useState(inspection.sampling_basis === 'lot' ? '0' : '');
+  const [summary, setSummary] = useState<import('@/types/quality').InspectionDefectSummary | null>(null);
   const [problem, setProblem] = useState('');
   const [otherProblem, setOtherProblem] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
@@ -46,17 +49,19 @@ export function CountedBatchInspectionPanel({
   const sizes = (current.measurements ?? []).filter(numeric);
   const simplePieceInspection = current.stage === 'incoming' && !lot && !current.count_only_incoming && sizes.length === 0;
   const quantity = simplePieceInspection ? current.batch_quantity : current.counted_capture!.required_quantity;
+  const sourceQuantity = String(current.source_quantity ?? quantity);
+  const sourceUnit = current.source_uom_code || 'PCS';
   const references = [
     ...new Map((current.measurements ?? []).map((row) => [row.parameter_name, row])).values(),
   ];
-  const count = lot ? (defects === '1' ? 1 : 0) : /^\d+$/.test(defects) ? Number(defects) : NaN;
+  const lotQuantityValid = !lot || inspectionDefectQuantityIsValid(lotDefectQuantity, sourceQuantity, sourceUnit, true);
+  const count = lot
+    ? Number(lotDefectQuantity) > 0 ? 1 : lotDefectQuantity === '' ? NaN : 0
+    : /^\d+$/.test(defects) ? Number(defects) : NaN;
   const validCount = Number.isSafeInteger(count) && count >= 0 && count <= quantity;
   const requirementProblem = !current.count_only_incoming && validCount && count === 0 && otherProblem;
-  const activeDefectReasons = defectReasons.slice(0, count > 0 && Number.isSafeInteger(count) ? count : 0);
-  const defectDescription = activeDefectReasons
-    .map((reason, index) => `Defective piece ${index + 1}: ${reason.trim()}`)
-    .join('\n');
-  const defectReasonsComplete = activeDefectReasons.length === count && activeDefectReasons.every((reason) => reason.trim().length > 0);
+  const evidenceQuantity = lot ? lotDefectQuantity : defects;
+  const summaryReady = count === 0 || inspectionDefectSummaryMatches(summary, evidenceQuantity);
   const valueFor = (row: InspectionMeasurement) =>
     readings[row.id] ?? (row.measured_value == null ? '' : String(row.measured_value));
   const failedSizes = sizes.filter((row) => {
@@ -71,46 +76,48 @@ export function CountedBatchInspectionPanel({
     ? validCount && count > 0
     : validCount && (count > 0 || requirementProblem || failedSizes.length > 0 || current.historical_held);
   const ready = simplePieceInspection
-    ? editable && defects !== '' && validCount && (count === 0 || defectReasonsComplete) && defectDescription.length <= 2000
+    ? editable && defects !== '' && validCount && summaryReady
     : editable &&
       confirmed &&
       (!(current.count_only_incoming && count > 0) || segregated) &&
       validCount &&
-      (!(count > 0 || requirementProblem || failedSizes.length > 0) || problem.trim().length > 0) &&
+      lotQuantityValid &&
+      summaryReady &&
+      (!(requirementProblem || current.historical_held) || problem.trim().length > 0) &&
       problem.length <= 2000 &&
       sizes.every((row) => /^-?\d{1,8}(?:\.\d{1,4})?$/.test(valueFor(row))) &&
       (failedSizes.length === 0 || count >= (lot ? 1 : new Set(failedSizes.map((row) => row.sample_index)).size));
   useUnsavedChangesGuard(
-    editable && (defects !== '' || defectReasons.some((reason) => reason !== '') || problem !== '' || confirmed || segregated || Object.keys(readings).length > 0),
+    editable && (defects !== '' || (lot ? lotDefectQuantity !== '0' : lotDefectQuantity !== '') || problem !== '' || confirmed || segregated || Object.keys(readings).length > 0),
     true,
   );
   const userId = useAuthStore(state => state.user?.id);
-  const valuesRef = useRef({ defects, defectReasons, problem, otherProblem, readings });
-  valuesRef.current = { defects, defectReasons, problem, otherProblem, readings };
-  const dirty = defects !== '' || defectReasons.some((reason) => reason !== '') || problem !== '' || otherProblem || Object.keys(readings).length > 0;
+  const valuesRef = useRef({ defects, lotDefectQuantity, problem, otherProblem, readings });
+  valuesRef.current = { defects, lotDefectQuantity, problem, otherProblem, readings };
+  const dirty = defects !== '' || (lot ? lotDefectQuantity !== '0' : lotDefectQuantity !== '') || problem !== '' || otherProblem || Object.keys(readings).length > 0;
   const getValues = useCallback(() => valuesRef.current, []);
   const restoreValues = useCallback((values: Record<string, unknown>) => {
     if (typeof values.defects === 'string') setDefects(values.defects);
-    if (Array.isArray(values.defectReasons)) {
-      setDefectReasons(values.defectReasons.filter((reason): reason is string => typeof reason === 'string'));
-    } else if (typeof values.problem === 'string' && values.problem.trim()) {
-      setDefectReasons([values.problem]);
-    }
+    const restoredLotQuantity = typeof values.lotDefectQuantity === 'string'
+      ? values.lotDefectQuantity
+      : values.defects === '0' ? '0' : '';
+    if (lot) setLotDefectQuantity(restoredLotQuantity);
+    else if (typeof values.lotDefectQuantity === 'string') setLotDefectQuantity(values.lotDefectQuantity);
     if (typeof values.problem === 'string') setProblem(values.problem);
-    setOtherProblem(!simplePieceInspection && values.otherProblem === true && values.defects === '0');
+    setOtherProblem(!simplePieceInspection && values.otherProblem === true && (lot ? restoredLotQuantity === '0' : values.defects === '0'));
     if (values.readings && typeof values.readings === 'object' && !Array.isArray(values.readings)) {
       setReadings(Object.fromEntries(Object.entries(values.readings).filter((entry): entry is [string, string] => typeof entry[1] === 'string')));
     }
     setConfirmed(false);
     setSegregated(false);
-  }, [simplePieceInspection]);
+  }, [simplePieceInspection, lot]);
   const recovery = useFormDraftAutosave({ formKey: `counted-inspection:${current.id}:${current.result_version ?? 0}`,
     userId, getValues, setValues: restoreValues, enabled: Boolean(userId) && dirty && editable });
   useEffect(() => {
     if (!dirty || !userId || !editable) return;
     const timer = window.setTimeout(recovery.saveNow, 500);
     return () => window.clearTimeout(timer);
-  }, [defects, defectReasons, problem, otherProblem, readings, dirty, userId, editable, recovery.saveNow]);
+  }, [defects, lotDefectQuantity, problem, otherProblem, readings, dirty, userId, editable, recovery.saveNow]);
   const submit = useMutation<Inspection, AxiosError<{ message?: string }>>({
     mutationFn: () =>
       inspectionsApi.recordBatchResult(current.id, {
@@ -120,9 +127,9 @@ export function CountedBatchInspectionPanel({
         ...(lot ? { physical_defects_confirmed: count === 1 } : { sample_defect_count: count }),
         requirement_problem: simplePieceInspection ? false : requirementProblem,
         ...(current.count_only_incoming && count > 0 ? { defects_removed_confirmed: segregated } : {}),
-        ...(simplePieceInspection
-          ? count > 0 ? { problem_description: defectDescription } : {}
-          : failed ? { problem_description: problem.trim() || 'Production preceded required QC release.' } : {}),
+        ...(!simplePieceInspection && failed && problem.trim()
+          ? { problem_description: problem.trim() }
+          : {}),
         measurements: sizes.map((row) => ({ id: row.id, measured_value: valueFor(row) })),
       }),
     onSuccess: (result) => {
@@ -131,7 +138,8 @@ export function CountedBatchInspectionPanel({
       setConfirmed(false);
       setSegregated(false);
       setDefects('');
-      setDefectReasons([]);
+      setLotDefectQuantity(lot ? '0' : '');
+      setSummary(null);
       setProblem('');
       setReadings({});
       queryClient.setQueryData(inspectionQueryKeys.detail(current.id), result);
@@ -186,76 +194,27 @@ export function CountedBatchInspectionPanel({
             }}
           >
             <fieldset disabled={submit.isPending} className="min-w-0 space-y-4">
+              <InspectionDefectSummaryEditor
+                inspectionId={current.id}
+                sourceQuantity={lot ? sourceQuantity : String(quantity)}
+                unit={sourceUnit}
+                quantity={evidenceQuantity}
+                onQuantityChange={lot ? setLotDefectQuantity : setDefects}
+                canManage={editable && !submit.isPending}
+                onSaved={setSummary}
+              />
               {simplePieceInspection ? (
                 <>
-                  <Input
-                    label="Defective pieces"
-                    type="number"
-                    min={0}
-                    max={quantity}
-                    step={1}
-                    required
-                    value={defects}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      setDefects(value);
-                      const nextCount = /^\d+$/.test(value) ? Number(value) : NaN;
-                      if (Number.isSafeInteger(nextCount) && nextCount >= 0 && nextCount <= quantity) {
-                        setDefectReasons((old) => old.length >= nextCount
-                          ? old
-                          : [...old, ...Array.from({ length: nextCount - old.length }, () => '')]);
-                      }
-                    }}
-                    containerClassName="max-w-sm"
-                    helper="Enter 0 if none. Count each defective piece once."
-                  />
                   {validCount && count === 0 && (
                     <p role="status" className="text-sm font-medium text-success-fg">PASS — no defective pieces.</p>
                   )}
                   {validCount && count > 0 && (
                     <>
-                      <p role="status" className="text-sm font-medium text-danger-fg">FAIL — describe each defective piece.</p>
-                      <div className="space-y-3">
-                        {activeDefectReasons.map((reason, index) => (
-                          <Textarea
-                            key={index}
-                            label={`Defective piece ${index + 1} — what is wrong?`}
-                            required
-                            rows={2}
-                            maxLength={500}
-                            value={reason}
-                            onChange={(event) => setDefectReasons((old) => old.map((value, i) => i === index ? event.target.value : value))}
-                          />
-                        ))}
-                      </div>
-                      {defectDescription.length > 2000 && (
-                        <p role="alert" className="text-sm text-danger-fg">Keep all defect explanations under 2,000 characters total.</p>
-                      )}
+                      <p role="status" className="text-sm font-medium text-danger-fg">FAIL — add one shared defect summary and photo evidence.</p>
                     </>
                   )}
                 </>
-              ) : lot ? <Checkbox
-                label="Material lot has defects"
-                checked={count === 1}
-                onChange={(event) => {
-                  setDefects(event.target.checked ? '1' : '0');
-                  if (event.target.checked) setOtherProblem(false);
-                }}
-              /> : <Input
-                label="Defective pieces"
-                type="number"
-                min={0}
-                max={quantity}
-                step={1}
-                required
-                value={defects}
-                onChange={(event) => {
-                  setDefects(event.target.value);
-                  if (Number(event.target.value) > 0) setOtherProblem(false);
-                }}
-                containerClassName="max-w-sm"
-                helper="Enter 0 if none. Multiple problems on one piece count as one defective piece."
-              />}
+              ) : null}
               {!simplePieceInspection && !current.count_only_incoming && validCount && count === 0 && (
                 <div>
                   <Checkbox
@@ -266,14 +225,14 @@ export function CountedBatchInspectionPanel({
                     onChange={(event) => setOtherProblem(event.target.checked)}
                   />
                   <p id={`other-problem-help-${current.id}`} className="pl-5 text-xs text-muted">
-                    Use when no pieces are defective but another requirement failed, such as missing required paperwork.
+                    Use when no {lot ? 'material is physically defective' : 'pieces are defective'} but another requirement failed, such as missing required paperwork.
                   </p>
                 </div>
               )}
-              {!simplePieceInspection && (count > 0 || requirementProblem || failedSizes.length > 0 || current.historical_held) && (
+              {!simplePieceInspection && (requirementProblem || (failedSizes.length > 0 && count === 0) || current.historical_held) && (
                 <Textarea
                   label="Describe the problem"
-                  required={count > 0 || requirementProblem || failedSizes.length > 0}
+                  required={requirementProblem || current.historical_held}
                   helper={current.historical_held ? 'Production before QC release requires process recovery, even with no defective pieces.' : current.count_only_incoming ? 'Describe the defective pieces.' : 'Describe the defective pieces or failed requirement.'}
                   rows={3}
                   maxLength={2000}

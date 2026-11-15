@@ -13,6 +13,7 @@ const navigation = vi.hoisted(() => ({ navigate: vi.fn() }));
 
 const permissionState = vi.hoisted(() => ({ can: vi.fn((_permission: string) => true) }));
 const defectEvidenceMocks = vi.hoisted(() => ({ list: vi.fn(), create: vi.fn() }));
+const defectSummaryMocks = vi.hoisted(() => ({ show: vi.fn(), save: vi.fn(), clear: vi.fn() }));
 
 vi.mock('@/api/quality/inspections', () => ({
   inspectionsApi: {
@@ -33,6 +34,7 @@ vi.mock('@/api/quality/inspections', () => ({
 vi.mock('@/api/quality/defectEvidence', () => ({
   defectEvidenceApi: { list: defectEvidenceMocks.list, create: defectEvidenceMocks.create },
 }));
+vi.mock('@/api/quality/defectSummary', () => ({ defectSummaryApi: defectSummaryMocks }));
 vi.mock('@/hooks/usePermission', () => ({ usePermission: () => ({ can: permissionState.can }) }));
 vi.mock('@/hooks/useRealtimeRecord', () => ({ useRealtimeRecord: vi.fn() }));
 vi.mock('@/api/quality/analytics', () => ({
@@ -94,7 +96,16 @@ const inspection = {
 } as unknown as Inspection;
 
 describe('InspectionDetailPage', () => {
-  beforeEach(() => defectEvidenceMocks.list.mockResolvedValue([]));
+  beforeEach(() => {
+    defectEvidenceMocks.list.mockResolvedValue([]);
+    defectSummaryMocks.show.mockResolvedValue(null);
+    defectSummaryMocks.save.mockImplementation(async (_id: string, data: { category: string; severity: string; affected_quantity: string; description: string }) => ({
+      id: 'summary-1', category: data.category, category_label: 'Surface damage', other_category: null,
+      severity: data.severity, severity_label: 'Major', affected_quantity: data.affected_quantity,
+      description: data.description, photos: [{ id: 'photo-1', file_name: 'proof.jpg', mime_type: 'image/jpeg', file_size: 10, file_url: '/proof.jpg', created_by: null, created_at: null }],
+      created_at: null, updated_at: null,
+    }));
+  });
 
   afterEach(() => {
     permissionState.can.mockReturnValue(true);
@@ -201,14 +212,23 @@ describe('InspectionDetailPage', () => {
       render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
         <MemoryRouter><InspectionDetailPage /></MemoryRouter>
       </QueryClientProvider>);
-      const field = await screen.findByLabelText(/Defective pieces/);
+      const field = await screen.findByLabelText(/Affected quantity/);
       expect(screen.getAllByRole('spinbutton')).toHaveLength(1);
       expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'PASS Outer diameter' })).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Submit inspection' })).toBeDisabled();
       fireEvent.change(field, { target: { value: '1' } });
-      expect(screen.getByRole('textbox', { name: /Defective piece 1/ })).toBeRequired();
-      fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Oversized part' } });
+      await waitFor(() => expect(screen.getAllByRole('textbox').some(field => field.tagName === 'TEXTAREA')).toBe(true));
+      const description = screen.getAllByRole('textbox').find(field => field.tagName === 'TEXTAREA')!;
+      await waitFor(() => expect(description).toBeEnabled());
+      fireEvent.change(description, { target: { value: 'One piece has an oversized edge.' } });
+      fireEvent.change(screen.getByLabelText('Defect photos'), {
+        target: { files: [new File(['proof'], 'proof.jpg', { type: 'image/jpeg' })] },
+      });
+      const save = screen.getByRole('button', { name: 'Save defect summary' });
+      await waitFor(() => expect(save).toBeEnabled());
+      fireEvent.click(save);
+      await waitFor(() => expect(defectSummaryMocks.save).toHaveBeenCalled());
       expect(screen.getByRole('button', { name: 'Submit inspection' })).toBeEnabled();
     },
   );
@@ -513,11 +533,18 @@ it('shows incoming warehouse acceptance and existing recovery without granting d
   expect(screen.queryByRole('button', { name: 'Open NCR' })).not.toBeInTheDocument();
 });
 
-it('shows defect severity and private image evidence on an incoming inspection', async () => {
+it('keeps earlier per-record evidence visible as historical records', async () => {
   vi.mocked(inspectionsApi.show).mockResolvedValue({
     ...inspection, stage: 'incoming', status: 'failed', can_manage: true,
     available_actions: ['cancel'],
     product: { id: 'p-1', part_number: 'RAW', name: 'Material' },
+    defect_summary: {
+      id: 'summary-1', category: 'surface_damage', category_label: 'Surface damage', other_category: null,
+      severity: 'critical', severity_label: 'Critical', affected_quantity: '4',
+      description: 'Four pieces show the same chipped edge.',
+      photos: [{ id: 'summary-photo', file_name: 'chipped-edge.jpg', mime_type: 'image/jpeg', file_size: 10, file_url: '/private/chipped-edge.jpg', created_by: null, created_at: null }],
+      created_at: null, updated_at: null,
+    },
   });
   defectEvidenceMocks.list.mockResolvedValue([{
     id: 'defect-1', category: 'surface_damage', category_label: 'Surface damage', severity: 'major',
@@ -528,14 +555,51 @@ it('shows defect severity and private image evidence on an incoming inspection',
 
   render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><MemoryRouter><InspectionDetailPage /></MemoryRouter></QueryClientProvider>);
 
-  expect(await screen.findByRole('heading', { name: 'Defect evidence' })).toBeVisible();
+  expect(await screen.findByRole('heading', { name: 'Historical defect evidence' })).toBeVisible();
+  expect(screen.getByText('Four pieces show the same chipped edge.')).toBeVisible();
+  expect(screen.getByRole('region', { name: 'Saved defect summary' })).toHaveTextContent('4');
+  expect(await screen.findByText('Cracked edges on the sampled pieces.')).toBeVisible();
+  expect(screen.getByRole('region', { name: 'Historical defect evidence' })).toHaveTextContent('2');
   expect(await screen.findByText('Major')).toBeVisible();
-  expect(screen.getByText('Cracked edges on the sampled pieces.')).toBeVisible();
-  expect(screen.getByRole('img', { name: 'Defect evidence photo: Surface damage' })).toHaveAttribute('src', '/api/v1/quality/defect-evidence/defect-1/photo');
+  expect(screen.getByRole('img', { name: 'Historical defect evidence photo: Surface damage' })).toHaveAttribute('src', '/api/v1/quality/defect-evidence/defect-1/photo');
   expect(screen.getByText('GRN item: RAW-01 — Resin')).toBeVisible();
+  expect(screen.queryByRole('button', { name: 'Add defect evidence' })).not.toBeInTheDocument();
 });
 
-it('uploads an incoming defect image with its severity and affected quantity', async () => {
+it.each(['incoming', 'outgoing'] as const)('shows the shared defect summary and all photos on a %s inspection', async stage => {
+  vi.mocked(inspectionsApi.show).mockResolvedValue({
+    ...inspection,
+    stage,
+    status: 'failed',
+    available_actions: [],
+    defect_summary: {
+      id: 'summary-1',
+      category: 'other',
+      category_label: 'Mixed appearance defects',
+      other_category: 'Mixed appearance defects',
+      severity: 'major',
+      severity_label: 'Major',
+      affected_quantity: '4',
+      description: 'Four pieces have chipped edges with matching surface marks.',
+      photos: [
+        { id: 'photo-1', file_name: 'chipped-edge.jpg', mime_type: 'image/jpeg', file_size: 10, file_url: '/private/chipped-edge.jpg', created_by: null, created_at: null },
+        { id: 'photo-2', file_name: 'surface-mark.jpg', mime_type: 'image/jpeg', file_size: 10, file_url: '/private/surface-mark.jpg', created_by: null, created_at: null },
+      ],
+      created_at: null,
+      updated_at: null,
+    },
+  } as Inspection);
+
+  render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><MemoryRouter><InspectionDetailPage /></MemoryRouter></QueryClientProvider>);
+
+  expect(await screen.findByRole('heading', { name: 'Defect summary' })).toBeVisible();
+  expect(screen.getByText('4')).toBeVisible();
+  expect(screen.getByText('Four pieces have chipped edges with matching surface marks.')).toBeVisible();
+  expect(screen.getByRole('img', { name: 'Defect summary photo: chipped-edge.jpg' })).toHaveAttribute('src', '/private/chipped-edge.jpg');
+  expect(screen.getByRole('img', { name: 'Defect summary photo: surface-mark.jpg' })).toHaveAttribute('src', '/private/surface-mark.jpg');
+});
+
+it('does not offer new per-record defect uploads on an incoming inspection', async () => {
   permissionState.can.mockReturnValue(true);
   vi.mocked(inspectionsApi.show).mockResolvedValue({
     ...inspection, stage: 'incoming', status: 'in_progress', can_manage: true,
@@ -544,24 +608,14 @@ it('uploads an incoming defect image with its severity and affected quantity', a
     incoming_acceptance: { grn_item_id: 'grn-line-1', grn_id: 'grn-1', grn_number: 'GRN-1', quantity_received: '10', quantity_accepted: '8', unit: 'pcs', status: 'pending', status_label: 'Pending' },
   });
   defectEvidenceMocks.list.mockResolvedValue([]);
-  defectEvidenceMocks.create.mockResolvedValue({ id: 'defect-new' });
 
   render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}><MemoryRouter><InspectionDetailPage /></MemoryRouter></QueryClientProvider>);
 
-  await screen.findByRole('heading', { name: 'Defect evidence' });
-  fireEvent.change(screen.getByLabelText('Defect category', { exact: false }), { target: { value: 'other' } });
-  fireEvent.change(screen.getByLabelText('Other defect category', { exact: false }), { target: { value: 'Unusual finish' } });
-  fireEvent.change(screen.getByLabelText('Severity', { exact: false }), { target: { value: 'critical' } });
-  fireEvent.change(screen.getByLabelText('Affected quantity', { exact: false }), { target: { value: '4' } });
-  const photo = new File(['image'], 'defect.png', { type: 'image/png' });
-  fireEvent.change(screen.getByLabelText('Defect photo', { exact: false }), { target: { files: [photo] } });
-  const addEvidenceButton = screen.getByRole('button', { name: 'Add defect evidence' });
-  expect(addEvidenceButton).toBeEnabled();
-  const evidenceForm = addEvidenceButton.closest('form');
-  expect(evidenceForm).not.toBeNull();
-  fireEvent.submit(evidenceForm!);
-
-  await waitFor(() => expect(defectEvidenceMocks.create).toHaveBeenCalledWith('insp-1', expect.objectContaining({
-    category: 'other', other_category: 'Unusual finish', severity: 'critical', affected_quantity: 4, photo,
-  })));
+  await screen.findByRole('heading', { name: 'Historical defect evidence' });
+  expect(screen.queryByLabelText('Defect category')).not.toBeInTheDocument();
+  expect(await screen.findByLabelText('Affected quantity')).toBeVisible();
+  expect(screen.queryByLabelText('Shared description')).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('Defect photos')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Add defect evidence' })).not.toBeInTheDocument();
+  expect(defectEvidenceMocks.create).not.toHaveBeenCalled();
 });

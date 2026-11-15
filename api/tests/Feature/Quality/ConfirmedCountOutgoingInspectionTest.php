@@ -15,7 +15,9 @@ use App\Modules\Quality\Models\InspectionSpecItem;
 use App\Modules\Quality\Services\WorkOrderFinalInspectionService;
 use Database\Seeders\RolePermissionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 class ConfirmedCountOutgoingInspectionTest extends TestCase
@@ -32,6 +34,7 @@ class ConfirmedCountOutgoingInspectionTest extends TestCase
     {
         parent::setUp();
         Queue::fake();
+        Storage::fake('local');
         $this->seed(RolePermissionSeeder::class);
         config(['inspection.finish_first_wo_enabled' => true, 'inspection.outgoing_confirmed_checks_enabled' => true]);
         $this->maker = User::factory()->withRole('qc_inspector')->create(['is_active' => true]);
@@ -85,6 +88,7 @@ class ConfirmedCountOutgoingInspectionTest extends TestCase
         $surface = collect($this->group['batches'][0]['measurements'])->firstWhere('parameter_name', 'Surface');
         $pieces = array_map(fn ($number) => ['piece_number' => $number, 'problem_description' => 'Scratch', 'requirement_id' => $surface['id']], range(1, 5));
         $this->save(5, $pieces)->assertSuccessful()->assertJsonPath('data.defect_page.pieces.0.requirement_id', $surface['id']);
+        $this->saveDefectSummary(5, 'Five pieces have the same surface scratch.');
         $this->group = $this->getJson($this->url)->json('data');
         $this->postJson($this->url.'/submit', ['manifest' => $this->group['manifest'], 'batches' => [$this->entry()]])
             ->assertSuccessful()->assertJsonPath('data.batches.0.proposed_result', 'failed');
@@ -108,6 +112,7 @@ class ConfirmedCountOutgoingInspectionTest extends TestCase
     public function test_unclassified_defects_require_conservative_critical_review(): void
     {
         $this->save(1, [['piece_number' => 1, 'problem_description' => 'Unknown defect', 'requirement_id' => null]])->assertSuccessful();
+        $this->saveDefectSummary(1, 'One piece has an unclassified defect.');
         $this->group = $this->getJson($this->url)->json('data');
         $this->postJson($this->url.'/submit', ['manifest' => $this->group['manifest'], 'batches' => [$this->entry()]])->assertSuccessful();
         $this->assertTrue(Inspection::firstOrFail()->critical_defect);
@@ -125,6 +130,7 @@ class ConfirmedCountOutgoingInspectionTest extends TestCase
     {
         $length = collect($this->group['batches'][0]['measurements'])->firstWhere('parameter_name', 'Length');
         $this->save(1, [['piece_number' => 1, 'problem_description' => 'Length outside tolerance', 'requirement_id' => $length['id']]])->assertSuccessful();
+        $this->saveDefectSummary(1, 'One piece is outside the length tolerance.');
         $this->group = $this->getJson($this->url)->json('data');
         $this->postJson($this->url.'/submit', ['manifest' => $this->group['manifest'], 'batches' => [$this->entry()]])->assertSuccessful();
         $this->assertTrue(Inspection::firstOrFail()->critical_defect);
@@ -162,11 +168,14 @@ class ConfirmedCountOutgoingInspectionTest extends TestCase
                 'problem_description' => 'Surface scratch', 'requirement_id' => $surface['id']], $numbers))->assertSuccessful();
             $this->group = $this->getJson($this->url)->json('data');
         }
+        $this->saveDefectSummary(500, 'All pieces have a surface scratch.');
+        $this->group = $this->getJson($this->url)->json('data');
         $this->postJson($this->url.'/submit', ['manifest' => $this->group['manifest'], 'batches' => [$this->entry()]])->assertSuccessful();
         $this->group = $this->getJson($this->url)->json('data');
         $this->actingAs($this->checker)->postJson($this->url.'/review', ['manifest' => $this->group['manifest'],
             'remarks' => 'All pieces damaged; keep the entire batch held.'])->assertSuccessful()->assertJsonPath('data.accepted_quantity', 0);
-        $this->assertSame(500, Inspection::firstOrFail()->defectivePieces()->count());
+        $this->assertSame(500, Inspection::firstOrFail()->sample_defect_count);
+        $this->assertSame('All pieces have a surface scratch.', Inspection::firstOrFail()->problem_description);
         $this->assertSame('failed', Inspection::firstOrFail()->status->value);
     }
 
@@ -204,5 +213,15 @@ class ConfirmedCountOutgoingInspectionTest extends TestCase
     private function save(int $count, array $pieces): \Illuminate\Testing\TestResponse
     {
         return $this->patchJson($this->url.'/evidence', $this->saveBody($count, $pieces));
+    }
+
+    private function saveDefectSummary(int $quantity, string $description): void
+    {
+        $inspection = Inspection::firstOrFail();
+        $this->actingAs($this->maker)->put('/api/v1/quality/inspections/'.$inspection->hash_id.'/defect-summary', [
+            'category' => 'surface_damage', 'severity' => 'major', 'affected_quantity' => $quantity,
+            'description' => $description,
+            'photos' => [UploadedFile::fake()->image('surface-damage.jpg')],
+        ])->assertSuccessful();
     }
 }

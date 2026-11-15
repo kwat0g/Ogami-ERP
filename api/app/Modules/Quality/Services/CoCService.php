@@ -283,6 +283,13 @@ class CoCService
      */
     private function assertEvidenceSupportsCertificate(Inspection $inspection): void
     {
+        if ($inspection->defectSummary()->exists()) {
+            throw new InspectionCertificateException(
+                'CoC requires an inspection with no reported defect summary.',
+                'COC_EVIDENCE_CONTRADICTS_VERDICT',
+            );
+        }
+
         if ($inspection->usesFullPieceCapture()) {
             try {
                 $evidence = app(InspectionService::class)->assertFullPieceEvidence($inspection);

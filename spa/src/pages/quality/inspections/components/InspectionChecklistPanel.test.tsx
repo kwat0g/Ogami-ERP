@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { inspectionsApi } from '@/api/quality/inspections';
+import { defectSummaryApi } from '@/api/quality/defectSummary';
 import type { Inspection } from '@/types/quality';
 import { InspectionChecklistPanel, LegacyInspectionPanel } from './InspectionChecklistPanel';
 
@@ -16,6 +17,7 @@ vi.mock('@/api/quality/inspections', () => ({
     recordMeasurements: apiMocks.recordMeasurements,
   },
 }));
+vi.mock('@/api/quality/defectSummary', () => ({ defectSummaryApi: { show: vi.fn(), save: vi.fn(), clear: vi.fn() } }));
 
 const inspection: Inspection = {
   id: 'inspection-1',
@@ -99,7 +101,15 @@ function mount(record: Inspection = inspection, legacy = true) {
 }
 
 describe('InspectionChecklistPanel', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(defectSummaryApi.show).mockResolvedValue(null);
+    vi.mocked(defectSummaryApi.save).mockImplementation(async (_id, data) => ({
+      id: 'summary', category: data.category, category_label: 'Surface damage', other_category: null,
+      severity: data.severity, severity_label: 'Major', affected_quantity: data.affected_quantity,
+      description: data.description, photos: [{ id: 'photo', file_name: 'proof.jpg', mime_type: 'image/jpeg', file_size: 1, file_url: '/proof.jpg', created_at: null }], created_at: null, updated_at: null,
+    }));
+  });
 
   it.each(['measurement', 'checklist'] as const)('blocks %s evidence until real startup pieces exist', (capture_method) => {
     mount({ ...inspection, capture_method, stage: 'in_process', startup_trial_required: true,
@@ -249,14 +259,14 @@ describe('InspectionChecklistPanel', () => {
     });
     vi.mocked(inspectionsApi.recordItemResults).mockResolvedValue({ ...lot, result_version: 2, status: 'in_progress' });
     vi.mocked(inspectionsApi.recordBatchResult).mockResolvedValue(submitted);
-    mount(lot);
+    mount(lot as unknown as Inspection);
 
     const submit = screen.getByRole('button', { name: 'Submit result' });
     expect(submit).toBeDisabled();
     fireEvent.change(screen.getByRole('spinbutton', { name: 'Inspected pieces' }), {
       target: { value: '20' },
     });
-    fireEvent.change(screen.getByRole('spinbutton', { name: 'Defective pieces found' }), {
+    fireEvent.change(screen.getByRole('spinbutton', { name: /Affected quantity/ }), {
       target: { value: '0' },
     });
     fireEvent.click(screen.getByRole('checkbox', { name: 'I confirm all required checks on the planned sample were completed' }));
@@ -305,6 +315,32 @@ describe('InspectionChecklistPanel', () => {
       vi.mocked(inspectionsApi.recordBatchResult).mock.invocationCallOrder[0],
     );
     expect(await screen.findByText('Awaiting checker review · proposed passed')).toBeInTheDocument();
+  });
+
+  it('requires one shared defect summary for a positive legacy checklist count', async () => {
+    const lot = {
+      ...inspection,
+      inspection_mode: 'lot_checklist' as const,
+      inspection_mode_version: 1,
+      source_uom_code: 'PCS',
+      measurements: [{
+        id: 'surface', checklist_key: 'surface', sample_index: 0, parameter_name: 'Surface finish',
+        parameter_type: 'visual' as const, evaluation_mode: 'manual' as const,
+        acceptance_criterion: 'No cracks', is_critical: false, is_pass: null,
+      }],
+    };
+    mount(lot as unknown as Inspection);
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Inspected pieces' }), { target: { value: '20' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: /Affected quantity/ }), { target: { value: '2' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'I confirm all required checks on the planned sample were completed' }));
+    fireEvent.click(screen.getByRole('button', { name: 'PASS Surface finish' }));
+    const submit = screen.getByRole('button', { name: 'Submit result' });
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(await screen.findByLabelText(/Shared description/), { target: { value: 'Two pieces have the same crack.' } });
+    fireEvent.change(screen.getByLabelText('Defect photos'), { target: { files: [new File(['proof'], 'proof.jpg', { type: 'image/jpeg' })] } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save defect summary' }));
+    await waitFor(() => expect(submit).toBeEnabled());
   });
 
   it('blocks PASS when an unsaved lot-checklist reading is outside tolerance', () => {

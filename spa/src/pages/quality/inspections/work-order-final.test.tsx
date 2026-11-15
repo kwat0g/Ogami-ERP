@@ -185,7 +185,7 @@ it('shows saved confirmed-check and defect evidence in read-only state', async (
   page();
   expect(await screen.findByText('Surface scratch')).toBeInTheDocument();
   expect(screen.getByText(/Confirmed all listed requirements/)).toBeInTheDocument();
-  expect(screen.getByText('Mina Inspector')).toBeInTheDocument();
+  expect(screen.getAllByText('Mina Inspector')).toHaveLength(2);
   expect(screen.queryByRole('textbox', { name: 'Problem for piece 2' })).not.toBeInTheDocument();
   expect(screen.queryByRole('textbox', { name: 'Length · piece 1' })).not.toBeInTheDocument();
 });

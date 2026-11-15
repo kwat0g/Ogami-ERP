@@ -7,8 +7,8 @@ import { inspectionQueryKeys } from '@/lib/queryKeys/inspections';
 import { invalidateRealtimeChange } from '@/lib/realtime/invalidationMap';
 import { Button } from '@/components/ui/Button';
 import { Checkbox } from '@/components/ui/Checkbox';
-import { Input } from '@/components/ui/Input';
-import { Textarea } from '@/components/ui/Textarea';
+import { InspectionDefectSummaryEditor } from '@/components/quality/InspectionDefectSummaryEditor';
+import { inspectionDefectSummaryMatches } from '@/lib/inspectionDefectSummary';
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
 import type { Inspection } from '@/types/quality';
 
@@ -17,7 +17,7 @@ export function FullCountDecisionPanel({ inspection, canManage }: { inspection: 
   const [saved, setSaved] = useState(inspection);
   const [counted, setCounted] = useState(false);
   const [defects, setDefects] = useState('');
-  const [reason, setReason] = useState('');
+  const [summary, setSummary] = useState<import('@/types/quality').InspectionDefectSummary | null>(null);
   const [segregated, setSegregated] = useState(false);
   const current = (inspection.result_version ?? 0) > (saved.result_version ?? 0) ? inspection : saved;
   const stale = current !== saved;
@@ -25,10 +25,10 @@ export function FullCountDecisionPanel({ inspection, canManage }: { inspection: 
   const count = /^\d+$/.test(defects) ? Number(defects) : NaN;
   const validCount = Number.isSafeInteger(count) && count >= 0 && count <= current.batch_quantity;
   const good = validCount ? current.batch_quantity - count : null;
-  const ready = editable && counted && validCount && (count === 0 || reason.trim().length > 0)
-    && reason.length <= 2000 && (count === 0 || segregated)
+  const ready = editable && counted && validCount
+    && (count === 0 || inspectionDefectSummaryMatches(summary, defects)) && (count === 0 || segregated)
     && current.measurements?.length === 1;
-  useUnsavedChangesGuard(editable && (counted || defects !== '' || reason !== '' || segregated), true);
+  useUnsavedChangesGuard(editable && (counted || defects !== '' || segregated), true);
 
   const submit = useMutation<Inspection, AxiosError<{ code?: string; message?: string }>>({
     mutationFn: () => inspectionsApi.recordBatchResult(current.id, {
@@ -37,7 +37,6 @@ export function FullCountDecisionPanel({ inspection, canManage }: { inspection: 
       inspected_quantity: current.batch_quantity,
       sample_defect_count: count,
       physical_defects_confirmed: count > 0,
-      ...(count > 0 ? { problem_description: reason.trim() } : {}),
       ...(count > 0 ? { defects_removed_confirmed: true } : {}),
       items: [{ id: current.measurements![0].id, result: 'passed' }],
     }),
@@ -45,7 +44,7 @@ export function FullCountDecisionPanel({ inspection, canManage }: { inspection: 
       setSaved(result);
       setCounted(false);
       setDefects('');
-      setReason('');
+      setSummary(null);
       setSegregated(false);
       queryClient.setQueryData(inspectionQueryKeys.detail(current.id), result);
       void invalidateRealtimeChange(
@@ -86,12 +85,16 @@ export function FullCountDecisionPanel({ inspection, canManage }: { inspection: 
         </div>
       </div>
       <Checkbox label={`I counted all ${current.batch_quantity.toLocaleString()} received pieces`} checked={counted} onChange={event => setCounted(event.target.checked)} />
-      <Input label="Defective pieces" type="number" min={0} max={current.batch_quantity} step={1} required value={defects}
-        onChange={event => { setDefects(event.target.value); setSegregated(false); }}
-        error={defects !== '' && !validCount ? `Enter a whole number from 0 to ${current.batch_quantity.toLocaleString()}.` : undefined}
-        helper="Enter 0 if none. Count each defective piece once." containerClassName="max-w-sm" />
+      <InspectionDefectSummaryEditor
+        inspectionId={current.id}
+        sourceQuantity={String(current.batch_quantity)}
+        unit={current.source_uom_code || 'PCS'}
+        quantity={defects}
+        onQuantityChange={value => { setDefects(value); setSegregated(false); }}
+        canManage={editable && !submit.isPending}
+        onSaved={setSummary}
+      />
       {validCount && count > 0 && <>
-        <Textarea label="Defect reason" required maxLength={2000} rows={3} value={reason} onChange={event => setReason(event.target.value)} />
         <Checkbox label="I segregated the defective pieces" checked={segregated} onChange={event => setSegregated(event.target.checked)} />
         {good === 0 && <p role="status" className="text-sm text-warning-fg">All pieces defective. Entire receipt goes to NCR review.</p>}
       </>}

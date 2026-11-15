@@ -36,6 +36,7 @@ use App\Modules\Quality\Exceptions\InspectionStateConflictException;
 use App\Modules\Quality\Models\CalibrationRecord;
 use App\Modules\Quality\Models\Inspection;
 use App\Modules\Quality\Models\InspectionDefectivePiece;
+use App\Modules\Quality\Models\InspectionDefectSummary;
 use App\Modules\Quality\Models\InspectionMeasurement;
 use App\Modules\Quality\Models\InspectionPieceReading;
 use App\Modules\Quality\Models\InspectionSpec;
@@ -91,6 +92,7 @@ class InspectionService
                 'workOrderOutput.workOrder:id,wo_number,product_id',
                 'trialOutput',
                 'ncr',
+                'defectSummary.photos.uploader',
             ]);
 
         if (! empty($filters['stage'])) {
@@ -244,6 +246,7 @@ class InspectionService
             'workOrderOutput.workOrder:id,wo_number,product_id',
             'trialOutput',
             'ncr',
+            'defectSummary.photos.uploader',
             'calibrationRecord:id,equipment_code,name,status',
             'measurements' => fn ($q) => $q->orderBy('sample_index')->orderBy('id'),
         ]);
@@ -1566,6 +1569,14 @@ class InspectionService
                 || $inspection->sample_defect_count !== $defects || $inspection->inspected_quantity !== $checked) {
                 throw new BusinessRuleException('Quantity inspection evidence is incomplete or changed.');
             }
+            if ($this->usesGroupedDefectSummary($inspection) && bccomp($result['defective_quantity'], '0', 3) > 0) {
+                $legacyAwaitingReview = $inspection->status === InspectionStatus::AwaitingReview
+                    && ! $inspection->defectSummary()->exists()
+                    && count($result['descriptions']) > 0;
+                if (! $legacyAwaitingReview) {
+                    $this->requireDefectSummary($inspection, $result['defective_quantity']);
+                }
+            }
 
             return;
         }
@@ -1675,11 +1686,21 @@ class InspectionService
 
         $defects = InspectionDefectivePiece::query()->where('inspection_id', $inspection->id)
             ->with('requirement')->orderBy('piece_number')->get();
+        $summary = $inspection->defectSummary()->with('photos')->first();
+        $legacySubmittedEvidence = ! $summary
+            && in_array($inspection->status, [InspectionStatus::AwaitingReview, InspectionStatus::Passed, InspectionStatus::Failed], true);
+        if ((int) $inspection->sample_defect_count > 0) {
+            if ($summary) {
+                $summary = $this->requireDefectSummary($inspection, (string) $inspection->sample_defect_count);
+            } elseif (! $legacySubmittedEvidence) {
+                $this->requireDefectSummary($inspection, (string) $inspection->sample_defect_count);
+            }
+        }
         if ($inspection->usesConfirmedChecks() && $defects->contains(fn ($piece) => $piece->requirement_id !== null
             && (! $piece->requirement || (int) $piece->requirement->inspection_id !== (int) $inspection->id))) {
             throw new BusinessRuleException('A defective piece references a check from another inspection.');
         }
-        if ($defects->count() !== (int) $inspection->sample_defect_count
+        if ((! $summary && $defects->count() !== (int) $inspection->sample_defect_count)
             || $defects->contains(fn (InspectionDefectivePiece $piece): bool => $piece->piece_number < 1
                 || $piece->piece_number > $required || trim($piece->problem_description) === ''
                 || mb_strlen(trim($piece->problem_description)) > 500)) {
@@ -1687,17 +1708,19 @@ class InspectionService
         }
         if ($inspection->quantity_result) {
             $this->assertCountedEvidence($inspection);
-            if ($readings->isNotEmpty() || $defects->pluck('problem_description')->all() !== $inspection->quantity_result['descriptions']) {
+            if ($readings->isNotEmpty() || (! $summary && $defects->pluck('problem_description')->all() !== $inspection->quantity_result['descriptions'])) {
                 throw new BusinessRuleException('Saved defect explanations do not match the quantity inspection result.');
             }
         }
         $defectNumbers = $defects->pluck('piece_number')->map(static fn ($number): int => (int) $number)->all();
-        if (array_diff(array_keys($failedPieceNumbers), $defectNumbers) !== []) {
+        if (($summary && count($failedPieceNumbers) > (int) $inspection->sample_defect_count)
+            || (! $summary && array_diff(array_keys($failedPieceNumbers), $defectNumbers) !== [])) {
             throw new BusinessRuleException('Describe every piece with an out-of-tolerance size reading.');
         }
 
         return ['defects' => $defects, 'failed_piece_numbers' => array_keys($failedPieceNumbers),
-            'critical_defect' => $inspection->usesConfirmedChecks() && $defects->contains(fn ($piece) => $piece->requirement_id === null || (bool) $piece->requirement?->is_critical)];
+            'critical_defect' => $inspection->usesConfirmedChecks() && $defects->contains(fn ($piece) => $piece->requirement_id === null || (bool) $piece->requirement?->is_critical),
+            'summary' => $summary];
     }
 
     /** Called by the atomic work-order group submit after it confirms full coverage. */
@@ -1720,7 +1743,12 @@ class InspectionService
             $defects = (int) $locked->sample_defect_count;
             $target = $defects > 0 || $badRequirements->isNotEmpty()
                 ? InspectionStatus::Failed : InspectionStatus::Passed;
-            $problem = $evidence['defects']->map(static fn (InspectionDefectivePiece $piece): string => '#'.$piece->piece_number.': '.trim($piece->problem_description))->implode("\n");
+            $summary = $evidence['summary'] ?? null;
+            if ($defects === 0) {
+                $this->requireDefectSummary($locked, '0');
+            }
+            $problem = $summary?->description
+                ?: $evidence['defects']->map(static fn (InspectionDefectivePiece $piece): string => '#'.$piece->piece_number.': '.trim($piece->problem_description))->implode("\n");
             $locked->forceFill([
                 'recorded_result' => $target->value,
                 'problem_description' => $target === InspectionStatus::Failed ? $problem : null,
@@ -1748,8 +1776,15 @@ class InspectionService
         }
         $failed = bccomp($quantity, '0', 3) > 0;
         $requiredDescriptions = $failed ? ($piece ? (int) $quantity : 1) : 0;
-        if (count($descriptions) !== $requiredDescriptions || count($descriptions) > 10000) {
-            throw new BusinessRuleException('Describe each defective piece, or provide one explanation for the defective material quantity.');
+        $summaryStage = $this->usesGroupedDefectSummary($inspection);
+        $submittedLegacy = in_array($inspection->status, [InspectionStatus::AwaitingReview, InspectionStatus::Passed, InspectionStatus::Failed], true);
+        if (($summaryStage && ! $submittedLegacy && $descriptions !== [])
+            || ($summaryStage && $submittedLegacy && ! in_array(count($descriptions), [0, $requiredDescriptions], true))
+            || (! $summaryStage && count($descriptions) !== $requiredDescriptions)
+            || count($descriptions) > 10000) {
+            throw new BusinessRuleException($summaryStage
+                ? 'Use one saved defect summary with a shared description instead of per-piece descriptions.'
+                : 'Describe each defective piece, or provide one explanation for the defective material quantity.');
         }
         foreach ($descriptions as $description) {
             if (! is_string($description) || trim($description) === '' || mb_strlen($description) > 500) {
@@ -1759,6 +1794,41 @@ class InspectionService
 
         return ['defective_quantity' => bcadd($quantity, '0', 3), 'source_quantity' => bcadd($source, '0', 3),
             'unit' => $inspection->source_uom_code ?: 'PCS', 'descriptions' => array_values(array_map('trim', $descriptions))];
+    }
+
+    private function usesGroupedDefectSummary(Inspection $inspection): bool
+    {
+        return in_array($inspection->stage, [InspectionStage::Incoming, InspectionStage::Outgoing], true);
+    }
+
+    private function requireDefectSummary(Inspection $inspection, string $quantity): ?InspectionDefectSummary
+    {
+        if (! $this->usesGroupedDefectSummary($inspection)) {
+            return null;
+        }
+
+        if (bccomp($quantity, '0', 3) <= 0) {
+            if ($inspection->defectSummary()->exists()) {
+                app(InspectionDefectSummaryService::class)->clearDraft($inspection);
+            }
+
+            return null;
+        }
+
+        return app(InspectionDefectSummaryService::class)->assertMatches($inspection, $quantity);
+    }
+
+    private function requireLotDefectSummary(Inspection $inspection): ?InspectionDefectSummary
+    {
+        if (! $this->usesGroupedDefectSummary($inspection)) {
+            return null;
+        }
+        $summary = $inspection->defectSummary()->first();
+        if (! $summary) {
+            return app(InspectionDefectSummaryService::class)->assertMatches($inspection, '1');
+        }
+
+        return app(InspectionDefectSummaryService::class)->assertMatches($inspection, (string) $summary->affected_quantity);
     }
 
     private function recordQuantityResult(Inspection $inspection, array $data, User $by): Inspection
@@ -1784,11 +1854,13 @@ class InspectionService
             $result = $this->normalizeQuantityResult($locked, $data['quantity_result']);
             $piece = $locked->sampling_basis !== 'lot';
             $defects = $piece ? (int) $result['defective_quantity'] : (bccomp($result['defective_quantity'], '0', 3) > 0 ? 1 : 0);
+            $summary = $this->requireDefectSummary($locked, $result['defective_quantity']);
             $checked = $piece ? (int) $result['source_quantity'] : 1;
             app(WorkOrderOutputService::class)->assertTrialEvidence($locked, $checked, true);
             $historicalHold = $locked->work_order_output_id && (int) $locked->workOrderOutput?->held_quantity > 0;
             $target = $defects > 0 || $historicalHold ? InspectionStatus::Failed : InspectionStatus::Passed;
-            $problem = collect($result['descriptions'])->map(fn ($description, $index) => $piece ? 'Defective piece '.($index + 1).': '.$description : $result['defective_quantity'].' '.$result['unit'].': '.$description)->implode("\n");
+            $problem = $summary?->description
+                ?: collect($result['descriptions'])->map(fn ($description, $index) => $piece ? 'Defective piece '.($index + 1).': '.$description : $result['defective_quantity'].' '.$result['unit'].': '.$description)->implode("\n");
             if ($historicalHold && $problem === '') {
                 $problem = 'Production occurred before required QC release; independent process recovery is required.';
             }
@@ -1800,9 +1872,11 @@ class InspectionService
                 'started_at' => $locked->started_at ?? now()]);
 
             if ($locked->usesFullPieceCapture()) {
-                foreach ($result['descriptions'] as $index => $description) {
-                    InspectionDefectivePiece::create(['inspection_id' => $locked->id, 'piece_number' => $index + 1,
-                        'problem_description' => $description, 'recorded_by' => $by->id]);
+                if (! $summary) {
+                    foreach ($result['descriptions'] as $index => $description) {
+                        InspectionDefectivePiece::create(['inspection_id' => $locked->id, 'piece_number' => $index + 1,
+                            'problem_description' => $description, 'recorded_by' => $by->id]);
+                    }
                 }
                 $locked->save();
 
@@ -1855,13 +1929,17 @@ class InspectionService
                 || ! is_int($defects) || $defects < 0 || $defects > $quantity || ! is_bool($otherProblem)) {
                 throw new BusinessRuleException('Confirm the prescribed checked quantity and count each defective piece once.');
             }
-            if (($defects > 0 || $otherProblem) && ($problem === '' || mb_strlen($problem) > 2000)) {
+            if (($otherProblem || ($defects > 0 && ! $this->usesGroupedDefectSummary($locked)))
+                && ($problem === '' || mb_strlen($problem) > 2000)) {
                 throw new BusinessRuleException('Describe what is wrong before submitting a failed inspection.');
             }
             if ($locked->isCountOnlyIncoming() && $defects > 0
                 && (! ($data['defects_removed_confirmed'] ?? false) || $otherProblem)) {
                 throw new BusinessRuleException('Segregate defective pieces before submitting; report other requirement failures separately.');
             }
+            $summary = $lot
+                ? ($defects > 0 ? $this->requireLotDefectSummary($locked) : $this->requireDefectSummary($locked, '0'))
+                : $this->requireDefectSummary($locked, (string) $defects);
             app(WorkOrderOutputService::class)->assertTrialEvidence($locked, $quantity, true);
             $this->assertChecklistSourceUnchanged($locked);
             $rows = $locked->measurements()->lockForUpdate()->get();
@@ -1887,7 +1965,8 @@ class InspectionService
                 throw new BusinessRuleException('Enter all required size readings.');
             }
             $badSizes = $rows->filter(fn ($row) => $row->requiresSizeReading() && $row->evaluate() === false);
-            if ($badSizes->isNotEmpty() && ($defects < ($lot ? 1 : $badSizes->pluck('sample_index')->unique()->count()) || $problem === '')) {
+            if ($badSizes->isNotEmpty() && ($defects < ($lot ? 1 : $badSizes->pluck('sample_index')->unique()->count())
+                || ($summary?->description ?: $problem) === '')) {
                 throw new BusinessRuleException('Out-of-limit sizes require a defective quantity and problem description.');
             }
             if ($locked->calibration_record_id) {
@@ -1895,6 +1974,11 @@ class InspectionService
                 if (in_array($calibration->status, [CalibrationStatus::Overdue, CalibrationStatus::Retired], true)) {
                     throw new BusinessRuleException('Referenced inspection equipment is overdue or retired.');
                 }
+            }
+            if ($summary) {
+                $problem = $otherProblem && $problem !== ''
+                    ? $summary->description."\n".$problem
+                    : $summary->description;
             }
             if ($historicalHold && $problem === '') {
                 $problem = 'Production occurred before required QC release; independent process recovery is required.';
@@ -2015,12 +2099,15 @@ class InspectionService
                 || ($reportedPhysical === true && $defects < 1) || ($reportedPhysical !== true && $defects !== 0)) {
                 throw new BusinessRuleException('Enter a valid unique defective-piece count; count each piece once.');
             }
+            $summary = $locked->sampling_basis === 'lot'
+                ? ($defects > 0 ? $this->requireLotDefectSummary($locked) : $this->requireDefectSummary($locked, '0'))
+                : $this->requireDefectSummary($locked, (string) $defects);
             if ($locked->isCountOnlyIncoming() && (! array_key_exists('sample_defect_count', $data)
                 || $rows->count() !== 1 || $rows->first()->parameter_name !== 'Full piece count'
                 || $failedChecks->isNotEmpty())) {
                 throw new BusinessRuleException('Confirm the full piece count and enter the defective-piece quantity.');
             }
-            if ($failedChecks->isEmpty() && $defects > 0 && ($batchProblem === '' || mb_strlen($batchProblem) > 2000)) {
+            if ($failedChecks->isEmpty() && $defects > 0 && ! $summary && ($batchProblem === '' || mb_strlen($batchProblem) > 2000)) {
                 throw new BusinessRuleException('Describe the physical problem found outside the named checks.');
             }
             if ($locked->calibration_record_id) {
@@ -2037,7 +2124,7 @@ class InspectionService
             }
             $target = $passed ? InspectionStatus::Passed : InspectionStatus::Failed;
             $problem = $failedChecks->map(fn ($row) => $row->parameter_name.': '.$row->item_problem_description)
-                ->prepend($batchProblem)->filter()->implode("\n");
+                ->prepend($summary?->description ?: $batchProblem)->filter()->implode("\n");
             $locked->forceFill(['inspected_quantity' => $quantity, 'sample_defect_count' => $defects,
                 'critical_defect' => $critical, 'recorded_result' => $target->value,
                 'problem_description' => $target === InspectionStatus::Passed
@@ -2087,9 +2174,8 @@ class InspectionService
                 || ! is_bool($critical) || ! in_array($result, ['passed', 'failed'], true)) {
                 throw new BusinessRuleException('Confirm all required checks on the planned sample and enter a valid unique defective-piece count.');
             }
-            if (($result === 'passed' && ($defects !== 0 || $critical))
-                || ($result === 'failed' && ($problem === '' || mb_strlen($problem) > 2000))) {
-                throw new BusinessRuleException('PASS requires zero observed defects. FAIL requires a problem description.');
+            if ($result === 'passed' && ($defects !== 0 || $critical)) {
+                throw new BusinessRuleException('PASS requires zero observed defects.');
             }
             $rows = $locked->measurements()->lockForUpdate()->get();
             if ($rows->isEmpty()) {
@@ -2112,6 +2198,7 @@ class InspectionService
             if ($defects < $evidence['defects']) {
                 throw new BusinessRuleException('The reported count and critical severity must include saved inspection failures.');
             }
+            $summary = $this->requireDefectSummary($locked, (string) $defects);
             $passed = $failedChecklist->isEmpty() && ! $critical && $defects <= (int) $locked->accept_count;
             if ($passed && $defects > 0 && ! ($data['defects_removed_confirmed'] ?? false)) {
                 throw new BusinessRuleException('Remove and segregate the defective pieces before accepting the remaining batch.');
@@ -2126,9 +2213,13 @@ class InspectionService
             $checkProblems = $failedChecklist
                 ->map(static fn ($group): string => $group->first()->parameter_name.': '.$group->first()->item_problem_description)
                 ->implode("\n");
+            $physicalProblem = $summary?->description ?: $problem;
+            if ($result === 'failed' && trim($physicalProblem) === '' && $checkProblems === '') {
+                throw new BusinessRuleException('A failed batch needs a defect summary or a failed requirement description.');
+            }
             $failureDescription = $defects > 0 && $checkProblems !== ''
-                ? trim($problem."\n".$checkProblems)
-                : ($checkProblems !== '' ? $checkProblems : $problem);
+                ? trim($physicalProblem."\n".$checkProblems)
+                : ($checkProblems !== '' ? $checkProblems : $physicalProblem);
             $locked->forceFill([
                 'inspected_quantity' => $quantity,
                 'sample_defect_count' => $defects,
@@ -2136,7 +2227,7 @@ class InspectionService
                 'defects_removed_confirmed' => (bool) ($data['defects_removed_confirmed'] ?? false),
                 'recorded_result' => $target->value,
                 'problem_description' => $passed
-                    ? ($defects > 0 ? $problem : null)
+                    ? ($defects > 0 ? $physicalProblem : null)
                     : $failureDescription,
                 'affected_quantity' => $passed ? null : $locked->batch_quantity,
                 'started_at' => $locked->started_at ?? now(),
@@ -2243,6 +2334,7 @@ class InspectionService
             }
 
             $evidence = LotDefectCounter::for($locked, $rows);
+            $summary = $this->requireDefectSummary($locked, (string) $evidence['defects']);
             $failed = $groups->filter(static fn ($group): bool => $group->first()->item_result === 'failed');
             $target = $failed->isNotEmpty() || $evidence['criticalFail'] || $evidence['defects'] > (int) $locked->accept_count
                 ? InspectionStatus::Failed
@@ -2250,6 +2342,7 @@ class InspectionService
             $problem = $failed->map(static fn ($group): string => $group->first()->parameter_name.': '.$group->first()->item_problem_description)
                 ->merge($rows->filter(static fn (InspectionMeasurement $row): bool => $row->is_pass === false || $row->evaluate() === false)
                     ->map(static fn (InspectionMeasurement $row): string => $row->parameter_name.' failed'.($row->measured_value !== null ? ' at '.$row->measured_value.' '.$row->unit_of_measure : '')))
+                ->prepend($summary?->description)
                 ->filter()
                 ->implode("\n");
             if ($target === InspectionStatus::Failed && trim($problem) === '') {
@@ -2345,8 +2438,10 @@ class InspectionService
             }
 
             ['defects' => $defects, 'criticalFail' => $criticalFail] = LotDefectCounter::for($lockedInspection, $rows);
+            $summary = $this->requireDefectSummary($lockedInspection, (string) $defects);
             $lockedInspection->forceFill(['inspected_quantity' => $lockedInspection->inspected_quantity ?? $lockedInspection->sample_size,
-                'sample_defect_count' => $defects]);
+                'sample_defect_count' => $defects,
+                'problem_description' => $summary?->description ?? $lockedInspection->problem_description]);
 
             if ($lockedInspection->calibration_record_id) {
                 $record = CalibrationRecord::query()->find((int) $lockedInspection->calibration_record_id);
@@ -2435,7 +2530,8 @@ class InspectionService
                 }
                 $this->assertResultVersion($lockedInspection, $expectedVersion);
                 $evidence = $this->assertFullPieceEvidence($lockedInspection);
-                $failed = $evidence['defects']->isNotEmpty() || $evidence['failed_piece_numbers'] !== [];
+                $failed = (int) $lockedInspection->sample_defect_count > 0
+                    || $evidence['defects']->isNotEmpty() || $evidence['failed_piece_numbers'] !== [];
                 if ($lockedInspection->usesConfirmedChecks() && (bool) $lockedInspection->critical_defect !== $evidence['critical_defect']) {
                     throw new BusinessRuleException('Critical defect evidence changed. Reload the inspection.');
                 }

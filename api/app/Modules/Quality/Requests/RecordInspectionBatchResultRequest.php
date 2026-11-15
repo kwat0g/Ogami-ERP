@@ -57,7 +57,7 @@ class RecordInspectionBatchResultRequest extends FormRequest
                 'expected_result_version' => ['required', 'integer', 'min:0'],
                 'quantity_result' => ['required', 'array:defective_quantity,descriptions'],
                 'quantity_result.defective_quantity' => ['required', 'regex:/^\d{1,12}(?:\.\d{1,3})?$/'],
-                'quantity_result.descriptions' => ['present', 'array', 'max:10000'],
+                'quantity_result.descriptions' => ['sometimes', 'array', 'max:10000'],
                 'quantity_result.descriptions.*' => ['required', 'string', 'max:500'],
                 'result' => ['prohibited'], 'measurements' => ['prohibited'], 'items' => ['prohibited'],
                 'sample_defect_count' => ['prohibited'], 'physical_defects_confirmed' => ['prohibited'],
@@ -112,7 +112,7 @@ class RecordInspectionBatchResultRequest extends FormRequest
             'coverage_confirmed' => ['required', 'accepted'],
             'inspected_quantity' => ['required', 'integer', 'min:1'],
             'sample_defect_count' => ['required', 'integer', 'min:0'],
-            'problem_description' => ['nullable', 'string', 'max:2000', 'required_if:result,failed'],
+            'problem_description' => ['nullable', 'string', 'max:2000'],
             'critical_defect' => ['required', 'boolean'],
             'defects_removed_confirmed' => ['required', 'boolean'],
         ];

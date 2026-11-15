@@ -17,6 +17,8 @@ import { DraftRestoreBanner } from '@/components/ui/DraftRestoreBanner';
 import { Textarea } from '@/components/ui/Textarea';
 import type { ChecklistSubmission, Inspection, InspectionMeasurement } from '@/types/quality';
 import { inspectionMethods } from '@/lib/inspectionMethods';
+import { InspectionDefectSummaryEditor } from '@/components/quality/InspectionDefectSummaryEditor';
+import { inspectionDefectQuantityIsValid, inspectionDefectSummaryMatches } from '@/lib/inspectionDefectSummary';
 
 type Decision = { result: 'passed' | 'failed'; problem: string };
 const sizePattern = /^-?\d{1,8}(?:\.\d{1,4})?$/;
@@ -42,7 +44,8 @@ export function ChecklistDecisionPanel({
   const [defects, setDefects] = useState('');
   const [defectsRemovedConfirmed, setDefectsRemovedConfirmed] = useState(false);
   const [batchDefect, setBatchDefect] = useState(false);
-  const [batchProblem, setBatchProblem] = useState('');
+  const [lotDefectQuantity, setLotDefectQuantity] = useState('');
+  const [summary, setSummary] = useState<import('@/types/quality').InspectionDefectSummary | null>(null);
   const [search, setSearch] = useState('');
   const [attention, setAttention] = useState(false);
   const [lastSaved, setLastSaved] = useState(false);
@@ -58,7 +61,7 @@ export function ChecklistDecisionPanel({
     physical,
     defects,
     batchDefect,
-    batchProblem,
+    lotDefectQuantity,
   };
   const localRef = useRef(localValues);
   localRef.current = localValues;
@@ -71,7 +74,7 @@ export function ChecklistDecisionPanel({
     defects !== '' ||
     defectsRemovedConfirmed ||
     batchDefect ||
-    batchProblem !== '';
+    lotDefectQuantity !== '';
   useUnsavedChangesGuard(dirty && ['draft', 'in_progress'].includes(base.status), true);
   const restoreLocal = useCallback((values: Record<string, unknown>) => {
     // Drafts originate on this page, but storage remains an untrusted boundary.
@@ -100,7 +103,7 @@ export function ChecklistDecisionPanel({
     if (typeof values.defects === 'string') setDefects(values.defects);
     setDefectsRemovedConfirmed(false);
     setBatchDefect(values.batchDefect === true);
-    if (typeof values.batchProblem === 'string') setBatchProblem(values.batchProblem);
+    if (typeof values.lotDefectQuantity === 'string') setLotDefectQuantity(values.lotDefectQuantity);
     setCoverage(false);
   }, []);
   const readLocal = useCallback(() => localRef.current, []);
@@ -124,7 +127,7 @@ export function ChecklistDecisionPanel({
     defects,
     defectsRemovedConfirmed,
     batchDefect,
-    batchProblem,
+    lotDefectQuantity,
     dirty,
     userId,
     recovery.saveNow,
@@ -164,8 +167,14 @@ export function ChecklistDecisionPanel({
   );
   const needsPhysical = failed.length > 0 || batchDefect;
   const actualQuantity = current.startup_trial_required ? current.startup_trial!.recorded_quantity : moreCoverage ? Number(quantity) : current.sample_size;
-  const physicalConfirmed = outOfLimit || physical;
+  const lotSourceQuantity = String(current.source_quantity ?? actualQuantity);
+  const lotSourceUnit = current.source_uom_code || 'PCS';
+  const lotQuantityValid = !lot || inspectionDefectQuantityIsValid(lotDefectQuantity, lotSourceQuantity, lotSourceUnit, true);
+  const physicalConfirmed = lot
+    ? lotDefectQuantity !== '' && lotQuantityValid ? Number(lotDefectQuantity) > 0 : null
+    : outOfLimit || physical;
   const count = lot ? (physicalConfirmed ? 1 : 0) : physicalConfirmed ? Number(defects) : 0;
+  const summaryQuantity = lot ? lotDefectQuantity : String(defects);
   const removalRequired = !lot && physicalConfirmed === true && count > 0
     && count <= current.accept_count && failed.length === 0;
   const blockers = [
@@ -184,7 +193,10 @@ export function ChecklistDecisionPanel({
             : 'Confirm the planned sample was inspected.',
         ]
       : []),
-    ...(needsPhysical && physicalConfirmed === null
+    ...(needsPhysical && lot && !lotQuantityValid
+      ? ['Enter a valid affected quantity in source units (0 if none).']
+      : []),
+    ...(!lot && needsPhysical && physicalConfirmed === null
       ? ['Confirm whether physical defects were found.']
       : []),
     ...(outOfLimit && physicalConfirmed !== true
@@ -195,8 +207,8 @@ export function ChecklistDecisionPanel({
     (!Number.isInteger(count) || count < 1 || count > actualQuantity)
       ? ['Enter a valid unique defective-piece count.']
       : []),
-    ...(batchDefect && (!batchProblem.trim() || physicalConfirmed !== true)
-      ? ['Describe and confirm the physical batch defect.']
+    ...(physicalConfirmed === true && count > 0 && !inspectionDefectSummaryMatches(summary, summaryQuantity)
+      ? ['Save a matching defect summary with a description and photo.']
       : []),
     ...(removalRequired && !defectsRemovedConfirmed
       ? ['Segregate known defective pieces before accepting the batch.']
@@ -239,7 +251,8 @@ export function ChecklistDecisionPanel({
         setDefects('');
         setDefectsRemovedConfirmed(false);
         setBatchDefect(false);
-        setBatchProblem('');
+        setLotDefectQuantity('');
+        setSummary(null);
         setMoreCoverage(false);
       }
       queryClient.setQueryData(inspectionQueryKeys.detail(current.id), saved);
@@ -289,7 +302,6 @@ export function ChecklistDecisionPanel({
           }
         : {}),
       ...(removalRequired ? { defects_removed_confirmed: defectsRemovedConfirmed } : {}),
-      ...(batchDefect ? { problem_description: batchProblem.trim() } : {}),
     };
   }
   function submit(event: FormEvent) {
@@ -392,7 +404,8 @@ export function ChecklistDecisionPanel({
                 setDefects('');
                 setDefectsRemovedConfirmed(false);
                 setBatchDefect(false);
-                setBatchProblem('');
+                setLotDefectQuantity('');
+                setSummary(null);
                 save.reset();
               }}
             >
@@ -646,14 +659,14 @@ export function ChecklistDecisionPanel({
             {needsPhysical && (
               <div className="space-y-3 border-t border-default pt-4">
                 <p className="text-sm font-medium">
-                  {lot ? 'Any physically defective material in this lot?' : 'Any defective pieces?'}
+                  {lot ? 'Enter the affected quantity in source units (0 if no physical defects).' : 'Any defective pieces?'}
                 </p>
                 {outOfLimit ? (
                   <p className="text-sm text-danger-fg">
                     Actual size is out of limit. Confirm the affected {lot ? 'lot' : 'pieces'}{' '}
                     below.
                   </p>
-                ) : (
+                ) : !lot ? (
                   <div className="flex gap-2">
                     {[true, false].map((value) => (
                       <Button
@@ -672,35 +685,19 @@ export function ChecklistDecisionPanel({
                       </Button>
                     ))}
                   </div>
-                )}
-                {physicalConfirmed && !lot && (
-                  <Input
-                    label="Unique defective pieces"
-                    type="number"
-                    min={1}
-                    max={actualQuantity}
-                    step={1}
-                    value={defects}
-                    required
-                    disabled={save.isPending}
-                    onChange={(event) => {
-                      setDefects(event.target.value);
-                      setDefectsRemovedConfirmed(false);
-                    }}
-                    helper="Count each piece once, even when several checks fail."
-                  />
-                )}
-                {batchDefect && (
-                  <Textarea
-                    label="Batch problem description"
-                    maxLength={2000}
-                    rows={2}
-                    required
-                    disabled={save.isPending}
-                    value={batchProblem}
-                    onChange={(event) => setBatchProblem(event.target.value)}
-                  />
-                )}
+                ) : null}
+                {(lot || physicalConfirmed) && <InspectionDefectSummaryEditor
+                  inspectionId={current.id}
+                  sourceQuantity={lot ? lotSourceQuantity : String(actualQuantity)}
+                  unit={lotSourceUnit}
+                  quantity={lot ? lotDefectQuantity : defects}
+                  onQuantityChange={lot ? setLotDefectQuantity : (value) => {
+                    setDefects(value);
+                    setDefectsRemovedConfirmed(false);
+                  }}
+                  canManage={editable && !save.isPending}
+                  onSaved={setSummary}
+                />}
                 {removalRequired && (
                   <Checkbox
                     label="I confirm the defective pieces were segregated before accepting this batch"

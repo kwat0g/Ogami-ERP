@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { inspectionsApi } from '@/api/quality/inspections';
+import { defectSummaryApi } from '@/api/quality/defectSummary';
 import { WorkOrderFinalInspectionPanel } from './WorkOrderFinalInspectionPanel';
 import type { WorkOrderFinalInspection } from '@/types/quality';
 
@@ -14,6 +15,7 @@ vi.mock('@/api/quality/inspections', () => ({
     reviewWorkOrderFinalInspection: vi.fn(),
   },
 }));
+vi.mock('@/api/quality/defectSummary', () => ({ defectSummaryApi: { show: vi.fn(), save: vi.fn(), clear: vi.fn() } }));
 const group = {
   work_order_id: 'wo',
   wo_number: 'WO-200',
@@ -55,6 +57,12 @@ beforeEach(() => {
     ...group,
     state: 'awaiting_review',
   });
+  vi.mocked(defectSummaryApi.show).mockResolvedValue(null);
+  vi.mocked(defectSummaryApi.save).mockImplementation(async (_id, data) => ({
+    id: 'summary', category: data.category, category_label: 'Surface damage', other_category: null,
+    severity: data.severity, severity_label: 'Major', affected_quantity: data.affected_quantity,
+    description: data.description, photos: [{ id: 'photo', file_name: 'proof.jpg', mime_type: 'image/jpeg', file_size: 5, file_url: '/proof.jpg', created_at: null }], created_at: null, updated_at: null,
+  }));
 });
 function panel(data = group) {
   return render(
@@ -70,6 +78,18 @@ function panel(data = group) {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+}
+async function saveSummary(description: string) {
+  const descriptionInput = await screen.findByLabelText(/Shared description/);
+  await waitFor(() => expect(descriptionInput).toBeEnabled());
+  fireEvent.change(descriptionInput, { target: { value: description } });
+  const photos = screen.getByLabelText('Defect photos');
+  await waitFor(() => expect(photos).toBeEnabled());
+  fireEvent.change(photos, { target: { files: [new File(['proof'], 'proof.jpg', { type: 'image/jpeg' })] } });
+  const save = screen.getByRole('button', { name: 'Save defect summary' });
+  await waitFor(() => expect(save).toBeEnabled());
+  fireEvent.click(save);
+  await waitFor(() => expect(defectSummaryApi.save).toHaveBeenCalled());
 }
 it('PASS ALL still requires explicit physical coverage before submission', async () => {
   panel();
@@ -96,24 +116,30 @@ it('clears the PASS ALL selected state when the defective count changes', () => 
   panel();
   const passAll = screen.getByRole('button', { name: 'PASS ALL' });
   fireEvent.click(passAll);
-  fireEvent.change(screen.getByRole('spinbutton', { name: 'Defective pieces' }), { target: { value: '1' } });
+  fireEvent.change(screen.getByRole('spinbutton', { name: /Affected quantity/ }), { target: { value: '1' } });
   expect(passAll).toHaveAttribute('aria-pressed', 'false');
   expect(passAll).not.toHaveClass('bg-success-bg');
 });
-it('opens exact defect descriptions without per-piece PASS/FAIL controls', () => {
-  panel();
-  fireEvent.change(screen.getByRole('spinbutton', { name: 'Defective pieces' }), {
-    target: { value: '5' },
+it('uses one shared summary for 500 defective pieces with no per-piece inputs', async () => {
+  const largeBatch = {
+    ...group,
+    produced_quantity: 1000,
+    manifest: [{ ...group.manifest[0], physical_quantity: 1000 }],
+    batches: [{ ...group.batches[0], batch_quantity: 1000 }],
+  } as unknown as WorkOrderFinalInspection;
+  panel(largeBatch);
+  await waitFor(() => expect(defectSummaryApi.show).toHaveBeenCalledWith('qc'));
+  fireEvent.change(screen.getByRole('spinbutton', { name: /Affected quantity/ }), {
+    target: { value: '500' },
   });
-  expect(screen.getAllByRole('textbox', { name: /Problem for piece/ })).toHaveLength(5);
+  expect(screen.getAllByLabelText(/Shared description/)).toHaveLength(1);
+  expect(screen.queryByLabelText(/Problem for piece/)).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'FAIL' })).not.toBeInTheDocument();
-});
-it('bounds large defective batches to 50 description rows', () => {
-  panel();
-  fireEvent.change(screen.getByRole('spinbutton', { name: 'Defective pieces' }), {
-    target: { value: '200' },
-  });
-  expect(screen.getAllByRole('textbox', { name: /Problem for piece/ })).toHaveLength(50);
+  expect(screen.queryByRole('button', { name: 'Next problems' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Submit inspection' })).toBeDisabled();
+  await saveSummary('The same edge is cracked on the affected pieces.');
+  fireEvent.click(screen.getByRole('checkbox', { name: 'I checked all 1000 pieces' }));
+  expect(screen.getByRole('button', { name: 'Submit inspection' })).toBeEnabled();
 });
 it('missing required size readings cannot be bypassed by PASS ALL', () => {
   panel({ ...group, batches: [{ ...group.batches[0], missing_readings: 1 }] });
@@ -134,13 +160,13 @@ it('unknown submission outcome locks fresh submission and retains reconciliation
   expect(inspectionsApi.submitWorkOrderFinalInspection).toHaveBeenCalledTimes(1);
 });
 
-it('changing a problem removes physical coverage confirmation', () => {
+it('editing a shared description removes physical coverage confirmation', async () => {
   panel();
-  fireEvent.change(screen.getByRole('spinbutton', { name: 'Defective pieces' }), {
+  fireEvent.change(screen.getByRole('spinbutton', { name: /Affected quantity/ }), {
     target: { value: '1' },
   });
   fireEvent.click(screen.getByRole('checkbox', { name: 'I checked all 200 pieces' }));
-  fireEvent.change(screen.getByRole('textbox', { name: 'Problem for piece 1' }), {
+  fireEvent.change(await screen.findByLabelText(/Shared description/), {
     target: { value: 'Scratch' },
   });
   expect(screen.getByRole('checkbox', { name: 'I checked all 200 pieces' })).not.toBeChecked();
@@ -149,83 +175,59 @@ it('an evidence author cannot see the independent approval action', () => {
   panel({
     ...group,
     state: 'awaiting_review',
-    batches: [{ ...group.batches[0], status: 'awaiting_review', can_review: false }],
+    defect_page: {
+      page: 1,
+      per_page: 50,
+      total: 1,
+      pieces: [{ piece_number: 7, problem_description: 'Legacy note: chipped edge.', requirement_id: null }],
+    },
+    batches: [{
+      ...group.batches[0],
+      status: 'awaiting_review',
+      can_review: false,
+      sample_defect_count: 1,
+      defect_summary: {
+        id: 'summary', category: 'surface_damage', category_label: 'Surface damage', other_category: null,
+        severity: 'critical', severity_label: 'Critical', affected_quantity: '1',
+        description: 'One shared defect across the output batch.',
+        photos: [{ id: 'photo', file_name: 'proof.jpg', mime_type: 'image/jpeg', file_size: 5, file_url: '/proof.jpg', created_at: null }],
+        created_at: null, updated_at: null,
+      },
+    }],
   });
   expect(
     screen.queryByRole('button', { name: 'Approve inspection results' }),
   ).not.toBeInTheDocument();
+  expect(screen.getByText('One shared defect across the output batch.')).toBeVisible();
+  expect(screen.getByRole('img', { name: 'Defect proof: proof.jpg' })).toHaveAttribute('src', '/proof.jpg');
+  expect(screen.getByText('Historical per-piece notes')).toBeVisible();
+  expect(screen.getByText('Legacy note: chipped edge.')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Next problems' })).not.toBeInTheDocument();
 });
-it('saving a second problem page preserves that page and submitted piece identities', async () => {
-  const first = {
-    ...group,
-    batches: [{ ...group.batches[0], defective_quantity: 60 }],
-    defect_page: {
-      page: 1,
-      per_page: 50,
-      total: 60,
-      pieces: Array.from({ length: 50 }, (_, i) => ({
-        piece_number: i + 1,
-        problem_description: 'Scratch',
-      })),
-    },
-  };
-  const second = {
-    ...first,
-    defect_page: {
-      ...first.defect_page,
-      page: 2,
-      pieces: Array.from({ length: 10 }, (_, i) => ({
-        piece_number: i + 51,
-        problem_description: 'Dent',
-      })),
-    },
-  };
-  vi.mocked(inspectionsApi.getWorkOrderFinalInspection).mockResolvedValue(second);
-  vi.mocked(inspectionsApi.saveWorkOrderFinalEvidence).mockResolvedValue(second);
-  panel(first);
-  fireEvent.click(screen.getByRole('button', { name: 'Next problems' }));
-  await screen.findByRole('textbox', { name: 'Problem for piece 51' });
-  fireEvent.change(screen.getByRole('textbox', { name: 'Problem for piece 51' }), {
-    target: { value: 'Crack' },
-  });
-  fireEvent.click(screen.getByRole('button', { name: 'Save problems' }));
-  await waitFor(() =>
-    expect(inspectionsApi.saveWorkOrderFinalEvidence).toHaveBeenCalledWith(
-      'wo',
-      expect.objectContaining({
-        defect_page: 2,
-        pieces: expect.arrayContaining([{ piece_number: 51, problem_description: 'Crack' }]),
-      }),
-    ),
-  );
-  expect(screen.queryByRole('textbox', { name: 'Problem for piece 1' })).not.toBeInTheDocument();
-});
-
-it('reducing saved defect quantity offers clearing hidden descriptions', async () => {
+it('saves only the shared defect quantity while retaining size-reading pagination', async () => {
+  const measurements = [{
+    id: 'size', parameter_name: 'Length', parameter_type: 'dimensional' as const, evaluation_mode: 'numeric' as const,
+    sample_index: 0, acceptance_criterion: null, unit_of_measure: 'mm', nominal_value: '1.5',
+    tolerance_min: '1', tolerance_max: '2', measured_value: null, is_critical: false, is_pass: null, notes: null,
+  }];
   panel({
     ...group,
-    batches: [{ ...group.batches[0], defective_quantity: 60, described_defective_quantity: 60 }],
+    batches: [{ ...group.batches[0], defective_quantity: 0, batch_quantity: 200, measurements, missing_readings: 200 }],
   });
-  fireEvent.change(screen.getByRole('spinbutton', { name: 'Defective pieces' }), {
-    target: { value: '5' },
-  });
-  fireEvent.click(screen.getByRole('button', { name: 'Clear saved problems' }));
-  expect(screen.getAllByRole('textbox', { name: /Problem for piece/ })).toHaveLength(5);
-  fireEvent.click(screen.getByText('Apply same problem to several pieces'));
-  fireEvent.change(screen.getByRole('textbox', { name: 'Shared problem' }), {
-    target: { value: 'Scratch' },
-  });
-  fireEvent.click(screen.getByRole('checkbox', { name: 'Select all problems on this page' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Apply to selected pieces' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Save problems' }));
-  await waitFor(() =>
-    expect(inspectionsApi.saveWorkOrderFinalEvidence).toHaveBeenCalledWith(
-      'wo',
-      expect.objectContaining({ defective_quantity: 5, reset_defects: true }),
-    ),
-  );
+  expect(screen.getByRole('button', { name: 'Next readings' })).toBeInTheDocument();
+  await waitFor(() => expect(defectSummaryApi.show).toHaveBeenCalled());
+  fireEvent.change(screen.getByRole('spinbutton', { name: /Affected quantity/ }), { target: { value: '1' } });
+  await saveSummary('One shared issue across the group.');
+  fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
+  await waitFor(() => expect(inspectionsApi.saveWorkOrderFinalEvidence).toHaveBeenCalledWith('wo', expect.objectContaining({
+    defective_quantity: 1,
+    readings: [],
+  })));
+  expect(vi.mocked(inspectionsApi.saveWorkOrderFinalEvidence).mock.calls[0][1]).not.toHaveProperty('pieces');
+  expect(screen.queryByRole('button', { name: 'Next problems' })).not.toBeInTheDocument();
 });
-it('reloads authoritative versions after an unknown save while retaining typed problems', async () => {
+
+it('reloads authoritative versions after an unknown save while retaining the defect count', async () => {
   vi.mocked(inspectionsApi.saveWorkOrderFinalEvidence)
     .mockRejectedValueOnce(new Error('Connection lost'))
     .mockResolvedValue(group);
@@ -235,17 +237,14 @@ it('reloads authoritative versions after an unknown save while retaining typed p
     batches: [{ ...group.batches[0], result_version: 1 }],
   });
   panel();
-  fireEvent.change(screen.getByRole('spinbutton', { name: 'Defective pieces' }), {
+  fireEvent.change(screen.getByRole('spinbutton', { name: /Affected quantity/ }), {
     target: { value: '1' },
   });
-  fireEvent.change(screen.getByRole('textbox', { name: 'Problem for piece 1' }), {
-    target: { value: 'Dent' },
-  });
-  fireEvent.click(screen.getByRole('button', { name: 'Save problems' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
   fireEvent.click(await screen.findByRole('button', { name: 'Reload saved totals' }));
   await screen.findByText(/Saved totals refreshed/);
-  expect(screen.getByRole('textbox', { name: 'Problem for piece 1' })).toHaveValue('Dent');
-  fireEvent.click(screen.getByRole('button', { name: 'Save problems' }));
+  expect(screen.getByRole('spinbutton', { name: /Affected quantity/ })).toHaveValue(1);
+  fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
   await waitFor(() =>
     expect(inspectionsApi.saveWorkOrderFinalEvidence).toHaveBeenLastCalledWith(
       'wo',
@@ -388,7 +387,7 @@ it('uses confirmed checks without inventing measurements for version 3', async (
   );
 });
 
-it('requires a primary requirement for every version 3 defect and saves its hash reference', async () => {
+it('submits a shared summary for version 3 confirmed checks without per-piece defect rows', async () => {
   const confirmedGroup = {
     ...group,
     batches: [
@@ -415,43 +414,22 @@ it('requires a primary requirement for every version 3 defect and saves its hash
       },
     ],
   } as unknown as WorkOrderFinalInspection;
-  vi.mocked(inspectionsApi.saveWorkOrderFinalEvidence).mockResolvedValue({
-    ...confirmedGroup,
-    defect_page: {
-      page: 1,
-      per_page: 50,
-      total: 1,
-      pieces: [{ piece_number: 1, problem_description: 'Scratch', requirement_id: 'size-hash' }],
-    },
-  } as unknown as WorkOrderFinalInspection);
+  vi.mocked(inspectionsApi.saveWorkOrderFinalEvidence).mockResolvedValue(confirmedGroup);
   panel(confirmedGroup);
-  fireEvent.change(screen.getByRole('spinbutton', { name: 'Defective pieces' }), {
+  await waitFor(() => expect(defectSummaryApi.show).toHaveBeenCalled());
+  fireEvent.change(screen.getByRole('spinbutton', { name: /Affected quantity/ }), {
     target: { value: '1' },
   });
-  fireEvent.change(screen.getByRole('textbox', { name: 'Problem for piece 1' }), {
-    target: { value: 'Scratch' },
-  });
-  fireEvent.change(screen.getByRole('combobox', { name: 'Failed check for piece 1' }), {
-    target: { value: 'size-hash' },
-  });
-  fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
-  await waitFor(() =>
-    expect(inspectionsApi.saveWorkOrderFinalEvidence).toHaveBeenCalledWith(
-      'wo',
-      expect.objectContaining({
-        pieces: [
-          {
-            piece_number: 1,
-            problem_description: 'Scratch',
-            requirement_id: 'size-hash',
-          },
-        ],
-      }),
-    ),
-  );
+  await saveSummary('Scratch on the edge.');
+  expect(screen.queryByLabelText(/Problem for piece/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('checkbox', { name: /I checked every piece against all listed requirements/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Submit inspection' }));
+  await waitFor(() => expect(inspectionsApi.submitWorkOrderFinalInspection).toHaveBeenCalledWith('wo', expect.objectContaining({
+    batches: [{ inspection_id: 'qc', coverage_confirmed: true, inspected_quantity: 200, checks_confirmed: true }],
+  })));
 });
 
-it('applies a shared problem only to selected pieces and clears inspection confirmation', () => {
+it('editing a summary invalidates the final work-order coverage confirmation', async () => {
   panel({
     ...group,
     batches: [{
@@ -460,26 +438,16 @@ it('applies a shared problem only to selected pieces and clears inspection confi
       measurements: [{ id: 'surface', parameter_name: 'Surface finish', parameter_type: 'visual' }],
     }],
   } as unknown as WorkOrderFinalInspection);
-  fireEvent.change(screen.getByRole('spinbutton', { name: 'Defective pieces' }), {
+  fireEvent.change(screen.getByRole('spinbutton', { name: /Affected quantity/ }), {
     target: { value: '2' },
   });
-  fireEvent.click(screen.getByText('Apply same problem to several pieces'));
-  fireEvent.change(screen.getByRole('textbox', { name: 'Shared problem' }), {
-    target: { value: 'Scratched edge' },
-  });
-  fireEvent.change(screen.getByRole('combobox', { name: 'Shared failed check' }), {
-    target: { value: 'surface' },
-  });
-  fireEvent.click(screen.getByRole('checkbox', { name: 'Select problem 2' }));
+  fireEvent.change(await screen.findByLabelText(/Shared description/), { target: { value: 'Scratched edge.' } });
   const confirmation = screen.getByRole('checkbox', {
     name: /I checked every piece against all listed requirements/,
   });
   fireEvent.click(confirmation);
-  fireEvent.click(screen.getByRole('button', { name: 'Apply to selected pieces' }));
-  expect(screen.getByRole('textbox', { name: 'Problem for piece 1' })).toHaveValue('');
-  expect(screen.getByRole('combobox', { name: 'Failed check for piece 1' })).toHaveValue('');
-  expect(screen.getByRole('textbox', { name: 'Problem for piece 2' })).toHaveValue('Scratched edge');
-  expect(screen.getByRole('combobox', { name: 'Failed check for piece 2' })).toHaveValue('surface');
+  fireEvent.change(screen.getByLabelText(/Shared description/), { target: { value: 'Changed summary.' } });
   expect(confirmation).not.toBeChecked();
-  expect(screen.getByRole('button', { name: 'Save draft' })).toBeDisabled();
+  expect(screen.queryByLabelText(/Problem for piece/)).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Submit inspection' })).toBeDisabled();
 });

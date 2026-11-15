@@ -9,6 +9,7 @@ use App\Modules\Quality\Controllers\CapabilityController;
 use App\Modules\Quality\Controllers\EffectivenessController;
 use App\Modules\Quality\Controllers\InspectionController;
 use App\Modules\Quality\Controllers\InspectionDefectEvidenceController;
+use App\Modules\Quality\Controllers\InspectionDefectSummaryController;
 use App\Modules\Quality\Controllers\InspectionSpecController;
 use App\Modules\Quality\Controllers\NcrController;
 use App\Modules\Quality\Controllers\NcrTemplateController;
@@ -94,6 +95,14 @@ Route::middleware(['auth:sanctum', 'feature:quality'])->prefix('quality')->group
     Route::post('/inspections/{inspection}/defect-evidence', [InspectionDefectEvidenceController::class, 'store'])
         ->middleware('permission:quality.inspections.manage');
     Route::get('/defect-evidence/{evidence}/photo', [InspectionDefectEvidenceController::class, 'photo'])
+        ->middleware('permission:quality.inspections.view');
+    Route::get('/inspections/{inspection}/defect-summary', [InspectionDefectSummaryController::class, 'show'])
+        ->middleware('permission:quality.inspections.view');
+    Route::put('/inspections/{inspection}/defect-summary', [InspectionDefectSummaryController::class, 'save'])
+        ->middleware('permission:quality.inspections.manage');
+    Route::delete('/inspections/{inspection}/defect-summary', [InspectionDefectSummaryController::class, 'destroy'])
+        ->middleware('permission:quality.inspections.manage');
+    Route::get('/defect-summary-photos/{photo}/file', [InspectionDefectSummaryController::class, 'photo'])
         ->middleware('permission:quality.inspections.view');
     Route::post('/inspections', [InspectionController::class, 'store'])
         ->middleware('permission:quality.inspections.manage');
