@@ -78,9 +78,51 @@ class DemoSeedingGuardTest extends TestCase
         app(DemoSeedingGuard::class)->assertAllowed();
     }
 
+    public function test_it_allows_a_live_demo_database_only_with_an_explicit_demo_mode_override(): void
+    {
+        $this->configureGuard('demo', 'ogami', ['ogami'], 'db');
+        config(['demo.seeding.allow_non_demo_database' => true]);
+
+        app(DemoSeedingGuard::class)->assertAllowed();
+
+        $this->assertTrue(true);
+    }
+
+    public function test_it_requires_the_second_opt_in_for_a_non_demo_database(): void
+    {
+        $this->configureGuard('demo', 'ogami', ['ogami'], 'db');
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('must use an ogami_demo database');
+
+        app(DemoSeedingGuard::class)->assertAllowed();
+    }
+
+    public function test_non_demo_database_override_still_requires_an_exact_database_allowlist(): void
+    {
+        $this->configureGuard('demo', 'ogami', ['ogami_demo'], 'db');
+        config(['demo.seeding.allow_non_demo_database' => true]);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('not explicitly allowlisted');
+
+        app(DemoSeedingGuard::class)->assertAllowed();
+    }
+
     public function test_it_rejects_non_local_database_hosts(): void
     {
         $this->configureGuard('local', 'ogami_demo_thesis', ['ogami_demo_thesis'], 'erp-db.company.test');
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('not an approved local database host');
+
+        app(DemoSeedingGuard::class)->assertAllowed();
+    }
+
+    public function test_non_demo_database_override_still_requires_an_approved_host(): void
+    {
+        $this->configureGuard('demo', 'ogami', ['ogami'], 'erp-db.company.test');
+        config(['demo.seeding.allow_non_demo_database' => true]);
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('not an approved local database host');
@@ -100,6 +142,7 @@ class DemoSeedingGuardTest extends TestCase
     public function test_it_refuses_production_even_when_every_flag_matches(): void
     {
         $this->configureGuard('production', 'ogami_demo_thesis', ['ogami_demo_thesis'], 'db');
+        config(['demo.seeding.allow_non_demo_database' => true]);
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('never be seeded in production');
