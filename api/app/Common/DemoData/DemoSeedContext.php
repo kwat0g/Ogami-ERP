@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Common\DemoData;
 
+use App\Common\Services\NotificationService;
 use Carbon\CarbonImmutable;
 use Closure;
 use Faker\Factory as FakerFactory;
@@ -103,7 +104,8 @@ final class DemoSeedContext
 
     /**
      * Run historical domain actions without retaining their notification rows.
-     * Use live notification delivery for the in-flight scenario layer.
+     * Both Laravel notifications and the application's direct NotificationService
+     * entry points are suppressed. Use live delivery for in-flight scenario work.
      *
      * @template T
      *
@@ -113,11 +115,21 @@ final class DemoSeedContext
     public function withoutNotifications(Closure $action): mixed
     {
         $previous = app(NotificationDispatcher::class);
+        $notificationServiceWasResolved = app()->resolved(NotificationService::class);
+        $previousNotificationService = $notificationServiceWasResolved
+            ? app(NotificationService::class)
+            : null;
         Notification::fake();
+        app()->instance(NotificationService::class, new DemoNotificationService);
 
         try {
             return $action();
         } finally {
+            if ($notificationServiceWasResolved && $previousNotificationService instanceof NotificationService) {
+                app()->instance(NotificationService::class, $previousNotificationService);
+            } else {
+                app()->forgetInstance(NotificationService::class);
+            }
             Notification::swap($previous);
         }
     }
