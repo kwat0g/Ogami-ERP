@@ -234,4 +234,5 @@ After approval, PLANTED-ISSUES.md will contain exact IDs, location, causal links
 7. Approval limits? Selected flows use ₱50,000 in current source; confirm.
 8. Which workflows get priority in live defense? Proposed: order→MRP→purchasing/receipt→production/quality→delivery/invoice; payroll; inventory; maintenance.
 9. Are synthetic format-valid government IDs allowed when visibly flagged demo? Default: synthetic-only values and explicit demo marker, no real contact data.
-10. Please review and approve this plan before Phase 2.
+10. Opening stock accounting counterpart? The current app marks stock openings `not_required` for GL and the former combined opening-balance workflow was removed. Default: create stock through the inventory movement service only; do not infer an equity account or create a balancing journal until Finance confirms the supported workflow and account mapping.
+11. This plan was approved by the user before Phase 2; unresolved statutory, payroll, date, shift, customer/supplier, approval-limit, and opening-equity policy questions remain gated as documented above.
